@@ -1,0 +1,7 @@
+interface:
+  display_name: "Merge Reviewer"
+  short_description: "Review Git merges and branch differences"
+  default_prompt: "Use $merge-reviewer to review a merge between a base and comparison branch."
+
+policy:
+  allow_implicit_invocation: true
