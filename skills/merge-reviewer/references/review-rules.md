@@ -125,3 +125,12 @@
 - `沒有差異`：固定版本和比較範圍有效，變更檔案數為零。
 - `未發現具體問題`：完整可行的範圍已檢查，沒有足夠證據建立 finding。
 - `審查未完成`：fetch、ref、merge base、檔案讀取或上下文檢查有明確缺口；列出缺口，不使用「未發現問題」。
+
+## 快速審查範圍
+
+快速審查的報告另外記錄 `review_scope`：
+
+- `committed`：`review_right` 是目前本地分支的 `head_sha`，只檢查已提交內容。
+- `working-tree`：`head_sha` 仍是本地分支最後一個 commit，`review_tree_sha` 是由完整工作區檔案建立的固定 tree；報告內容必須以 context bundle 的 `working-tree.patch` 與 `working-tree-files/` 為準。若 helper 自動建立 context bundle，報告完成後才清理 `context_dir`。
+
+工作區快照使用 repository 外的 alternate index/object directory，不得改變使用者 index、HEAD、分支或原始檔案。Manifest 的 `snapshot_read_info` 記錄這個讀取與清理方式。若建立快照前後的實際檔案內容、index 或 HEAD 不一致，結果只能標記為 `審查未完成`。若 `review_complete=false` 或有 dirty submodule，必須把 nested checkout 列為未覆蓋範圍，不能宣稱完整審查。未追蹤的 `review-reports/` 報告產物不屬於審查範圍；其他符合 Git ignore 規則的檔案也不納入快照。

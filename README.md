@@ -1,6 +1,6 @@
 # Merge Reviewer
 
-`Merge Reviewer` 是一個用於審查 Git 分支或 commit 合併結果的 Codex skill。它不需要 checkout 任一版本，就能以 Git object 為基礎比較兩個已提交的版本，檢查合併整合可能遺失的驗證、授權、錯誤處理、設定或資料轉換邏輯，並產生繁體中文 Markdown 報告。
+`Merge Reviewer` 是一個用於審查 Git 分支或 commit 合併結果的 Codex skill。它不需要 checkout 任一版本，就能以 Git object 為基礎比較兩個已提交的版本，或快速比較目前本地分支與遠端主分支，檢查合併整合可能遺失的驗證、授權、錯誤處理、設定或資料轉換邏輯，並產生繁體中文 Markdown 報告。
 
 ## 功能
 
@@ -9,6 +9,7 @@
 - **Merge commit 檢查**：逐一對照 merge commit 的各個 parent 與合併結果，確認任一側的必要邏輯沒有在解衝突時遺失。
 - **證據導向 finding**：依 P0、P1、P2、P3 排序，記錄觸發條件、程式證據、影響與聚焦的修正方向。
 - **多 repository 工作區支援**：可指定 repository 名稱或路徑，也能處理 VS Code `.code-workspace`。
+- **快速本地分支審查**：一行自動辨識目前分支、遠端預設主分支與最新 base；可選擇納入已儲存但尚未提交的檔案。
 
 ## 需求環境
 
@@ -56,6 +57,16 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 $merge-reviewer 基礎分支=abc123 比較分支=def456 比較模式=直接比較
 ```
 
+快速比較目前本地分支與遠端預設主分支：
+
+```text
+$merge-reviewer 快速審查
+$merge-reviewer 快速審查 包含未提交變更
+$merge-reviewer 快速審查 遠端=upstream
+```
+
+快速模式只需要一行即可使用目前本地分支的 `HEAD`，不要求開發分支已 push。預設只看已提交內容；`包含未提交變更` 會把 staged、unstaged、刪除與未忽略的未追蹤檔案建立成固定快照。若未指定 `--context-dir`，helper 會在 repository 外自動建立可供審查的 context bundle，完成報告後再刪除 `context_dir`。編輯器尚未儲存的內容不在範圍內。
+
 ### 輸入參數
 
 | 參數 | 必要性 | 說明 |
@@ -64,6 +75,9 @@ $merge-reviewer 基礎分支=abc123 比較分支=def456 比較模式=直接比�
 | `基礎分支` | 必要 | 分支、remote ref、tag 或 commit。 |
 | `比較分支` | 必要 | 要審查的分支、remote ref、tag 或 commit。 |
 | `比較模式` | 選填 | `合併前審查`（預設）或 `直接比較`。 |
+| `快速審查` | 選填 | 使用目前本地分支與遠端預設主分支；不可同時指定 `比較分支`。 |
+| `遠端` | 快速模式選填 | 多個 remote 時指定要使用的 remote；單一 remote 會自動選取。 |
+| `包含未提交變更` | 快速模式選填 | 將工作區建立成固定 tree 快照後納入比較。 |
 
 如果 repository、remote 或 ref 無法唯一解析，skill 會列出候選項目並要求選擇，不會自行猜測。
 
@@ -76,15 +90,17 @@ $merge-reviewer 基礎分支=abc123 比較分支=def456 比較模式=直接比�
 
 報告會記錄輸入 ref、解析後的完整 SHA、比較模式、merge base、fetch 結果，以及工作樹是否維持不變。
 
+快速模式透過 `git ls-remote --symref <remote> HEAD` 取得遠端宣告的預設分支；遠端未提供 HEAD 時會使用本地 remote-tracking HEAD 或在只有一個候選時使用該分支。多個 remote 或多個主分支候選都會停止並列出選項，不會猜測。
+
 ## 審查安全行為
 
 審查過程使用 Git object 命令讀取版本內容，不會：
 
 - checkout、merge、reset、stage 或修改來源分支與 commit；
-- 將未提交的工作樹變更混入比較範圍；
+- 預設不會將未提交的工作樹變更混入比較範圍；快速模式明確使用 `包含未提交變更` 時，會以 repository 外的 alternate index/object directory 建立固定快照；
 - 自動修正程式碼、建立 commit、發布評論或推送變更。
 
-為了確認 remote 分支不是過期版本，helper 可能執行 `git fetch --no-tags --no-prune`。除 fetch 外，唯一預期的寫入是產生審查報告。
+為了確認 remote 分支不是過期版本，helper 可能執行 `git fetch --no-tags --no-prune`。除 fetch、repository 外的工作區快照暫存資料與 context bundle 外，helper 不會寫入受審 repository；審查報告是唯一的 repository 產物。
 
 ## 報告輸出
 
@@ -139,11 +155,16 @@ python skills\merge-reviewer\scripts\git_review_context.py `
 - `--workspace-file`：指定 VS Code `.code-workspace` 檔案。
 - `--project`：指定 repository 名稱或路徑。
 - `--base`、`--head`：指定兩個比較輸入。
+- `--quick`：以目前本地分支 `HEAD` 對遠端預設分支執行快速審查。
+- `--remote`：快速模式指定 remote；多個 remote 時必要。
+- `--include-working-tree`：快速模式納入 staged、unstaged、刪除與未忽略的未追蹤檔案。
 - `--mode merge|direct`：選擇比較模式。
 - `--no-fetch`：停用 remote fetch；只適合已確認本機 ref 最新的情境。
 - `--context-dir`：將 manifest 與完整 patch 寫入新的暫存目錄。
 
-Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、diff 統計、fetch 結果與工作樹快照，供審查流程作為來源真相。
+Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、diff 統計、fetch 結果、遠端選擇與工作樹快照，供審查流程作為來源真相。Manifest schema version 為 2；工作區模式會另外輸出 `review_tree_sha`、`review_scope=working-tree` 與 `snapshot_read_info`，並在 context bundle 保留可供審查的 `working-tree.patch` 和變更檔案內容。
+
+如果 submodule 內有未提交或未初始化內容，helper 會列在 `dirty_submodule_paths` 和 `review_limitations`，此結果不能被回報為完整審查。
 
 ## 專案結構
 
@@ -166,3 +187,12 @@ Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、
 - [Merge Reviewer 技能說明](skills/merge-reviewer/SKILL.md)
 - [審查規則與報告格式](skills/merge-reviewer/references/review-rules.md)
 - [Git context helper](skills/merge-reviewer/scripts/git_review_context.py)
+
+## 開發驗證
+
+安裝 `requirements-dev.txt` 後，可執行快速審查情境與 Python 回歸測試：
+
+```powershell
+python -m behave tests/features --tags=@quick-review
+python -m unittest discover -s tests -v
+```
