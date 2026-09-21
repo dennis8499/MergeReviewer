@@ -7,7 +7,7 @@ metadata:
 
 # Merge Reviewer
 
-Review two committed Git versions without checking out either one. The skill is designed for a VS Code workspace that may contain more than one repository. It reports evidence-backed correctness, security, performance, compatibility, and merge-integration findings in Traditional Chinese.
+Review two committed Git versions without checking out either one. The skill is designed for a VS Code workspace that may contain more than one repository. It reports evidence-backed correctness, security, performance, compatibility, and merge-integration findings in Traditional Chinese, with plain-language explanations and concrete examples that make each confirmed issue easy to understand.
 
 ## Required request
 
@@ -54,7 +54,7 @@ git -C <repo> grep -n <symbol-or-config-key> <head_sha> -- <path-or-directory>
 
 For large changes, process every changed path in batches and record binary files, submodules, renames, and mode-only changes as review limitations. Do not truncate a diff without saying which files were not inspected.
 
-Review the changed behavior and its callers, configuration, data contracts, tests, error paths, authorization/validation, and compatibility assumptions. A finding must include a concrete trigger, impact, and evidence in the committed source. Do not report style preferences or unsupported speculation.
+Review the changed behavior and its callers, configuration, data contracts, tests, error paths, authorization/validation, and compatibility assumptions. A finding must include a concrete trigger, impact, and evidence in the committed source. Describe the issue in plain language first, then give a concrete example with the operation or input, expected result, and actual result. Mark examples as derived from code or illustrative when they were not actually executed. Do not report style preferences or unsupported speculation.
 
 For every merge commit listed by the helper:
 
@@ -79,14 +79,14 @@ Use a fresh filename if a timestamp collision occurs. The report must be Traditi
 - input refs and resolved full SHAs;
 - comparison mode, merge base, fetch outcome, and whether the working tree stayed unchanged;
 - review scope, changed-file summary, binary/submodule limitations, and merge commits inspected;
-- findings ordered by P0, P1, P2, P3, each with title, file and line (or commit), trigger, evidence, impact, and a focused remediation suggestion;
+- findings ordered by P0, P1, P2, P3, each with a direct error-focused title, a plain-language explanation, a concrete evidence-based example showing the operation or input, expected result, and actual result, then the file and line (or commit), trigger, technical evidence, impact, and a focused remediation suggestion;
 - tests not executed by this static review, unless the user explicitly asked for tests and they were actually run.
 
 Use the explicit result states from the reference: `沒有差異`, `未發現具體問題`, or `審查未完成`. The second state is not a guarantee that the code is correct. If the review is incomplete, explain the missing evidence or files.
 
 Do not modify source files, configuration, branches, index, or history. Fetching refs and writing the requested report are the only allowed mutations. Do not auto-fix, merge, publish comments, or create commits.
 
-Return a concise Traditional Chinese chat summary with the result state, P0–P3 counts, the most important findings, and a clickable link to the Markdown report.
+Return a concise Traditional Chinese chat summary with the result state, P0–P3 counts, the most important findings described in plain language, one short situation example for each important finding, and a clickable link to the Markdown report. Do not invent an example when the review has no concrete finding or is incomplete; state that no evidence-backed issue was established or explain the missing evidence instead.
 
 ## Invocation examples
 
