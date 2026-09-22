@@ -48,18 +48,18 @@ Copy-Item -Recurse .\skills\merge-reviewer "$HOME\.codex\skills\merge-reviewer"
 目前版本記錄在 `skills/merge-reviewer/VERSION`，採用 `X.Y.Z` 的 SemVer 格式。GitHub Release 的 tag 必須與版本檔一致，例如：
 
 ```text
-VERSION: 0.1.1
-tag: v0.1.1
+VERSION: 0.1.2
+tag: v0.1.2
 ```
 
 完成版本變更並推送到 `main` 後，建立並推送 tag 即可觸發 Release workflow：
 
 ```powershell
-git tag -a v0.1.1 -m "Release v0.1.1"
-git push origin v0.1.1
+git tag -a v0.1.2 -m "Release v0.1.2"
+git push origin v0.1.2
 ```
 
-Workflow 會先執行單元測試，再建立 `merge-reviewer-0.1.1.zip`。Release 附件內含可直接複製到 Codex skill 目錄的 `merge-reviewer` 資料夾，不包含 repository 的測試檔或其他開發檔案。
+Workflow 會先執行單元測試，再建立 `merge-reviewer-0.1.2.zip`。Release 附件內含可直接複製到 Codex skill 目錄的 `merge-reviewer` 資料夾，不包含 repository 的測試檔或其他開發檔案。
 
 若 workflow 建立 Release 時收到權限錯誤，請在 GitHub repository 的 **Settings → Actions → General → Workflow permissions** 啟用 **Read and write permissions**；組織層級政策可能限制此設定。
 
