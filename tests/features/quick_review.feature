@@ -7,7 +7,7 @@ Feature: Quick review of the current local branch
   Scenario: A single remote reviews an unpushed local commit
     Given a local repository with a remote default branch
     And the current branch has an unpushed commit
-    When I run the quick review without fetching
+    When I run the quick review with remote verification
     Then the result uses the current branch HEAD and the remote default branch
     And the local commit appears in the changed files
 
@@ -23,7 +23,7 @@ Feature: Quick review of the current local branch
   Scenario: Remote-only changes are outside the merge review range
     Given a local repository whose remote default branch has an unrelated commit
     And the current branch has a local commit
-    When I run the quick review without fetching
+    When I run the quick review with remote verification
     Then the result contains only the local branch changes
 
   @QR-004
@@ -58,7 +58,7 @@ Feature: Quick review of the current local branch
     Examples:
       | failure       |
       | fetch         |
-      | ambiguous ref |
+      | missing local branch |
       | conflict      |
       | criss-cross   |
       | unrelated     |

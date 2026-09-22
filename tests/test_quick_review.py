@@ -83,12 +83,17 @@ class QuickReviewTests(unittest.TestCase):
         self.temp = None
 
     def run_helper(self, *args: str) -> tuple[subprocess.CompletedProcess[str], dict | None]:
+        environment = os.environ.copy()
+        environment["PYTHONIOENCODING"] = "utf-8"
         result = subprocess.run(
             ["python", str(SCRIPT), "--workspace", str(self.repo), *args],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            env=environment,
         )
         payload = json.loads(result.stdout) if result.returncode == 0 else None
         if payload and payload.get("context_dir"):
@@ -99,7 +104,7 @@ class QuickReviewTests(unittest.TestCase):
         (self.repo / "local.txt").write_text("local\n", encoding="utf-8")
         git(self.repo, "add", "local.txt")
         git(self.repo, "commit", "-m", "local")
-        result, payload = self.run_helper("--quick", "--no-fetch", "--format", "json")
+        result, payload = self.run_helper("--quick", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
         self.assertEqual(payload["base_input"], "origin/main")
@@ -134,11 +139,11 @@ class QuickReviewTests(unittest.TestCase):
         git(self.root, "--git-dir", str(upstream), "symbolic-ref", "HEAD", "refs/heads/main")
         git(self.repo, "remote", "add", "upstream", str(upstream))
         git(self.repo, "push", "upstream", "main")
-        result, _ = self.run_helper("--quick", "--no-fetch", "--format", "json")
+        result, _ = self.run_helper("--quick", "--format", "json")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("origin", result.stderr)
         self.assertIn("upstream", result.stderr)
-        result, payload = self.run_helper("--quick", "--remote", "upstream", "--no-fetch", "--format", "json")
+        result, payload = self.run_helper("--quick", "--remote", "upstream", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
         self.assertEqual(payload["remote"], "upstream")
@@ -156,7 +161,7 @@ class QuickReviewTests(unittest.TestCase):
         git(self.repo, "add", "local.txt")
         git(self.repo, "commit", "-m", "local")
         git(self.repo, "fetch", "origin", "main")
-        result, payload = self.run_helper("--quick", "--no-fetch", "--format", "json")
+        result, payload = self.run_helper("--quick", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
         self.assertEqual({item["path"] for item in payload["changed_files"]}, {"local.txt"})
@@ -174,7 +179,7 @@ class QuickReviewTests(unittest.TestCase):
         if not index.is_absolute():
             index = self.repo / index
         index_before = index.read_bytes()
-        result, payload = self.run_helper("--quick", "--no-fetch", "--include-working-tree", "--format", "json")
+        result, payload = self.run_helper("--quick", "--include-working-tree", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
         self.assertEqual(payload["review_scope"], "working-tree")
@@ -190,7 +195,7 @@ class QuickReviewTests(unittest.TestCase):
         reports.mkdir()
         (reports / "old.md").write_text("generated report\n", encoding="utf-8")
         git(self.repo, "add", "review-reports/old.md")
-        result, payload = self.run_helper("--quick", "--no-fetch", "--include-working-tree", "--format", "json")
+        result, payload = self.run_helper("--quick", "--include-working-tree", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
         self.assertNotIn("review-reports/old.md", {item["path"] for item in payload["changed_files"]})
@@ -225,7 +230,7 @@ class QuickReviewTests(unittest.TestCase):
         git(self.repo, "add", ".")
         git(self.repo, "commit", "-m", "add submodule")
         (self.repo / "子模組" / "dirty.txt").write_text("dirty\n", encoding="utf-8")
-        result, payload = self.run_helper("--quick", "--no-fetch", "--format", "json")
+        result, payload = self.run_helper("--quick", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
         self.assertEqual(payload["dirty_submodule_paths"], ["子模組"])
@@ -239,7 +244,7 @@ class QuickReviewTests(unittest.TestCase):
         (self.repo / "binary.bin").unlink()
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-m", "rename")
-        result, payload = self.run_helper("--quick", "--no-fetch", "--format", "json")
+        result, payload = self.run_helper("--quick", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
         paths = {item["path"] for item in payload["changed_files"]}
@@ -250,7 +255,7 @@ class QuickReviewTests(unittest.TestCase):
         worktree = self.root / "review worktree"
         git(self.repo, "worktree", "add", "-b", "review-worktree", str(worktree), "HEAD")
         result = subprocess.run(
-            ["python", str(SCRIPT), "--workspace", str(worktree), "--quick", "--no-fetch", "--format", "json"],
+            ["python", str(SCRIPT), "--workspace", str(worktree), "--quick", "--format", "json"],
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -263,7 +268,7 @@ class QuickReviewTests(unittest.TestCase):
 
     def test_detached_head_is_rejected_by_quick_mode(self) -> None:
         git(self.repo, "switch", "--detach", "HEAD")
-        result, _ = self.run_helper("--quick", "--no-fetch", "--format", "json")
+        result, _ = self.run_helper("--quick", "--format", "json")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("detached HEAD", result.stderr)
 
@@ -272,7 +277,7 @@ class QuickReviewTests(unittest.TestCase):
         git(self.repo, "add", "local.txt")
         git(self.repo, "commit", "-m", "local")
         result, payload = self.run_helper(
-            "--base", "origin/main", "--head", "HEAD", "--mode", "direct", "--no-fetch", "--format", "json"
+            "--base", "origin/main", "--head", "HEAD", "--mode", "direct", "--format", "json"
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
@@ -285,6 +290,119 @@ class QuickReviewTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
         self.assertEqual(payload["head_resolved_ref"], "HEAD")
+
+    def test_local_branch_does_not_fetch_its_upstream(self) -> None:
+        git(self.repo, "branch", "--set-upstream-to=origin/main", "feature")
+        git(self.repo, "remote", "set-url", "origin", str(self.root / "missing-origin.git"))
+        result, payload = self.run_helper(
+            "--base", "feature", "--head", "HEAD", "--format", "json"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        self.assertEqual(payload["base_resolved_ref"], "refs/heads/feature")
+        self.assertEqual(payload["fetches"], [])
+
+    def test_missing_local_branch_does_not_fall_back_to_remote_branch(self) -> None:
+        git(self.repo, "push", "origin", "HEAD:refs/heads/release")
+        git(self.repo, "fetch", "origin", "release")
+        result, payload = self.run_helper(
+            "--base", "release", "--head", "HEAD", "--no-fetch", "--format", "json"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(payload)
+        self.assertIn("找不到基礎 ref", result.stderr)
+        self.assertIn("本機分支", result.stderr)
+
+    def test_explicit_remote_branch_fetches_and_ignores_same_named_local_branch(self) -> None:
+        git(self.repo, "push", "origin", "HEAD:refs/heads/release")
+        git(self.repo, "switch", "-c", "release")
+        (self.repo / "local-release.txt").write_text("local\n", encoding="utf-8")
+        git(self.repo, "add", "local-release.txt")
+        git(self.repo, "commit", "-m", "local release")
+        local_sha = git(self.repo, "rev-parse", "refs/heads/release")
+        git(self.repo, "switch", "feature")
+        git(self.repo, "fetch", "origin", "release")
+        remote_sha = git(self.repo, "rev-parse", "refs/remotes/origin/release")
+        self.assertNotEqual(local_sha, remote_sha)
+        result, payload = self.run_helper(
+            "--base", "origin/release", "--head", "HEAD", "--format", "json"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        self.assertEqual(payload["base_sha"], remote_sha)
+        self.assertEqual(payload["base_resolved_ref"], "refs/remotes/origin/release")
+
+    def test_deleted_remote_branch_is_not_satisfied_by_cached_tracking_ref(self) -> None:
+        git(self.repo, "push", "origin", "HEAD:refs/heads/release")
+        git(self.repo, "fetch", "origin", "release")
+        git(self.root, "--git-dir", str(self.remote), "branch", "-D", "release")
+        context_dir = self.root / "deleted-remote-context"
+        result, payload = self.run_helper(
+            "--base", "origin/release", "--head", "HEAD", "--context-dir", str(context_dir), "--format", "json"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(payload)
+        self.assertIn("fetch origin/release 失敗", result.stderr)
+        self.assertFalse(context_dir.exists())
+
+    def test_remote_ref_cannot_be_used_with_no_fetch(self) -> None:
+        result, payload = self.run_helper(
+            "--base", "origin/main", "--head", "HEAD", "--no-fetch", "--format", "json"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(payload)
+        self.assertIn("--no-fetch", result.stderr)
+
+    def test_quick_auto_remote_ref_cannot_be_used_with_no_fetch(self) -> None:
+        result, payload = self.run_helper("--quick", "--no-fetch", "--format", "json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(payload)
+        self.assertIn("--no-fetch", result.stderr)
+
+    def test_missing_local_head_does_not_fall_back_to_remote_branch(self) -> None:
+        git(self.repo, "push", "origin", "HEAD:refs/heads/release")
+        git(self.repo, "fetch", "origin", "release")
+        result, payload = self.run_helper(
+            "--base", "HEAD", "--head", "release", "--no-fetch", "--format", "json"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(payload)
+        self.assertIn("找不到比較 ref", result.stderr)
+        self.assertIn("本機分支", result.stderr)
+
+    def test_explicit_branch_namespace_does_not_fall_back_to_tag(self) -> None:
+        git(self.repo, "tag", "release")
+        result, payload = self.run_helper(
+            "--base", "refs/heads/release", "--head", "HEAD", "--no-fetch", "--format", "json"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(payload)
+        self.assertIn("找不到基礎 ref", result.stderr)
+        self.assertIn("本機分支", result.stderr)
+
+    def test_explicit_remote_namespace_is_supported_for_head(self) -> None:
+        git(self.repo, "push", "origin", "HEAD:refs/heads/release")
+        result, payload = self.run_helper(
+            "--base", "HEAD", "--head", "refs/remotes/origin/release", "--format", "json"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        self.assertEqual(payload["head_resolved_ref"], "refs/remotes/origin/release")
+
+    def test_explicit_tag_sha_and_slash_branch_remain_supported(self) -> None:
+        git(self.repo, "switch", "-c", "topic/login")
+        (self.repo / "login.txt").write_text("login\n", encoding="utf-8")
+        git(self.repo, "add", "login.txt")
+        git(self.repo, "commit", "-m", "login")
+        commit_sha = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "tag", "v1")
+        for base in ("refs/tags/v1", commit_sha, "HEAD"):
+            result, payload = self.run_helper(
+                "--base", base, "--head", "HEAD", "--mode", "direct", "--format", "json"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            assert payload is not None
+            self.assertEqual(payload["mode"], "direct")
 
     def test_fetch_failure_stops_before_writing_context(self) -> None:
         context_dir = self.root / "failed-fetch-context"
@@ -304,7 +422,7 @@ class QuickReviewTests(unittest.TestCase):
         self.assertIn("fetch origin/main 失敗", result.stderr)
         self.assertFalse(context_dir.exists())
 
-    def test_ambiguous_base_ref_stops_before_writing_context(self) -> None:
+    def test_unqualified_missing_branch_stops_before_writing_context(self) -> None:
         upstream = self.root / "upstream.git"
         git(self.root, "init", "--bare", str(upstream))
         git(self.root, "--git-dir", str(upstream), "symbolic-ref", "HEAD", "refs/heads/main")
@@ -326,7 +444,8 @@ class QuickReviewTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIsNone(payload)
-        self.assertIn("存在多個 remote 候選", result.stderr)
+        self.assertIn("找不到基礎 ref", result.stderr)
+        self.assertIn("本機分支", result.stderr)
         self.assertFalse(context_dir.exists())
 
     def test_unresolved_conflict_stops_before_writing_context(self) -> None:
@@ -347,7 +466,6 @@ class QuickReviewTests(unittest.TestCase):
         context_dir = self.root / "conflict-context"
         result, payload = self.run_helper(
             "--quick",
-            "--no-fetch",
             "--include-working-tree",
             "--context-dir",
             str(context_dir),
@@ -425,7 +543,6 @@ class QuickReviewTests(unittest.TestCase):
                 "--workspace",
                 str(shallow),
                 "--quick",
-                "--no-fetch",
                 "--include-working-tree",
                 "--context-dir",
                 str(context_dir),
@@ -450,7 +567,6 @@ class QuickReviewTests(unittest.TestCase):
                 "--workspace",
                 str(self.repo),
                 "--quick",
-                "--no-fetch",
                 "--include-working-tree",
                 "--format",
                 "json",
@@ -478,7 +594,6 @@ class QuickReviewTests(unittest.TestCase):
                 "--workspace",
                 str(self.repo),
                 "--quick",
-                "--no-fetch",
                 "--include-working-tree",
                 "--context-dir",
                 str(context_dir),

@@ -87,6 +87,8 @@ def load_helper_module():
 
 
 def run_helper(context, *args: str) -> tuple[int, dict | None, str]:
+    environment = os.environ.copy()
+    environment["PYTHONIOENCODING"] = "utf-8"
     completed = subprocess.run(
         ["python", str(helper_path()), "--workspace", str(context.repo), *args],
         text=True,
@@ -95,6 +97,7 @@ def run_helper(context, *args: str) -> tuple[int, dict | None, str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+        env=environment,
     )
     payload = json.loads(completed.stdout) if completed.returncode == 0 else None
     return completed.returncode, payload, completed.stderr
@@ -151,21 +154,18 @@ def step_given_remote_unrelated_commit(context):
     run_git(clone, "commit", "-m", "remote")
     run_git(clone, "push", "origin", "main")
     run_git(context.repo, "fetch", "origin", "main")
-    write(context.repo / "local.txt", "local\n")
-    run_git(context.repo, "add", "local.txt")
-    run_git(context.repo, "commit", "-m", "local")
 
 
-def step_run_without_fetch(context):
-    context.returncode, context.payload, context.stderr = run_helper(context, "--quick", "--no-fetch", "--format", "json")
+def step_run_with_remote_verification(context):
+    context.returncode, context.payload, context.stderr = run_helper(context, "--quick", "--format", "json")
 
 
 def step_run_without_remote(context):
-    context.returncode, context.payload, context.stderr = run_helper(context, "--quick", "--no-fetch", "--format", "json")
+    context.returncode, context.payload, context.stderr = run_helper(context, "--quick", "--format", "json")
 
 
 def step_run_with_remote(context, remote):
-    context.returncode, context.payload, context.stderr = run_helper(context, "--quick", "--remote", remote, "--no-fetch", "--format", "json")
+    context.returncode, context.payload, context.stderr = run_helper(context, "--quick", "--remote", remote, "--format", "json")
 
 
 def step_run_working_tree(context):
@@ -175,7 +175,7 @@ def step_run_working_tree(context):
     if not index_path.is_absolute():
         index_path = context.repo / index_path
     context.index_digest_before = index_path.read_bytes()
-    context.returncode, context.payload, context.stderr = run_helper(context, "--quick", "--no-fetch", "--include-working-tree", "--format", "json")
+    context.returncode, context.payload, context.stderr = run_helper(context, "--quick", "--include-working-tree", "--format", "json")
     context.status_before = before
     context.index_path = index_path
     context.context_dirs = getattr(context, "context_dirs", [])
@@ -185,7 +185,7 @@ def step_run_working_tree(context):
 
 def step_run_with_base(context, base):
     context.returncode, context.payload, context.stderr = run_helper(
-        context, "--quick", "--base", base, "--no-fetch", "--format", "json"
+        context, "--quick", "--base", base, "--format", "json"
     )
 
 
@@ -195,7 +195,7 @@ def step_prepare_failure(context, failure):
     context.failure_context_dir = context.root / "failure-context"
     if failure == "fetch":
         run_git(context.repo, "remote", "set-url", "origin", str(context.root / "missing-origin.git"))
-    elif failure == "ambiguous ref":
+    elif failure == "missing local branch":
         upstream = context.root / "upstream.git"
         run_git(context.root, "init", "--bare", str(upstream))
         run_git(context.root, "--git-dir", str(upstream), "symbolic-ref", "HEAD", "refs/heads/main")
@@ -233,7 +233,7 @@ def step_prepare_failure(context, failure):
         run_git(context.repo, "merge", "--no-ff", a1, "-m", "B2")
     elif failure == "unrelated":
         run_git(context.repo, "switch", "--orphan", "unrelated")
-        run_git(context.repo, "rm", "-rf", ".")
+        run_git(context.repo, "rm", "-rf", ".", check=False)
         write(context.repo / "unrelated.txt", "unrelated\n")
         run_git(context.repo, "add", "-A")
         run_git(context.repo, "commit", "-m", "unrelated root")
@@ -264,7 +264,7 @@ def step_run_failure(context):
             "json",
         )
         return
-    if context.failure_kind == "ambiguous ref":
+    if context.failure_kind == "missing local branch":
         context.returncode, context.payload, context.stderr = run_helper(
             context,
             "--quick",
@@ -282,7 +282,6 @@ def step_run_failure(context):
         context.returncode, context.payload, context.stderr = run_helper(
             context,
             "--quick",
-            "--no-fetch",
             "--include-working-tree",
             "--context-dir",
             str(context.failure_context_dir),
@@ -322,7 +321,6 @@ def step_run_failure(context):
         context.returncode, context.payload, context.stderr = run_helper(
             context,
             "--quick",
-            "--no-fetch",
             "--include-working-tree",
             "--context-dir",
             str(context.failure_context_dir),
@@ -337,7 +335,6 @@ def step_run_failure(context):
             "--workspace",
             str(context.repo),
             "--quick",
-            "--no-fetch",
             "--include-working-tree",
             "--format",
             "json",
@@ -364,14 +361,14 @@ def step_run_failure(context):
 
 def step_run_direct(context):
     context.returncode, context.payload, context.stderr = run_helper(
-        context, "--base", "origin/main", "--head", "HEAD", "--mode", "direct", "--no-fetch", "--format", "json"
+        context, "--base", "origin/main", "--head", "HEAD", "--mode", "direct", "--format", "json"
     )
 
 
 def step_run_both(context):
-    context.first_result = run_helper(context, "--quick", "--no-fetch", "--format", "json")
+    context.first_result = run_helper(context, "--quick", "--format", "json")
     context.second_result = run_helper(
-        context, "--quick", "--no-fetch", "--include-working-tree", "--format", "json"
+        context, "--quick", "--include-working-tree", "--format", "json"
     )
     for result in (context.first_result, context.second_result):
         if result[1] and result[1].get("context_dir"):
@@ -437,7 +434,8 @@ def step_context_bundle(context):
 
 def step_ref_error(context):
     assert context.returncode != 0
-    assert "找不到基礎 ref" in context.stderr
+    assert context.payload is None
+    assert "origin/missing" in context.stderr
 
 
 def step_failure_stopped(context):
@@ -466,6 +464,105 @@ def step_both_successful(context):
     assert second_payload["review_scope"] == "working-tree"
 
 
+def step_given_tracked_local_branch(context):
+    ensure_repo(context)
+    run_git(context.repo, "branch", "--set-upstream-to=origin/main", "feature")
+    run_git(context.repo, "remote", "set-url", "origin", str(context.root / "missing-origin.git"))
+
+
+def step_run_local_base(context, base):
+    context.returncode, context.payload, context.stderr = run_helper(
+        context, "--base", base, "--head", "HEAD", "--format", "json"
+    )
+
+
+def step_run_remote_base_no_fetch(context, base):
+    context.returncode, context.payload, context.stderr = run_helper(
+        context, "--base", base, "--head", "HEAD", "--no-fetch", "--format", "json"
+    )
+
+
+def step_local_base_succeeds_without_fetch(context):
+    assert context.returncode == 0, context.stderr
+    assert context.payload["base_resolved_ref"] == "refs/heads/feature"
+    assert context.payload["fetches"] == []
+
+
+def step_given_remote_only_branch(context, branch):
+    ensure_repo(context)
+    run_git(context.repo, "push", "origin", "HEAD:refs/heads/release")
+    run_git(context.repo, "fetch", "origin", "release")
+
+
+def step_local_base_fails(context):
+    assert context.returncode != 0, "local branch unexpectedly succeeded"
+    assert context.payload is None, "failed local branch returned a payload"
+    assert "找不到基礎 ref" in context.stderr
+    assert "本機分支" in context.stderr
+
+
+def step_given_same_named_local_and_remote_branch(context, branch):
+    ensure_repo(context)
+    run_git(context.repo, "push", "origin", "HEAD:refs/heads/release")
+    run_git(context.repo, "switch", "-c", "release")
+    write(context.repo / "local-release.txt", "local\n")
+    run_git(context.repo, "add", "local-release.txt")
+    run_git(context.repo, "commit", "-m", "local release")
+    run_git(context.repo, "switch", "feature")
+
+
+def step_remote_base_succeeds(context):
+    assert context.returncode == 0, context.stderr
+    assert context.payload["base_resolved_ref"] == "refs/remotes/origin/release"
+    assert context.payload["fetches"] == [
+        {"remote": "origin", "branch": "release", "input_ref": "origin/release"}
+    ]
+
+
+def step_given_deleted_remote_branch(context, branch):
+    ensure_repo(context)
+    run_git(context.repo, "push", "origin", "HEAD:refs/heads/release")
+    run_git(context.repo, "fetch", "origin", "release")
+    run_git(context.root, "--git-dir", str(context.root / "origin.git"), "branch", "-D", "release")
+
+
+def step_remote_base_fails(context):
+    assert context.returncode != 0, "deleted remote branch unexpectedly succeeded"
+    assert context.payload is None, "failed remote branch returned a payload"
+    assert "fetch origin/release 失敗" in context.stderr
+
+
+def step_remote_no_fetch_fails(context):
+    assert context.returncode != 0
+    assert context.payload is None
+    assert "--no-fetch" in context.stderr
+
+
+def step_given_tag_and_commit_inputs(context):
+    ensure_repo(context)
+    run_git(context.repo, "switch", "-c", "topic/login")
+    write(context.repo / "login.txt", "login\n")
+    run_git(context.repo, "add", "login.txt")
+    run_git(context.repo, "commit", "-m", "login")
+    context.commit_sha = run_git(context.repo, "rev-parse", "HEAD")
+    run_git(context.repo, "tag", "v1")
+
+
+def step_run_all_explicit_inputs(context):
+    context.explicit_results = [
+        run_helper(context, "--base", "topic/login", "--head", "HEAD", "--mode", "direct", "--format", "json"),
+        run_helper(context, "--base", "refs/tags/v1", "--head", "HEAD", "--mode", "direct", "--format", "json"),
+        run_helper(context, "--base", context.commit_sha, "--head", "HEAD", "--mode", "direct", "--format", "json"),
+        run_helper(context, "--base", "HEAD", "--head", "HEAD", "--mode", "direct", "--format", "json"),
+    ]
+
+
+def step_all_explicit_inputs_succeed(context):
+    for code, payload, error in context.explicit_results:
+        assert code == 0, error
+        assert payload["mode"] == "direct"
+
+
 from behave import given, then, when
 
 given("a local repository with a remote default branch")(step_given_remote)
@@ -475,7 +572,7 @@ given("a local repository whose remote default branch has an unrelated commit")(
 given("the current branch has a local commit")(step_given_remote_and_local_commit)
 given("the working tree has staged, unstaged, deleted, and untracked files")(step_working_changes)
 given('the repository is prepared for quick-review failure "{failure}"')(step_prepare_failure)
-when("I run the quick review without fetching")(step_run_without_fetch)
+when("I run the quick review with remote verification")(step_run_with_remote_verification)
 when("I run the quick review without choosing a remote")(step_run_without_remote)
 when('I run the quick review with remote "{remote}"')(step_run_with_remote)
 when("I run the quick review with working-tree changes")(step_run_working_tree)
@@ -483,6 +580,21 @@ when('I run the quick review with base "{base}"')(step_run_with_base)
 when("I run the failing quick review")(step_run_failure)
 when("I run an explicit direct comparison")(step_run_direct)
 when("I run both quick-review forms")(step_run_both)
+given("a local branch with an upstream tracking branch")(step_given_tracked_local_branch)
+given('a remote-only branch named "{branch}"')(step_given_remote_only_branch)
+given('the same branch exists locally and on the remote as "{branch}"')(step_given_same_named_local_and_remote_branch)
+given('a cached remote branch is deleted as "{branch}"')(step_given_deleted_remote_branch)
+given("tag, commit, HEAD, and a slash-named local branch inputs")(step_given_tag_and_commit_inputs)
+when('I run a local-base comparison for "{base}"')(step_run_local_base)
+when('I run a remote-base comparison for "{base}"')(step_run_local_base)
+when('I run a remote-base comparison for "{base}" with no fetch')(step_run_remote_base_no_fetch)
+when("I run all explicit ref comparisons")(step_run_all_explicit_inputs)
+then("the local branch comparison succeeds without a fetch")(step_local_base_succeeds_without_fetch)
+then("the local branch comparison fails directly")(step_local_base_fails)
+then("the remote branch comparison succeeds after fetching")(step_remote_base_succeeds)
+then("the remote branch comparison fails directly")(step_remote_base_fails)
+then("the remote comparison reports the no-fetch conflict")(step_remote_no_fetch_fails)
+then("all explicit ref comparisons succeed")(step_all_explicit_inputs_succeed)
 then("the result uses the current branch HEAD and the remote default branch")(step_result_uses_refs)
 then("the local commit appears in the changed files")(step_local_change)
 then("the quick review reports the remote candidates")(step_candidates)

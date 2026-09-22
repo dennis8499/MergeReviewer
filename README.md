@@ -92,14 +92,16 @@ $merge-reviewer 快速審查 遠端=upstream
 | 參數 | 必要性 | 說明 |
 | --- | --- | --- |
 | `專案名稱` | 多 repository 時必要 | Repository 資料夾名稱或路徑。工作區只有一個 repository 時可省略。 |
-| `基礎分支` | 必要 | 分支、remote ref、tag 或 commit。 |
-| `比較分支` | 必要 | 要審查的分支、remote ref、tag 或 commit。 |
+| `基礎分支` | 必要 | 本機分支、明確 remote ref、tag 或 commit。未加 remote 前綴的分支只查本機。 |
+| `比較分支` | 必要 | 要審查的本機分支、明確 remote ref、tag 或 commit。未加 remote 前綴的分支只查本機。 |
 | `比較模式` | 選填 | `合併前審查`（預設）或 `直接比較`。 |
 | `快速審查` | 選填 | 使用目前本地分支與遠端預設主分支；不可同時指定 `比較分支`。 |
 | `遠端` | 快速模式選填 | 多個 remote 時指定要使用的 remote；單一 remote 會自動選取。 |
 | `包含未提交變更` | 快速模式選填 | 將工作區建立成固定 tree 快照後納入比較。 |
 
-如果 repository、remote 或 ref 無法唯一解析，skill 會列出候選項目並要求選擇，不會自行猜測。
+Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求選擇。指定的 ref 找不到時會直接回傳錯誤，不會改查 upstream、同名本機／遠端分支或過期快取。
+
+`main`、`feature/login`、`refs/heads/main` 只查本機 branch；`origin/main`、`refs/remotes/origin/main` 只查指定 remote。Remote branch 會先連線確認並以 exact refspec 更新暫存 remote-tracking ref；因此 remote-qualified ref 不能搭配 `--no-fetch`。Tag 可使用 `refs/tags/<name>`（或沒有同名本機 branch 時使用短 tag 名稱），commit SHA 與 `HEAD` 仍可直接使用。
 
 ## 比較模式
 
@@ -110,7 +112,7 @@ $merge-reviewer 快速審查 遠端=upstream
 
 報告會記錄輸入 ref、解析後的完整 SHA、比較模式、merge base、fetch 結果，以及工作樹是否維持不變。
 
-快速模式透過 `git ls-remote --symref <remote> HEAD` 取得遠端宣告的預設分支；遠端未提供 HEAD 時會使用本地 remote-tracking HEAD 或在只有一個候選時使用該分支。多個 remote 或多個主分支候選都會停止並列出選項，不會猜測。
+快速模式透過 `git ls-remote --symref <remote> HEAD` 取得遠端宣告的預設分支，並連線確認實際 branch；遠端未提供 HEAD 時才使用本地候選，再以 fetch 驗證該 branch。多個 remote 或多個主分支候選都會停止並列出選項，不會猜測。
 
 ## 審查安全行為
 
@@ -155,6 +157,8 @@ $merge-reviewer 快速審查 遠端=upstream
 ## 限制與錯誤處理
 
 - Remote branch 的 fetch 失敗時會停止審查，不會靜默使用可能過期的 remote ref。
+- 本機 branch 不會因為設定 upstream 而觸發 fetch；指定不存在的本機 branch 會直接回報錯誤。
+- Remote-qualified ref 不能搭配 `--no-fetch`；`--no-fetch` 只適用於沒有 remote branch 輸入的比較。
 - 無效 ref、shallow history、沒有共同祖先或存在多個 merge base 時，審查會停止並回報原因。
 - 分支同時存在於多個 remote 時，請使用明確的 ref，例如 `origin/release`。
 - Binary、submodule、rename、copy 或 mode-only 變更會列為審查範圍限制，必要時需人工補充檢查。
@@ -185,7 +189,7 @@ python skills\merge-reviewer\scripts\git_review_context.py `
 - `--remote`：快速模式指定 remote；多個 remote 時必要。
 - `--include-working-tree`：快速模式納入 staged、unstaged、刪除與未忽略的未追蹤檔案。
 - `--mode merge|direct`：選擇比較模式。
-- `--no-fetch`：停用 remote fetch；只適合已確認本機 ref 最新的情境。
+- `--no-fetch`：只允許沒有 remote-qualified ref 的比較；指定 remote branch 時會直接回報參數衝突。
 - `--context-dir`：將 manifest 與完整 patch 寫入新的暫存目錄。
 
 Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、diff 統計、fetch 結果、遠端選擇與工作樹快照，供審查流程作為來源真相。Manifest schema version 為 2；工作區模式會另外輸出 `review_tree_sha`、`review_scope=working-tree` 與 `snapshot_read_info`，並在 context bundle 保留可供審查的 `working-tree.patch` 和變更檔案內容。

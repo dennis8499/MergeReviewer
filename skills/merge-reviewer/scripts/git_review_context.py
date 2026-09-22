@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -389,16 +390,37 @@ def verified_commit(repo: Path, ref: str) -> str | None:
 
 
 def resolve_commit_ref(repo: Path, ref: str) -> tuple[str | None, str]:
-    """Resolve an input ref, falling back to a fetched remote-tracking ref."""
-    direct = verified_commit(repo, ref)
-    if direct:
-        return direct, ref
+    """Resolve a ref while keeping local and remote branch namespaces separate."""
     target = remote_target_for_ref(repo, ref)
     if target:
         remote_ref = f"refs/remotes/{target.remote}/{target.branch}"
         remote_commit = verified_commit(repo, remote_ref)
         if remote_commit:
             return remote_commit, remote_ref
+
+    if ref.startswith("refs/heads/"):
+        local_commit = verified_commit(repo, ref)
+        return (local_commit, ref)
+
+    local_branch_ref = f"refs/heads/{ref}"
+    if local_branch_exists(repo, ref):
+        local_commit = verified_commit(repo, local_branch_ref)
+        return (local_commit, local_branch_ref)
+
+    if ref.startswith("refs/tags/"):
+        tag_commit = verified_commit(repo, ref)
+        return (tag_commit, ref)
+
+    # Keep short tag names available, but never use an arbitrary Git revision
+    # lookup here: that could silently resolve a stale remote-tracking ref.
+    tag_commit = verified_commit(repo, f"refs/tags/{ref}")
+    if tag_commit:
+        return tag_commit, f"refs/tags/{ref}"
+
+    if ref == "HEAD" or re.fullmatch(r"[0-9a-fA-F]{4,40}", ref):
+        object_commit = verified_commit(repo, ref)
+        if object_commit:
+            return object_commit, ref
     return None, ref
 
 
@@ -406,77 +428,62 @@ def local_branch_exists(repo: Path, branch: str) -> bool:
     return git_ok(repo, ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"])
 
 
-def tracking_remote_for_local_branch(repo: Path, branch: str) -> RemoteTarget | None:
-    if not local_branch_exists(repo, branch):
-        return None
-    upstream = str(
-        run_git(
-            repo,
-            ["for-each-ref", "--format=%(upstream:short)", f"refs/heads/{branch}"],
-            check=False,
-        )
-    ).strip()
-    if not upstream or "/" not in upstream:
-        return None
-    remote, remote_branch = upstream.split("/", 1)
-    if remote not in remote_names(repo):
-        return None
-    return RemoteTarget(remote, remote_branch, branch)
-
-
 def remote_target_for_ref(repo: Path, ref: str) -> RemoteTarget | None:
-    remotes = remote_names(repo)
-    normalized = ref
-    if normalized.startswith("refs/remotes/"):
-        normalized = normalized[len("refs/remotes/") :]
-    if "/" in normalized:
-        first, remainder = normalized.split("/", 1)
-        if first in remotes:
-            return RemoteTarget(first, remainder, ref)
-    local_branch = ref.removeprefix("refs/heads/")
-    if local_branch_exists(repo, local_branch):
-        return tracking_remote_for_local_branch(repo, local_branch)
-    if verified_commit(repo, ref):
-        return None
+    """Classify only explicitly remote-qualified refs.
 
-    matches = [
-        RemoteTarget(remote, local_branch, ref)
-        for remote in remotes
-        if git_ok(
-            repo,
-            [
-                "show-ref",
-                "--verify",
-                "--quiet",
-                f"refs/remotes/{remote}/{local_branch}",
-            ],
-        )
-    ]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        choices = ", ".join(f"{item.remote}/{item.branch}" for item in matches)
-        raise ReviewContextError(f"分支「{ref}」存在多個 remote 候選：{choices}；請使用明確 remote ref。")
-    if len(remotes) == 1 and ref and not ref.startswith("refs/"):
-        return RemoteTarget(remotes[0], local_branch, ref)
-    if len(remotes) > 1 and ref and not ref.startswith("refs/"):
-        choices = ", ".join(f"{remote}/{ref}" for remote in remotes)
-        raise ReviewContextError(f"無法判斷分支「{ref}」所屬 remote；候選：{choices}。請使用明確 remote ref。")
+    An unqualified branch name is deliberately never inferred from a remote or
+    from a local upstream configuration.  This keeps ``release`` and
+    ``origin/release`` as two distinct user choices.
+    """
+    remotes = remote_names(repo)
+    if ref.startswith("refs/remotes/"):
+        normalized = ref[len("refs/remotes/") :]
+        if "/" not in normalized:
+            raise ReviewContextError(f"遠端 ref「{ref}」缺少分支名稱。")
+        remote, branch = normalized.split("/", 1)
+        if remote not in remotes:
+            choices = ", ".join(remotes) or "（沒有已設定的 remote）"
+            raise ReviewContextError(f"指定的 remote「{remote}」不存在；候選：{choices}。")
+        if not branch:
+            raise ReviewContextError(f"遠端 ref「{ref}」缺少分支名稱。")
+        return RemoteTarget(remote, branch, ref)
+
+    if not ref.startswith("refs/") and "/" in ref:
+        remote, branch = ref.split("/", 1)
+        if remote in remotes:
+            if not branch:
+                raise ReviewContextError(f"遠端 ref「{ref}」缺少分支名稱。")
+            return RemoteTarget(remote, branch, ref)
     return None
 
 
 def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[str, str]]:
     actions: list[dict[str, str]] = []
-    if not enabled:
-        return actions
     seen: set[tuple[str, str]] = set()
     for ref in refs:
         target = remote_target_for_ref(repo, ref)
-        if not target or (target.remote, target.branch) in seen:
+        if not target:
+            continue
+        if not enabled:
+            raise ReviewContextError(
+                f"遠端 ref「{target.input_ref}」需要連線確認，不能搭配 --no-fetch。"
+            )
+        if (target.remote, target.branch) in seen:
             continue
         seen.add((target.remote, target.branch))
         try:
-            run_git(repo, ["fetch", "--no-tags", "--no-prune", target.remote, target.branch])
+            remote_ref = f"refs/heads/{target.branch}"
+            tracking_ref = f"refs/remotes/{target.remote}/{target.branch}"
+            run_git(
+                repo,
+                [
+                    "fetch",
+                    "--no-tags",
+                    "--no-prune",
+                    target.remote,
+                    f"{remote_ref}:{tracking_ref}",
+                ],
+            )
         except GitCommandError as exc:
             raise ReviewContextError(
                 f"fetch {target.remote}/{target.branch} 失敗（輸入 {target.input_ref}）：{exc.stderr}"
@@ -485,6 +492,23 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
             {"remote": target.remote, "branch": target.branch, "input_ref": target.input_ref}
         )
     return actions
+
+
+def ref_source_description(repo: Path, ref: str) -> str:
+    target = remote_target_for_ref(repo, ref)
+    if target:
+        return f"指定遠端分支 {target.remote}/{target.branch}"
+    if ref.startswith("refs/heads/"):
+        return "本機分支"
+    if ref.startswith("refs/tags/"):
+        return "指定 tag"
+    if local_branch_exists(repo, ref):
+        return "本機分支"
+    if ref == "HEAD":
+        return "HEAD"
+    if re.fullmatch(r"[0-9a-fA-F]{4,40}", ref):
+        return "commit SHA"
+    return "本機分支或短 tag"
 
 
 def parse_name_status(raw: str) -> list[dict[str, str | None]]:
@@ -867,10 +891,17 @@ def resolve_quick_inputs(
     if args.base:
         target = remote_target_for_ref(repo, args.base)
         if target:
+            if args.no_fetch:
+                raise ReviewContextError(
+                    f"遠端 ref「{args.base}」需要連線確認，不能搭配 --no-fetch。"
+                )
             selected_remote = target.remote
             selected_branch = target.branch
         selection_source = "explicit-base"
         return args.base, "HEAD", selected_remote, selected_branch, selection_source
+
+    if args.no_fetch:
+        raise ReviewContextError("快速審查使用遠端 base，不能搭配 --no-fetch；請移除 --no-fetch。")
 
     if selected_remote:
         if selected_remote not in remotes:
@@ -887,7 +918,7 @@ def resolve_quick_inputs(
         )
 
     selected_branch, branch_source = remote_default_branch(
-        repo, selected_remote, allow_network=not args.no_fetch
+        repo, selected_remote, allow_network=True
     )
     selection_source = f"{selection_source}+{branch_source}"
     return f"{selected_remote}/{selected_branch}", "HEAD", selected_remote, selected_branch, selection_source
@@ -927,14 +958,18 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     fetches = fetch_inputs(repo, fetch_refs, not args.no_fetch)
     base_sha, base_resolved_ref = resolve_commit_ref(repo, base_input)
     if not base_sha:
-        raise ReviewContextError(f"找不到基礎 ref 的 commit：{base_input}")
+        raise ReviewContextError(
+            f"找不到基礎 ref 的 commit：{base_input}（查找來源：{ref_source_description(repo, base_input)}）"
+        )
     if args.quick:
         head_sha = verified_commit(repo, "HEAD")
         head_resolved_ref = "HEAD"
     else:
         head_sha, head_resolved_ref = resolve_commit_ref(repo, head_input)
     if not head_sha:
-        raise ReviewContextError(f"找不到比較 ref 的 commit：{head_input}")
+        raise ReviewContextError(
+            f"找不到比較 ref 的 commit：{head_input}（查找來源：{ref_source_description(repo, head_input)}）"
+        )
 
     merge_base_output = str(
         run_git(repo, ["merge-base", "--all", base_sha, head_sha], check=False)
@@ -1124,7 +1159,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--base", help="Base branch, remote ref, tag, or commit.")
     parser.add_argument("--head", help="Comparison branch or commit.")
     parser.add_argument("--mode", choices=("merge", "direct"), default="merge")
-    parser.add_argument("--no-fetch", action="store_true", help="Do not fetch remote branches.")
+    parser.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="Skip fetch only for comparisons without remote-qualified refs.",
+    )
     parser.add_argument("--format", choices=("json",), default="json")
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument("--context-dir", help="Write manifest and complete patch files to this new directory.")
