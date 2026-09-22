@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build installable skill archive
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/package_release.py --tag "$RELEASE_TAG"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          gh release create "$RELEASE_TAG" \
+            "dist/merge-reviewer-${VERSION}.zip" \
+            --verify-tag \
+            --generate-notes \
+            --title "Merge Reviewer ${RELEASE_TAG}"
