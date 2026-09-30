@@ -44,7 +44,11 @@ SKIP_DIRECTORIES = {
 
 
 class ReviewContextError(RuntimeError):
-    """A user-actionable preparation failure."""
+    """A user-actionable preparation failure; ``hint`` is the suggested next step."""
+
+    def __init__(self, message: str, hint: str | None = None):
+        super().__init__(message)
+        self.hint = hint
 
 
 class GitCommandError(ReviewContextError):
@@ -293,13 +297,15 @@ def choose_repository(
         if len(candidates) != 1:
             available = ", ".join(str(repo) for repo in repositories) or "（找不到 Git repository）"
             raise ReviewContextError(
-                f"專案名稱「{project}」無法唯一定位 repository。候選：{available}"
+                f"專案名稱「{project}」無法唯一定位 repository。候選：{available}",
+                hint="請從候選清單擇一，以完整路徑或資料夾名稱重新指定專案名稱。",
             )
         return candidates[0], repositories
     if len(repositories) != 1:
         available = ", ".join(str(repo) for repo in repositories) or "（找不到 Git repository）"
         raise ReviewContextError(
-            f"未提供專案名稱，工作區必須恰好有一個 repository；候選：{available}"
+            f"未提供專案名稱，工作區必須恰好有一個 repository；候選：{available}",
+            hint="請指定專案名稱或 repository 路徑；若找不到 repository，請確認工作區資料夾是否正確。",
         )
     return repositories[0], repositories
 
@@ -350,7 +356,10 @@ def remote_default_branch(
         )
         if return_code != 0:
             detail = error.strip() or "沒有診斷訊息。"
-            raise ReviewContextError(f"無法讀取 remote「{remote}」的預設分支：{detail}")
+            raise ReviewContextError(
+                f"無法讀取 remote「{remote}」的預設分支：{detail}",
+                hint="請確認網路連線與遠端存取權限；也可改用 --base <remote>/<branch> 明確指定基礎分支。",
+            )
         for line in output.splitlines():
             if line.startswith("ref: ") and line.endswith("\tHEAD"):
                 advertised = line[len("ref: ") : -len("\tHEAD")]
@@ -374,7 +383,8 @@ def remote_default_branch(
     formatted = ", ".join(f"{remote}/{branch}" for branch in candidates) or "（沒有本地 remote-tracking branch）"
     raise ReviewContextError(
         f"無法判定 remote「{remote}」的預設主分支；候選：{formatted}。"
-        " 請使用 --base <remote>/<branch> 或先設定 remote HEAD。"
+        " 請使用 --base <remote>/<branch> 或先設定 remote HEAD。",
+        hint="請從候選分支擇一，改用 --base <remote>/<branch> 明確指定要比較的主分支。",
     )
 
 
@@ -443,7 +453,10 @@ def remote_target_for_ref(repo: Path, ref: str) -> RemoteTarget | None:
         remote, branch = normalized.split("/", 1)
         if remote not in remotes:
             choices = ", ".join(remotes) or "（沒有已設定的 remote）"
-            raise ReviewContextError(f"指定的 remote「{remote}」不存在；候選：{choices}。")
+            raise ReviewContextError(
+                f"指定的 remote「{remote}」不存在；候選：{choices}。",
+                hint="請改用已設定的 remote 名稱，例如 origin/main。",
+            )
         if not branch:
             raise ReviewContextError(f"遠端 ref「{ref}」缺少分支名稱。")
         return RemoteTarget(remote, branch, ref)
@@ -466,7 +479,8 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
             continue
         if not enabled:
             raise ReviewContextError(
-                f"遠端 ref「{target.input_ref}」需要連線確認，不能搭配 --no-fetch。"
+                f"遠端 ref「{target.input_ref}」需要連線確認，不能搭配 --no-fetch。",
+                hint="請移除 --no-fetch；若要離線審查，請改用本機分支、tag 或 commit。",
             )
         if (target.remote, target.branch) in seen:
             continue
@@ -486,7 +500,8 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
             )
         except GitCommandError as exc:
             raise ReviewContextError(
-                f"fetch {target.remote}/{target.branch} 失敗（輸入 {target.input_ref}）：{exc.stderr}"
+                f"fetch {target.remote}/{target.branch} 失敗（輸入 {target.input_ref}）：{exc.stderr}",
+                hint="請確認網路、帳號權限，以及遠端是否有此分支；為避免審查過期內容，不會自動改用舊版本。",
             ) from exc
         actions.append(
             {"remote": target.remote, "branch": target.branch, "input_ref": target.input_ref}
@@ -760,7 +775,10 @@ def create_worktree_snapshot(repo: Path) -> tuple[Path, dict[str, str], str]:
     """Create a tree from the final working files without touching user state."""
     conflicts = str(run_git(repo, ["ls-files", "-u", "--full-name", "-z"], check=False))
     if conflicts:
-        raise ReviewContextError("工作區有未解決的 merge conflict，無法建立穩定快照。")
+        raise ReviewContextError(
+            "工作區有未解決的 merge conflict，無法建立穩定快照。",
+            hint="請先解決或中止目前的 merge，再重新審查；或不加「包含未提交變更」，只審查已提交內容。",
+        )
     temporary_dir = Path(tempfile.mkdtemp(prefix="merge-reviewer-"))
     env = snapshot_environment(repo, temporary_dir)
     try:
@@ -872,9 +890,15 @@ def resolve_quick_inputs(
         run_git(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"], check=False)
     ).strip()
     if not branch:
-        raise ReviewContextError("快速審查需要目前位於本地分支；detached HEAD 請改用 --base/--head。")
+        raise ReviewContextError(
+            "快速審查需要目前位於本地分支；detached HEAD 請改用 --base/--head。",
+            hint="請先切換到要審查的本地分支，或改用一般模式明確指定基礎與比較版本。",
+        )
     if not verified_commit(repo, "HEAD"):
-        raise ReviewContextError("目前分支尚無 commit，無法建立快速審查版本。")
+        raise ReviewContextError(
+            "目前分支尚無 commit，無法建立快速審查版本。",
+            hint="請先建立至少一個 commit，再重新執行快速審查。",
+        )
     if args.head:
         raise ReviewContextError("快速模式會使用目前本地分支 HEAD，不可同時指定 --head。")
     if args.include_working_tree and args.mode == "direct":
@@ -883,7 +907,10 @@ def resolve_quick_inputs(
         raise ReviewContextError("快速模式的 --base 與 --remote 不能同時使用。")
     remotes = remote_names(repo)
     if not remotes:
-        raise ReviewContextError("快速審查找不到 remote；請先設定 remote，或使用一般的 --base/--head 模式。")
+        raise ReviewContextError(
+            "快速審查找不到 remote；請先設定 remote，或使用一般的 --base/--head 模式。",
+            hint="請用 git remote add 設定遠端，或改用一般模式明確指定兩個版本。",
+        )
 
     selection_source: str
     selected_remote: str | None = args.remote
@@ -893,7 +920,8 @@ def resolve_quick_inputs(
         if target:
             if args.no_fetch:
                 raise ReviewContextError(
-                    f"遠端 ref「{args.base}」需要連線確認，不能搭配 --no-fetch。"
+                    f"遠端 ref「{args.base}」需要連線確認，不能搭配 --no-fetch。",
+                    hint="請移除 --no-fetch；若要離線審查，請改用本機分支、tag 或 commit。",
                 )
             selected_remote = target.remote
             selected_branch = target.branch
@@ -901,12 +929,18 @@ def resolve_quick_inputs(
         return args.base, "HEAD", selected_remote, selected_branch, selection_source
 
     if args.no_fetch:
-        raise ReviewContextError("快速審查使用遠端 base，不能搭配 --no-fetch；請移除 --no-fetch。")
+        raise ReviewContextError(
+            "快速審查使用遠端 base，不能搭配 --no-fetch；請移除 --no-fetch。",
+            hint="請移除 --no-fetch，讓工具連線確認遠端最新版本。",
+        )
 
     if selected_remote:
         if selected_remote not in remotes:
             choices = ", ".join(remotes)
-            raise ReviewContextError(f"remote「{selected_remote}」不存在；候選：{choices}。")
+            raise ReviewContextError(
+                f"remote「{selected_remote}」不存在；候選：{choices}。",
+                hint="請從候選清單擇一，以 --remote <name> 重新指定。",
+            )
         selection_source = "explicit-remote"
     elif len(remotes) == 1:
         selected_remote = remotes[0]
@@ -914,7 +948,8 @@ def resolve_quick_inputs(
     else:
         choices = ", ".join(remotes)
         raise ReviewContextError(
-            f"快速審查無法在多個 remote 中自動選擇；候選：{choices}。請使用 --remote <name>。"
+            f"快速審查無法在多個 remote 中自動選擇；候選：{choices}。請使用 --remote <name>。",
+            hint="請從候選清單擇一，加上 --remote <name>（或「遠端=<name>」）後重新執行。",
         )
 
     selected_branch, branch_source = remote_default_branch(
@@ -942,7 +977,8 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     repo, repositories = choose_repository(workspace, workspace_file, args.project)
     if is_shallow_repository(repo):
         raise ReviewContextError(
-            "repository 是 shallow clone，無法可靠判定共同祖先；請先取得完整歷史後再審查。"
+            "repository 是 shallow clone，無法可靠判定共同祖先；請先取得完整歷史後再審查。",
+            hint="請執行 git fetch --unshallow 取得完整歷史後再重新審查。",
         )
 
     before = snapshot(repo)
@@ -959,7 +995,8 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     base_sha, base_resolved_ref = resolve_commit_ref(repo, base_input)
     if not base_sha:
         raise ReviewContextError(
-            f"找不到基礎 ref 的 commit：{base_input}（查找來源：{ref_source_description(repo, base_input)}）"
+            f"找不到基礎 ref 的 commit：{base_input}（查找來源：{ref_source_description(repo, base_input)}）",
+            hint="請確認分支名稱拼字；遠端分支需加上 remote 前綴（例如 origin/main），本機分支不需要。",
         )
     if args.quick:
         head_sha = verified_commit(repo, "HEAD")
@@ -968,7 +1005,8 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         head_sha, head_resolved_ref = resolve_commit_ref(repo, head_input)
     if not head_sha:
         raise ReviewContextError(
-            f"找不到比較 ref 的 commit：{head_input}（查找來源：{ref_source_description(repo, head_input)}）"
+            f"找不到比較 ref 的 commit：{head_input}（查找來源：{ref_source_description(repo, head_input)}）",
+            hint="請確認分支名稱拼字；遠端分支需加上 remote 前綴（例如 origin/feature），本機分支不需要。",
         )
 
     merge_base_output = str(
@@ -976,10 +1014,14 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     )
     merge_bases = [line.strip() for line in merge_base_output.splitlines() if line.strip()]
     if not merge_bases:
-        raise ReviewContextError("兩個版本沒有共同祖先，無法建立可靠的比較範圍。")
+        raise ReviewContextError(
+            "兩個版本沒有共同祖先，無法建立可靠的比較範圍。",
+            hint="請確認兩個版本屬於同一個專案；若確定要直接比較，可改用「直接比較」模式。",
+        )
     if len(merge_bases) > 1:
         raise ReviewContextError(
-            "兩個版本存在多個共同祖先（criss-cross history），請先指定可接受的歷史或整理分支。"
+            "兩個版本存在多個共同祖先（criss-cross history），請先指定可接受的歷史或整理分支。",
+            hint="請改用「直接比較」模式，或先整理分支歷史後再審查。",
         )
     merge_base = merge_bases[0]
     diff_left = merge_base if args.mode == "merge" else base_sha
@@ -1023,7 +1065,10 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         after = snapshot(repo)
         working_tree_unchanged = before == after
         if args.quick and not working_tree_unchanged:
-            raise ReviewContextError("審查期間工作區、index 或 HEAD 發生變更，已捨棄本次審查結果；請重新執行。")
+            raise ReviewContextError(
+                "審查期間工作區、index 或 HEAD 發生變更，已捨棄本次審查結果；請重新執行。",
+                hint="請在審查進行中避免編輯、切換分支或提交，完成後重新執行。",
+            )
         dirty_submodules = sorted(
             set(before.get("dirty_submodules", []))
             | set(after.get("dirty_submodules", []))
@@ -1176,6 +1221,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest = build_manifest(args)
     except (ReviewContextError, OSError, ValueError) as exc:
         print(f"merge-reviewer: error: {exc}", file=sys.stderr)
+        hint = getattr(exc, "hint", None)
+        if hint:
+            print(f"merge-reviewer: 建議：{hint}", file=sys.stderr)
         return 2
     indent = 2 if args.pretty else None
     print(json.dumps(manifest, ensure_ascii=False, indent=indent))

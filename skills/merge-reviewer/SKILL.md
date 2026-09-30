@@ -93,25 +93,30 @@ Create the report directory and write one Markdown report to:
 
 Use a fresh filename if a timestamp collision occurs. The report must be Traditional Chinese and follow the readable structure in [references/review-rules.md](references/review-rules.md):
 
-- `審查結論` first, with one plain-language sentence, P0–P3 counts, the highest-priority finding IDs, and any evidence gap that changes the conclusion;
-- `問題總覽` as a short Markdown table with a fixed finding ID, Chinese priority label, problem, and user/data/service impact;
-- `問題詳情` ordered by P0, P1, P2, P3, with a plain-language impact statement, an evidence-based operation scenario showing input, expected result, and actual result, a focused remediation direction, and technical evidence (file/line or commit, trigger, evidence, and impact scope);
-- `範圍與限制` with changed-file summary, binary/submodule limitations, merge commits inspected, and tests not executed by this static review unless the user explicitly asked for tests and they were actually run;
-- `技術審查紀錄` with project/repository path, input refs and resolved full SHAs, comparison mode and scope, remote selection, merge base, fetch outcome, working-tree status, and the evidence sources used.
+- `審查結論` first, with the merge recommendation (`可以合併`, `修正後再合併`, `暫緩合併`, or `需補做審查`, decided by the rules in the reference), the result state with its plain-language explanation, one plain-language sentence, P0–P3 counts with action labels, one to three next steps with the responsible role, and any evidence gap that changes the conclusion;
+- `問題總覽` as a short Markdown table with a fixed finding ID, action-oriented priority label (for example `P1 合併前必修`), problem, user/data/service impact, and suggested handler (`開發`, `維運設定`, or `QA`);
+- `問題詳情` ordered by P0, P1, P2, P3, with a plain-language impact statement, an evidence-based operation scenario showing input, expected result, and actual result, a plain-language `建議處理`, and technical evidence for engineers (file/line or commit, trigger, evidence, impact scope, and the engineering fix suggestion);
+- `範圍與限制` with a plain-language description of what was and was not checked, changed-file summary, binary/submodule limitations, merge commits inspected, and tests not executed by this static review unless the user explicitly asked for tests and they were actually run;
+- `技術審查紀錄（工程師參考）` with project/repository path, input refs and resolved full SHAs, comparison mode and scope, remote selection, merge base, fetch outcome, working-tree status, and the evidence sources used.
+
+The conclusion, overview, impact statement, operation scenario, and `建議處理` must be plain language: no class, method, variable, file names, SHAs, or English jargon (use the term table in the reference). Keep those terms only in the technical sections.
 
 Use the explicit result states from the reference: `發現具體問題`, `沒有差異`, `未發現具體問題`, or `審查未完成`. Use `審查未完成` whenever a fetch, ref, merge-base, file-read, context, or nested-checkout gap prevents a complete review, even when some findings were confirmed. Use `未發現具體問題` only after the complete feasible scope was checked and no evidence-backed finding was established. Keep the overview count and finding IDs consistent with the details. Do not invent examples for `沒有差異`, `未發現具體問題`, or an unverified finding.
 
 Do not modify source files, configuration, branches, index, or history. Fetching refs and writing the requested report are the only allowed mutations. A working-tree review uses an alternate index and object directory outside the repository, then removes it after generating the context bundle. Do not auto-fix, merge, publish comments, or create commits.
 
-Return a concise Traditional Chinese chat summary in this order:
+Return a concise Traditional Chinese chat summary in plain language, in this order:
 
-1. result state and one-sentence plain-language conclusion;
-2. P0–P3 counts, including zero counts;
-3. up to three highest-priority finding IDs, each with the impact and one short situation example;
-4. a note pointing to the full report when more findings exist;
-5. a clickable link to the Markdown report.
+1. merge recommendation, result state, and one-sentence plain-language conclusion;
+2. P0–P3 counts with action labels, including zero counts;
+3. up to three highest-priority finding IDs, each with the impact and one short situation example, without class, method, or file names;
+4. next steps with the responsible role;
+5. a note pointing to the full report when more findings exist;
+6. a clickable link to the Markdown report.
 
 When the result is `沒有差異` or `未發現具體問題`, say that no evidence-backed issue was established and do not invent a situation example. When the result is `審查未完成`, explain the missing evidence first; if findings exist, summarize only those that are supported and say that the review is incomplete. Keep the summary counts and finding IDs consistent with the Markdown report.
+
+When the helper fails, tell the user in plain language what went wrong, then pass on the helper's `建議：` line (printed after the error line on stderr) as the next step. Do not silently work around the failure.
 
 ## Invocation examples
 

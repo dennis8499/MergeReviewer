@@ -142,6 +142,7 @@ class QuickReviewTests(unittest.TestCase):
         result, _ = self.run_helper("--quick", "--format", "json")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("origin", result.stderr)
+        self.assertIn("建議：", result.stderr)
         self.assertIn("upstream", result.stderr)
         result, payload = self.run_helper("--quick", "--remote", "upstream", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -271,6 +272,7 @@ class QuickReviewTests(unittest.TestCase):
         result, _ = self.run_helper("--quick", "--format", "json")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("detached HEAD", result.stderr)
+        self.assertIn("建議：", result.stderr)
 
     def test_explicit_refs_and_direct_mode_remain_supported(self) -> None:
         (self.repo / "local.txt").write_text("local\n", encoding="utf-8")
@@ -312,6 +314,7 @@ class QuickReviewTests(unittest.TestCase):
         self.assertIsNone(payload)
         self.assertIn("找不到基礎 ref", result.stderr)
         self.assertIn("本機分支", result.stderr)
+        self.assertIn("建議：", result.stderr)
 
     def test_explicit_remote_branch_fetches_and_ignores_same_named_local_branch(self) -> None:
         git(self.repo, "push", "origin", "HEAD:refs/heads/release")
@@ -343,6 +346,7 @@ class QuickReviewTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIsNone(payload)
         self.assertIn("fetch origin/release 失敗", result.stderr)
+        self.assertIn("建議：", result.stderr)
         self.assertFalse(context_dir.exists())
 
     def test_remote_ref_cannot_be_used_with_no_fetch(self) -> None:
@@ -352,12 +356,14 @@ class QuickReviewTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIsNone(payload)
         self.assertIn("--no-fetch", result.stderr)
+        self.assertIn("建議：", result.stderr)
 
     def test_quick_auto_remote_ref_cannot_be_used_with_no_fetch(self) -> None:
         result, payload = self.run_helper("--quick", "--no-fetch", "--format", "json")
         self.assertNotEqual(result.returncode, 0)
         self.assertIsNone(payload)
         self.assertIn("--no-fetch", result.stderr)
+        self.assertIn("建議：", result.stderr)
 
     def test_missing_local_head_does_not_fall_back_to_remote_branch(self) -> None:
         git(self.repo, "push", "origin", "HEAD:refs/heads/release")
@@ -475,6 +481,7 @@ class QuickReviewTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIsNone(payload)
         self.assertIn("merge conflict", result.stderr)
+        self.assertIn("建議：", result.stderr)
         self.assertFalse(context_dir.exists())
 
     def test_criss_cross_history_stops_before_writing_context(self) -> None:
@@ -506,6 +513,7 @@ class QuickReviewTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIsNone(payload)
         self.assertIn("多個共同祖先", result.stderr)
+        self.assertIn("建議：", result.stderr)
         self.assertFalse(context_dir.exists())
 
     def test_unrelated_history_stops_before_writing_context(self) -> None:
@@ -529,6 +537,7 @@ class QuickReviewTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIsNone(payload)
         self.assertIn("沒有共同祖先", result.stderr)
+        self.assertIn("建議：", result.stderr)
         self.assertFalse(context_dir.exists())
 
     def test_shallow_repository_stops_before_writing_context(self) -> None:
