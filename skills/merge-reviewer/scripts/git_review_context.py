@@ -68,6 +68,9 @@ class RemoteTarget:
     input_ref: str
 
 
+DIFF_FLAGS = ("--no-ext-diff", "--no-textconv")
+
+
 def run_git(
     repo: Path,
     args: Sequence[str],
@@ -79,6 +82,7 @@ def run_git(
     command_env = os.environ.copy()
     if env:
         command_env.update(env)
+    command_env["GIT_OPTIONAL_LOCKS"] = "0"
     completed = subprocess.run(
         ["git", "-C", str(repo), *args],
         stdout=subprocess.PIPE,
@@ -104,6 +108,7 @@ def run_git_capture(
     command_env = os.environ.copy()
     if env:
         command_env.update(env)
+    command_env["GIT_OPTIONAL_LOCKS"] = "0"
     completed = subprocess.run(
         ["git", "-C", str(repo), *args],
         stdout=subprocess.PIPE,
@@ -119,11 +124,14 @@ def run_git_capture(
 
 
 def git_ok(repo: Path, args: Sequence[str]) -> bool:
+    command_env = os.environ.copy()
+    command_env["GIT_OPTIONAL_LOCKS"] = "0"
     completed = subprocess.run(
         ["git", "-C", str(repo), *args],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
+        env=command_env,
     )
     return completed.returncode == 0
 
@@ -574,7 +582,7 @@ def collect_changes(
             repo,
             [
                 "diff",
-                "--no-ext-diff",
+                *DIFF_FLAGS,
                 "--name-status",
                 "--find-renames",
                 "--find-copies",
@@ -593,7 +601,7 @@ def collect_changes(
                 repo,
                 [
                     "diff",
-                    "--no-ext-diff",
+                    *DIFF_FLAGS,
                     "--numstat",
                     "--no-renames",
                     "-z",
@@ -613,6 +621,43 @@ def collect_changes(
         change["deletions"] = None if deletions == "-" else int(deletions)
         change["binary"] = additions == "-" or deletions == "-"
     return changes
+
+
+def collect_submodule_paths(
+    repo: Path,
+    left: str,
+    right: str,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> set[str]:
+    """Return changed paths that are gitlinks on either side of a diff."""
+    raw = str(
+        run_git(
+            repo,
+            ["diff", *DIFF_FLAGS, "--raw", "--no-abbrev", "-z", left, right, "--"],
+            env=env,
+        )
+    )
+    parts = raw.split("\0")
+    paths: set[str] = set()
+    index = 0
+    while index < len(parts):
+        metadata = parts[index]
+        index += 1
+        if not metadata:
+            continue
+        fields = metadata.removeprefix(":").split()
+        if len(fields) < 5:
+            raise ReviewContextError("Git 回傳的 raw diff 資料不完整。")
+        old_mode, new_mode, _old_sha, _new_sha, status = fields[:5]
+        path_count = 2 if status.startswith(("R", "C")) else 1
+        if index + path_count > len(parts):
+            raise ReviewContextError("Git 回傳的 raw diff 路徑資料不完整。")
+        changed_paths = [path for path in parts[index : index + path_count] if path]
+        index += path_count
+        if old_mode == "160000" or new_mode == "160000":
+            paths.update(changed_paths)
+    return paths
 
 
 def commit_subject(repo: Path, commit: str) -> str:
@@ -796,8 +841,12 @@ def create_worktree_snapshot(repo: Path) -> tuple[Path, dict[str, str], str]:
         committed_report_paths = {
             item
             for item in str(
-                run_git(repo, ["ls-tree", "-r", "--name-only", "HEAD", "--", "review-reports"], check=False)
-            ).splitlines()
+                run_git(
+                    repo,
+                    ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", "review-reports"],
+                    check=False,
+                )
+            ).split("\0")
             if item
         }
         excluded_report_paths = [
@@ -820,65 +869,52 @@ def write_context_bundle(
     context_dir: Path,
     manifest: dict[str, Any],
     repo: Path,
-    diff_left: str,
     diff_right: str,
+    patch: bytes,
     *,
     env: Mapping[str, str] | None = None,
 ) -> None:
     context_dir = normalize_path(context_dir)
     context_dir.mkdir(parents=True, exist_ok=False)
-    (context_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    patch = run_git(
-        repo,
-        [
-            "diff",
-            "--no-ext-diff",
-            "--binary",
-            "--find-renames",
-            "--find-copies",
-            diff_left,
-            diff_right,
-            "--",
-        ],
-        binary=True,
-        env=env,
-    )
-    (context_dir / "diff.patch").write_bytes(patch if isinstance(patch, bytes) else patch.encode())
-    if manifest.get("review_scope") == "working-tree":
-        (context_dir / "working-tree.patch").write_bytes(
-            patch if isinstance(patch, bytes) else patch.encode()
+    try:
+        (context_dir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        snapshot_dir = context_dir / "working-tree-files"
-        for change in manifest.get("changed_files", []):
-            path_value = str(change.get("path") or "")
-            if not path_value or path_value.startswith("/") or ".." in Path(path_value).parts:
-                continue
-            try:
-                content = run_git(
+        (context_dir / "diff.patch").write_bytes(patch)
+        if manifest.get("review_scope") == "working-tree":
+            (context_dir / "working-tree.patch").write_bytes(patch)
+            snapshot_dir = context_dir / "working-tree-files"
+            for change in manifest.get("changed_files", []):
+                path_value = str(change.get("path") or "")
+                if not path_value or path_value.startswith("/") or ".." in Path(path_value).parts:
+                    continue
+                try:
+                    content = run_git(
+                        repo,
+                        ["cat-file", "blob", f"{diff_right}:{path_value}"],
+                        binary=True,
+                        env=env,
+                    )
+                except GitCommandError:
+                    continue
+                destination = snapshot_dir / Path(path_value)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(content if isinstance(content, bytes) else content.encode())
+        for merge in manifest["merge_commits"]:
+            for parent_view in merge["parent_views"]:
+                parent = parent_view["sha"]
+                parent_patch = run_git(
                     repo,
-                    ["cat-file", "blob", f"{diff_right}:{path_value}"],
+                    ["diff", *DIFF_FLAGS, "--binary", "--find-renames", parent, merge["sha"], "--"],
                     binary=True,
-                    env=env,
                 )
-            except GitCommandError:
-                continue
-            destination = snapshot_dir / Path(path_value)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(content if isinstance(content, bytes) else content.encode())
-    for merge in manifest["merge_commits"]:
-        for parent_view in merge["parent_views"]:
-            parent = parent_view["sha"]
-            parent_patch = run_git(
-                repo,
-                ["diff", "--no-ext-diff", "--binary", "--find-renames", parent, merge["sha"], "--"],
-                binary=True,
-            )
-            filename = f"merge-{merge['sha'][:12]}-parent-{parent_view['position']}.patch"
-            (context_dir / filename).write_bytes(
-                parent_patch if isinstance(parent_patch, bytes) else parent_patch.encode()
-            )
+                filename = f"merge-{merge['sha'][:12]}-parent-{parent_view['position']}.patch"
+                (context_dir / filename).write_bytes(
+                    parent_patch if isinstance(parent_patch, bytes) else parent_patch.encode()
+                )
+    except Exception:
+        remove_tree(context_dir)
+        raise
 
 
 def resolve_quick_inputs(
@@ -1009,22 +1045,25 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             hint="請確認分支名稱拼字；遠端分支需加上 remote 前綴（例如 origin/feature），本機分支不需要。",
         )
 
-    merge_base_output = str(
-        run_git(repo, ["merge-base", "--all", base_sha, head_sha], check=False)
-    )
+    merge_base_args = ["merge-base", "--all", base_sha, head_sha]
+    merge_base_returncode, merge_base_output, merge_base_error = run_git_capture(repo, merge_base_args)
     merge_bases = [line.strip() for line in merge_base_output.splitlines() if line.strip()]
-    if not merge_bases:
+    if merge_base_returncode not in (0, 1):
+        raise GitCommandError(merge_base_args, merge_base_returncode, merge_base_error)
+    if args.mode == "merge" and not merge_bases:
         raise ReviewContextError(
             "兩個版本沒有共同祖先，無法建立可靠的比較範圍。",
             hint="請確認兩個版本屬於同一個專案；若確定要直接比較，可改用「直接比較」模式。",
         )
-    if len(merge_bases) > 1:
+    if args.mode == "merge" and len(merge_bases) > 1:
         raise ReviewContextError(
             "兩個版本存在多個共同祖先（criss-cross history），請先指定可接受的歷史或整理分支。",
             hint="請改用「直接比較」模式，或先整理分支歷史後再審查。",
         )
-    merge_base = merge_bases[0]
+    merge_base = merge_bases[0] if len(merge_bases) == 1 else None
     diff_left = merge_base if args.mode == "merge" else base_sha
+    if diff_left is None:
+        raise ReviewContextError("合併前審查需要唯一共同祖先。")
 
     temporary_dir: Path | None = None
     automatic_context_parent: Path | None = None
@@ -1042,7 +1081,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             repo,
             [
                 "diff",
-                "--no-ext-diff",
+                *DIFF_FLAGS,
                 "--binary",
                 "--find-renames",
                 "--find-copies",
@@ -1057,7 +1096,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         diff_check = str(
             run_git(
                 repo,
-                ["diff", "--check", diff_left, review_right, "--"],
+                ["diff", *DIFF_FLAGS, "--check", diff_left, review_right, "--"],
                 check=False,
                 env=snapshot_env,
             )
@@ -1079,17 +1118,24 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "submodule 內部有未提交或未初始化的內容，未納入本次 Git tree 審查："
                 + ", ".join(dirty_submodules)
             )
+        changed_submodules = collect_submodule_paths(repo, diff_left, review_right, env=snapshot_env)
+        if changed_submodules:
+            review_limitations.append(
+                "submodule 僅檢查 Git link 版本指標，未檢查內部程式碼："
+                + ", ".join(sorted(changed_submodules))
+            )
         binary_or_submodule_paths = sorted(
             {
                 str(change["path"])
                 for change in changes
-                if bool(change.get("binary")) or str(change.get("status", "")).startswith("T")
+                if bool(change.get("binary"))
             }
             | set(dirty_submodules)
+            | changed_submodules
         )
 
         manifest: dict[str, Any] = {
-            "schema_version": 2,
+            "schema_version": 3,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "workspace": str(workspace),
             "workspace_file": str(workspace_file) if workspace_file else None,
@@ -1133,7 +1179,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "diff_stat": str(
                 run_git(
                     repo,
-                    ["diff", "--stat", "--find-renames", diff_left, review_right],
+                    ["diff", *DIFF_FLAGS, "--stat", "--find-renames", diff_left, review_right],
                     env=snapshot_env,
                 )
             ).strip(),
@@ -1170,20 +1216,14 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             manifest["context_cleanup_note"] = "審查報告完成後可刪除 context_dir；helper 會保留它供工作區內容審查。"
         if context_dir:
             manifest["context_dir"] = str(context_dir)
-            context_dir_was_absent = not context_dir.exists()
-            try:
-                write_context_bundle(
-                    context_dir,
-                    manifest,
-                    repo,
-                    diff_left,
-                    review_right,
-                    env=snapshot_env,
-                )
-            except Exception:
-                if context_dir_was_absent:
-                    remove_tree(context_dir)
-                raise
+            write_context_bundle(
+                context_dir,
+                manifest,
+                repo,
+                review_right,
+                patch if isinstance(patch, bytes) else patch.encode(),
+                env=snapshot_env,
+            )
             context_bundle_written = True
         return manifest
     finally:

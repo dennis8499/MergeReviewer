@@ -110,6 +110,8 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 | `合併前審查` | `merge-base(基礎版本, 比較版本)` → `比較版本` | 檢查比較分支相對共同祖先新增或保留的行為。 |
 | `直接比較` | `基礎版本` → `比較版本` | 需要精確檢查兩個指定版本之間的完整差異。 |
 
+直接比較不要求共同祖先。Manifest 的 `merge_base` 在唯一共同祖先存在時記錄 SHA；沒有或有多個共同祖先時記錄 `null`。合併前審查仍要求唯一共同祖先。
+
 報告會記錄輸入 ref、解析後的完整 SHA、比較模式、merge base、fetch 結果，以及工作樹是否維持不變。
 
 快速模式透過 `git ls-remote --symref <remote> HEAD` 取得遠端宣告的預設分支，並連線確認實際 branch；遠端未提供 HEAD 時才使用本地候選，再以 fetch 驗證該 branch。多個 remote 或多個主分支候選都會停止並列出選項，不會猜測。
@@ -119,7 +121,7 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 審查過程使用 Git object 命令讀取版本內容，不會：
 
 - checkout、merge、reset、stage 或修改來源分支與 commit；
-- 預設不會將未提交的工作樹變更混入比較範圍；快速模式明確使用 `包含未提交變更` 時，會以 repository 外的 alternate index/object directory 建立固定快照；
+- 預設不會將未提交的工作樹變更混入比較範圍；快速模式明確使用 `包含未提交變更` 時，會以 repository 外的 alternate index/object directory 建立固定快照。唯讀 Git 查詢會停用選擇性 index 更新；
 - 自動修正程式碼、建立 commit、發布評論或推送變更。
 
 為了確認 remote 分支不是過期版本，helper 可能執行 `git fetch --no-tags --no-prune`。除 fetch、repository 外的工作區快照暫存資料與 context bundle 外，helper 不會寫入受審 repository；審查報告是唯一的 repository 產物。
@@ -172,9 +174,9 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 - Remote branch 的 fetch 失敗時會停止審查，不會靜默使用可能過期的 remote ref。
 - 本機 branch 不會因為設定 upstream 而觸發 fetch；指定不存在的本機 branch 會直接回報錯誤。
 - Remote-qualified ref 不能搭配 `--no-fetch`；`--no-fetch` 只適用於沒有 remote branch 輸入的比較。
-- 無效 ref、shallow history、沒有共同祖先或存在多個 merge base 時，審查會停止並回報原因。
+- 無效 ref 與 shallow history 會停止並回報原因；合併前審查要求唯一共同祖先。直接比較可以處理沒有或有多個共同祖先的版本組合，manifest 會以 `merge_base: null` 記錄。
 - 分支同時存在於多個 remote 時，請使用明確的 ref，例如 `origin/release`。
-- Binary、submodule、rename、copy 或 mode-only 變更會列為審查範圍限制，必要時需人工補充檢查。
+- Binary、submodule、rename、copy 或 mode-only 變更會列為審查範圍限制，必要時需人工補充檢查。Submodule 變更會辨識 Git link 指標；內部程式碼不在 parent repository 的差異中。
 - Merge Reviewer 是靜態審查工具；除非使用者明確要求且實際執行，報告不會宣稱測試已通過。
 - 對 squash、rebase 或手動複製的變更，可以審查最終行為，但不會將問題歸因於人工合併。
 
@@ -205,9 +207,11 @@ python skills\merge-reviewer\scripts\git_review_context.py `
 - `--no-fetch`：只允許沒有 remote-qualified ref 的比較；指定 remote branch 時會直接回報參數衝突。
 - `--context-dir`：將 manifest 與完整 patch 寫入新的暫存目錄。
 
-Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、diff 統計、fetch 結果、遠端選擇與工作樹快照，供審查流程作為來源真相。Manifest schema version 為 2；工作區模式會另外輸出 `review_tree_sha`、`review_scope=working-tree` 與 `snapshot_read_info`，並在 context bundle 保留可供審查的 `working-tree.patch` 和變更檔案內容。
+Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、diff 統計、fetch 結果、遠端選擇與工作樹快照，供審查流程作為來源真相。Manifest schema version 為 3；`merge_base` 在沒有唯一共同祖先的直接比較中為 `null`。工作區模式會另外輸出 `review_tree_sha`、`review_scope=working-tree` 與 `snapshot_read_info`，並在 context bundle 保留可供審查的 `working-tree.patch` 和變更檔案內容。
 
 如果 submodule 內有未提交或未初始化內容，helper 會列在 `dirty_submodule_paths` 和 `review_limitations`，此結果不能被回報為完整審查。
+
+工作區快照目前從 `HEAD` 建立；使用 `git add -f` 強制暫存且符合 ignore 規則的新檔案可能未進入快照。遇到這類檔案時，不要把工作區審查報告為完整。
 
 ## 專案結構
 
@@ -242,7 +246,8 @@ Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、
 安裝 `requirements-dev.txt` 後，可執行快速審查情境與 Python 回歸測試：
 
 ```powershell
-python -m behave tests/features --tags=@quick-review
-python -m behave tests/features --tags=@release
+python -m behave tests/features --tags="not @human-acceptance"
 python -m unittest discover -s tests -v
 ```
+
+GitHub Actions 會在 pull request、`main` 推送與 tag Release 執行 Linux／Windows × Python 3.10／3.14 測試矩陣。Release 必須先通過相同檢查。

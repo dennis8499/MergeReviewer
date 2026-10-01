@@ -1,100 +1,45 @@
 from __future__ import annotations
 
 import json
-import importlib.util
 import os
-import shutil
-import stat
 import subprocess
-import sys
 import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+
+from tests.support import (
+    create_repository_fixture,
+    load_module,
+    remove_temporary_tree,
+    run_git as git,
+    run_python,
+)
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "skills" / "merge-reviewer" / "scripts" / "git_review_context.py"
 
 
 def load_helper_module():
-    spec = importlib.util.spec_from_file_location("merge_reviewer_git_review_context", SCRIPT)
-    if spec is None or spec.loader is None:
-        raise AssertionError(f"unable to load helper module: {SCRIPT}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def remove_tree(path: Path) -> None:
-    if not path.exists():
-        return
-
-    def make_writable(function, target, _error):
-        try:
-            os.chmod(target, stat.S_IWRITE | stat.S_IREAD)
-        except OSError:
-            pass
-        function(target)
-
-    shutil.rmtree(path, onerror=make_writable)
-
-
-def git(repo: Path, *args: str, check: bool = True) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if check and result.returncode:
-        raise AssertionError(f"git {' '.join(args)} failed: {result.stderr}")
-    return result.stdout.strip()
+    return load_module("merge_reviewer_git_review_context", SCRIPT)
 
 
 class QuickReviewTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="merge-reviewer-test-")
         self.root = Path(self.temp.name)
-        self.repo = self.root / "repo with spaces"
-        self.remote = self.root / "origin.git"
+        self.repo, self.remote = create_repository_fixture(self.root, name="repo with spaces")
         self.context_dirs: list[Path] = []
-        git(self.root, "init", "--bare", str(self.remote))
-        git(self.root, "init", "-b", "main", str(self.repo))
-        git(self.repo, "config", "user.email", "test@example.invalid")
-        git(self.repo, "config", "user.name", "Merge Reviewer Test")
-        (self.repo / "base.txt").write_text("base\n", encoding="utf-8")
-        (self.repo / "deleted.txt").write_text("kept until the scenario deletes it\n", encoding="utf-8")
-        git(self.repo, "add", ".")
-        git(self.repo, "commit", "-m", "base")
-        git(self.repo, "remote", "add", "origin", str(self.remote))
-        git(self.repo, "push", "-u", "origin", "main")
-        git(self.root, "--git-dir", str(self.remote), "symbolic-ref", "HEAD", "refs/heads/main")
-        git(self.repo, "switch", "-c", "feature")
 
     def tearDown(self) -> None:
         for context_dir in self.context_dirs:
-            remove_tree(context_dir)
-        remove_tree(self.root)
+            remove_temporary_tree(context_dir)
         self.temp.cleanup()
         self.temp = None
 
     def run_helper(self, *args: str) -> tuple[subprocess.CompletedProcess[str], dict | None]:
         environment = os.environ.copy()
-        environment["PYTHONIOENCODING"] = "utf-8"
-        result = subprocess.run(
-            ["python", str(SCRIPT), "--workspace", str(self.repo), *args],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            env=environment,
-        )
+        result = run_python(SCRIPT, "--workspace", str(self.repo), *args, env=environment)
         payload = json.loads(result.stdout) if result.returncode == 0 else None
         if payload and payload.get("context_dir"):
             self.context_dirs.append(Path(payload["context_dir"]).parent)
@@ -190,6 +135,62 @@ class QuickReviewTests(unittest.TestCase):
         self.assertEqual(index_before, index.read_bytes())
         paths = {item["path"] for item in payload["changed_files"]}
         self.assertTrue({"staged.txt", "deleted.txt", "untracked.txt"}.issubset(paths))
+        bundle = Path(payload["context_dir"])
+        patch = (bundle / "diff.patch").read_bytes()
+        self.assertEqual(patch, (bundle / "working-tree.patch").read_bytes())
+        self.assertEqual(payload["diff_patch_bytes"], len(patch))
+
+    def test_diff_bundle_ignores_configured_textconv_and_reuses_patch(self) -> None:
+        helper = load_helper_module()
+        (self.repo / ".gitattributes").write_text("base.txt diff=masked\n", encoding="utf-8")
+        git(self.repo, "add", ".gitattributes")
+        git(self.repo, "commit", "-m", "configure diff driver")
+        git(self.repo, "branch", "comparison-base")
+        (self.repo / "base.txt").write_text("changed logic\n", encoding="utf-8")
+        git(self.repo, "add", "base.txt")
+        git(self.repo, "commit", "-m", "change source")
+        git(self.repo, "config", "diff.masked.textconv", "git --version")
+        context_dir = self.root / "textconv-context"
+        args = helper.parse_args(
+            ["--workspace", str(self.repo), "--base", "comparison-base", "--head", "HEAD",
+             "--no-fetch", "--context-dir", str(context_dir)]
+        )
+        with mock.patch.object(helper, "run_git", wraps=helper.run_git) as run_git_spy:
+            payload = helper.build_manifest(args)
+
+        patch = (context_dir / "diff.patch").read_bytes()
+        self.assertIn(b"+changed logic", patch)
+        self.assertEqual(payload["diff_patch_bytes"], len(patch))
+        main_patch_calls = [
+            call for call in run_git_spy.call_args_list
+            if call.args[1][: 1 + len(helper.DIFF_FLAGS)] == ["diff", *helper.DIFF_FLAGS]
+            and "--binary" in call.args[1]
+            and "--stat" not in call.args[1]
+        ]
+        self.assertEqual(len(main_patch_calls), 1)
+
+    def test_read_only_git_commands_preserve_index_bytes(self) -> None:
+        helper = load_helper_module()
+        file_path = self.repo / "base.txt"
+        file_stat = file_path.stat()
+        os.utime(file_path, ns=(file_stat.st_atime_ns + 10_000_000_000, file_stat.st_mtime_ns + 10_000_000_000))
+        index = Path(git(self.repo, "rev-parse", "--git-path", "index"))
+        if not index.is_absolute():
+            index = self.repo / index
+        index_before = index.read_bytes()
+        args = helper.parse_args(
+            ["--workspace", str(self.repo), "--base", "main", "--head", "HEAD", "--no-fetch"]
+        )
+        with mock.patch.dict(os.environ, {"GIT_OPTIONAL_LOCKS": "1"}), mock.patch.object(
+            helper.subprocess, "run", wraps=subprocess.run
+        ) as git_run_spy:
+            payload = helper.build_manifest(args)
+
+        self.assertTrue(payload["working_tree_unchanged"])
+        self.assertEqual(index_before, index.read_bytes())
+        git_calls = [call for call in git_run_spy.call_args_list if call.args[0][0] == "git"]
+        self.assertTrue(git_calls)
+        self.assertTrue(all(call.kwargs["env"]["GIT_OPTIONAL_LOCKS"] == "0" for call in git_calls))
 
     def test_untracked_review_reports_are_excluded_from_working_tree_scope(self) -> None:
         reports = self.repo / "review-reports"
@@ -237,6 +238,111 @@ class QuickReviewTests(unittest.TestCase):
         self.assertEqual(payload["dirty_submodule_paths"], ["子模組"])
         self.assertFalse(payload["review_complete"])
 
+    def test_changed_submodule_gitlinks_are_classified_for_each_change_kind(self) -> None:
+        helper = load_helper_module()
+        submodule_path = "nested"
+        git(
+            self.repo,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            str(self.remote),
+            submodule_path,
+        )
+        git(self.repo, "commit", "-m", "add submodule")
+        git(self.repo, "branch", "submodule-base")
+
+        add_result, add_payload = self.run_helper(
+            "--base", "main", "--head", "HEAD", "--no-fetch", "--format", "json"
+        )
+        self.assertEqual(add_result.returncode, 0, add_result.stderr)
+        assert add_payload is not None
+        self.assertIn(submodule_path, add_payload["binary_or_submodule_paths"])
+        self.assertTrue(any("未檢查內部程式碼" in note for note in add_payload["review_limitations"]))
+
+        write_path = self.repo / submodule_path / "nested-change.txt"
+        write_path.write_text("new nested commit\n", encoding="utf-8")
+        git(self.repo / submodule_path, "add", "nested-change.txt")
+        git(self.repo / submodule_path, "commit", "-m", "update submodule content")
+        git(self.repo, "add", submodule_path)
+        git(self.repo, "commit", "-m", "update submodule pointer")
+        update_result, update_payload = self.run_helper(
+            "--base", "submodule-base", "--head", "HEAD", "--no-fetch", "--format", "json"
+        )
+        self.assertEqual(update_result.returncode, 0, update_result.stderr)
+        assert update_payload is not None
+        self.assertIn(submodule_path, update_payload["binary_or_submodule_paths"])
+
+        git(self.repo, "rm", "-f", submodule_path)
+        git(self.repo, "commit", "-m", "remove submodule")
+        delete_result, delete_payload = self.run_helper(
+            "--base", "submodule-base", "--head", "HEAD", "--no-fetch", "--format", "json"
+        )
+        self.assertEqual(delete_result.returncode, 0, delete_result.stderr)
+        assert delete_payload is not None
+        self.assertIn(submodule_path, delete_payload["binary_or_submodule_paths"])
+
+        (self.repo / submodule_path).write_text("regular file\n", encoding="utf-8")
+        git(self.repo, "add", submodule_path)
+        git(self.repo, "commit", "-m", "replace gitlink with file")
+        type_result, type_payload = self.run_helper(
+            "--base", "submodule-base", "--head", "HEAD", "--no-fetch", "--format", "json"
+        )
+        self.assertEqual(type_result.returncode, 0, type_result.stderr)
+        assert type_payload is not None
+        self.assertIn(submodule_path, type_payload["binary_or_submodule_paths"])
+
+    def test_uninitialized_submodule_is_reported_as_incomplete(self) -> None:
+        submodule_path = "nested"
+        git(
+            self.repo,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            str(self.remote),
+            submodule_path,
+        )
+        git(self.repo, "commit", "-m", "add submodule")
+        checkout = self.repo / submodule_path
+        moved_checkout = self.root / "uninitialized-submodule-checkout"
+        checkout.rename(moved_checkout)
+        try:
+            result, payload = self.run_helper(
+                "--base", "main", "--head", "HEAD", "--no-fetch", "--format", "json"
+            )
+        finally:
+            moved_checkout.rename(checkout)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        self.assertEqual(payload["dirty_submodule_paths"], [submodule_path])
+        self.assertFalse(payload["review_complete"])
+        self.assertIn(submodule_path, " ".join(payload["review_limitations"]))
+
+    def test_modified_tracked_unicode_report_is_included_in_working_tree_scope(self) -> None:
+        report = self.repo / "review-reports" / "審查 文件.md"
+        report.parent.mkdir()
+        report.write_text("original report\n", encoding="utf-8")
+        git(self.repo, "add", "review-reports")
+        git(self.repo, "commit", "-m", "add tracked review report")
+        git(self.repo, "branch", "report-base")
+        report.write_text("updated report\n", encoding="utf-8")
+
+        result, payload = self.run_helper(
+            "--quick",
+            "--base",
+            "report-base",
+            "--no-fetch",
+            "--include-working-tree",
+            "--format",
+            "json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        self.assertIn("review-reports/審查 文件.md", {item["path"] for item in payload["changed_files"]})
+
     def test_binary_and_rename_changes_are_preserved_in_manifest(self) -> None:
         (self.repo / "binary.bin").write_bytes(b"\x00\x01\x02\xff")
         git(self.repo, "add", "binary.bin")
@@ -255,15 +361,7 @@ class QuickReviewTests(unittest.TestCase):
     def test_git_worktree_is_discovered_and_reviewable(self) -> None:
         worktree = self.root / "review worktree"
         git(self.repo, "worktree", "add", "-b", "review-worktree", str(worktree), "HEAD")
-        result = subprocess.run(
-            ["python", str(SCRIPT), "--workspace", str(worktree), "--quick", "--format", "json"],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+        result = run_python(SCRIPT, "--workspace", str(worktree), "--quick", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(json.loads(result.stdout)["quick"])
 
@@ -515,6 +613,26 @@ class QuickReviewTests(unittest.TestCase):
         self.assertIn("多個共同祖先", result.stderr)
         self.assertIn("建議：", result.stderr)
         self.assertFalse(context_dir.exists())
+        direct_result, direct_payload = self.run_helper(
+            "--base",
+            "feature",
+            "--head",
+            "side-b",
+            "--mode",
+            "direct",
+            "--no-fetch",
+            "--context-dir",
+            str(self.root / "direct-criss-cross-context"),
+            "--format",
+            "json",
+        )
+        self.assertEqual(direct_result.returncode, 0, direct_result.stderr)
+        assert direct_payload is not None
+        self.assertIsNone(direct_payload["merge_base"])
+        saved_manifest = json.loads(
+            (self.root / "direct-criss-cross-context" / "manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(saved_manifest, direct_payload)
 
     def test_unrelated_history_stops_before_writing_context(self) -> None:
         git(self.repo, "switch", "--orphan", "unrelated")
@@ -539,31 +657,44 @@ class QuickReviewTests(unittest.TestCase):
         self.assertIn("沒有共同祖先", result.stderr)
         self.assertIn("建議：", result.stderr)
         self.assertFalse(context_dir.exists())
+        direct_result, direct_payload = self.run_helper(
+            "--base",
+            "unrelated",
+            "--head",
+            "feature",
+            "--mode",
+            "direct",
+            "--no-fetch",
+            "--context-dir",
+            str(self.root / "direct-unrelated-context"),
+            "--format",
+            "json",
+        )
+        self.assertEqual(direct_result.returncode, 0, direct_result.stderr)
+        assert direct_payload is not None
+        self.assertEqual(direct_payload["schema_version"], 3)
+        self.assertIsNone(direct_payload["merge_base"])
+        self.assertEqual(direct_payload["diff_base"], direct_payload["base_sha"])
+        saved_manifest = json.loads(
+            (self.root / "direct-unrelated-context" / "manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(saved_manifest, direct_payload)
 
     def test_shallow_repository_stops_before_writing_context(self) -> None:
         shallow = self.root / "shallow repo"
         git(self.root, "clone", "--depth", "1", "--no-local", str(self.remote), str(shallow))
         git(shallow, "switch", "-c", "feature")
         context_dir = self.root / "shallow-context"
-        result = subprocess.run(
-            [
-                "python",
-                str(SCRIPT),
-                "--workspace",
-                str(shallow),
-                "--quick",
-                "--include-working-tree",
-                "--context-dir",
-                str(context_dir),
-                "--format",
-                "json",
-            ],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+        result = run_python(
+            SCRIPT,
+            "--workspace",
+            str(shallow),
+            "--quick",
+            "--include-working-tree",
+            "--context-dir",
+            str(context_dir),
+            "--format",
+            "json",
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("shallow clone", result.stderr)
@@ -611,14 +742,37 @@ class QuickReviewTests(unittest.TestCase):
             ]
         )
 
-        def fail_after_creating_context(path, *_args, **_kwargs):
-            path.mkdir(parents=True, exist_ok=False)
-            raise OSError("simulated context write failure")
+        original_write_bytes = Path.write_bytes
 
-        with mock.patch.object(helper, "write_context_bundle", side_effect=fail_after_creating_context):
+        def fail_while_writing_context(path, data):
+            if path == context_dir / "diff.patch":
+                raise OSError("simulated context write failure")
+            return original_write_bytes(path, data)
+
+        with mock.patch.object(Path, "write_bytes", new=fail_while_writing_context):
             with self.assertRaises(OSError):
                 helper.build_manifest(args)
         self.assertFalse(context_dir.exists())
+
+    def test_context_creation_race_preserves_other_process_directory(self) -> None:
+        helper = load_helper_module()
+        context_dir = self.root / "raced-context"
+        args = helper.parse_args(
+            ["--workspace", str(self.repo), "--base", "main", "--head", "HEAD",
+             "--no-fetch", "--context-dir", str(context_dir)]
+        )
+        original_mkdir = Path.mkdir
+
+        def race_mkdir(path, *args, **kwargs):
+            if path == context_dir and not path.exists():
+                original_mkdir(path, parents=True, exist_ok=False)
+                (path / "belongs-to-other-process.txt").write_text("preserve me\n", encoding="utf-8")
+            return original_mkdir(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "mkdir", new=race_mkdir):
+            with self.assertRaises(FileExistsError):
+                helper.build_manifest(args)
+        self.assertEqual((context_dir / "belongs-to-other-process.txt").read_text(encoding="utf-8"), "preserve me\n")
 
 
 if __name__ == "__main__":

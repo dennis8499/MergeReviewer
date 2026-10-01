@@ -1,28 +1,24 @@
 from __future__ import annotations
 
-import importlib.util
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from zipfile import ZipFile
+
+from tests.support import load_module
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "package_release.py"
 
 
 def load_release_module():
-    spec = importlib.util.spec_from_file_location("merge_reviewer_package_release", SCRIPT)
-    if spec is None or spec.loader is None:
-        raise AssertionError(f"unable to load release package module: {SCRIPT}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_module("merge_reviewer_package_release", SCRIPT)
 
 
 class ReleasePackageTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.root = Path(tempfile.mkdtemp(prefix="merge-reviewer-release-test-"))
+        self.temp = tempfile.TemporaryDirectory(prefix="merge-reviewer-release-test-")
+        self.root = Path(self.temp.name)
         self.skill = self.root / "skill"
         self.output = self.root / "dist"
         (self.skill / "agents").mkdir(parents=True)
@@ -39,7 +35,7 @@ class ReleasePackageTests(unittest.TestCase):
         (self.root / "tests" / "test_should_not_ship.py").write_text("not packaged\n", encoding="utf-8")
 
     def tearDown(self) -> None:
-        shutil.rmtree(self.root)
+        self.temp.cleanup()
 
     def test_matching_tag_creates_installable_skill_zip(self) -> None:
         release = load_release_module()

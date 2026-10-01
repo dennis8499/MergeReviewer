@@ -132,7 +132,7 @@
 - 比較模式與範圍：<mode>／<review_scope>（例如「合併前審查」／「僅已提交內容」）
 - 基礎版本：`<input>` → `<full SHA>`
 - 比較版本：`<input>` → `<full SHA>`
-- 共同起點（merge base）：`<SHA 或不適用>`
+- 共同起點（merge base）：`<SHA、直接比較時的 null，或不適用>`
 - 同步遠端（fetch）：`成功`／`未需要`／`失敗`
 - 工作樹：`未改變`／`無法確認`
 - 使用的 ref、差異範圍、合併提交父版本檢查和證據來源：<record>
@@ -167,4 +167,4 @@
 - `committed`：`review_right` 是目前本地分支的 `head_sha`，只檢查已提交內容。
 - `working-tree`：`head_sha` 仍是本地分支最後一個 commit，`review_tree_sha` 是由完整工作區檔案建立的固定 tree；報告內容必須以 context bundle 的 `working-tree.patch` 與 `working-tree-files/` 為準。若 helper 自動建立 context bundle，報告完成後才清理 `context_dir`。
 
-工作區快照使用 repository 外的 alternate index/object directory，不得改變使用者 index、HEAD、分支或原始檔案。Manifest 的 `snapshot_read_info` 記錄這個讀取與清理方式。若建立快照前後的實際檔案內容、index 或 HEAD 不一致，結果只能標記為 `審查未完成`。若 `review_complete=false` 或有 dirty submodule，必須把 nested checkout 列為未覆蓋範圍，不能宣稱完整審查。未追蹤的 `review-reports/` 報告產物不屬於審查範圍；其他符合 Git ignore 規則的檔案也不納入快照。
+工作區快照使用 repository 外的 alternate index/object directory，不得改變使用者 index、HEAD、分支或原始檔案。唯讀 Git 查詢應停用選擇性 index 更新。Manifest 的 `snapshot_read_info` 記錄這個讀取與清理方式。若建立快照前後的實際檔案內容、index 或 HEAD 不一致，結果只能標記為 `審查未完成`。若 `review_complete=false` 或有 dirty submodule，必須把 nested checkout 列為未覆蓋範圍，不能宣稱完整審查。Submodule 的 Git link 更新只代表版本指標變更，未涵蓋 submodule 內部程式碼。未追蹤的 `review-reports/` 報告產物不屬於審查範圍；其他符合 Git ignore 規則的檔案也不納入快照。此版快照仍從 `HEAD` 建立，強制暫存的 ignored 新檔案可能被排除；發現這類路徑時必須標記 `審查未完成`。

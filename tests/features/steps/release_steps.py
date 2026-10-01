@@ -1,40 +1,31 @@
 from __future__ import annotations
 
-import importlib.util
 import tempfile
 from pathlib import Path
 from zipfile import ZipFile
 
 from behave import given, then, when
+from tests.support import load_module, write_text
 
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "package_release.py"
 
 
 def load_release_module():
-    spec = importlib.util.spec_from_file_location("merge_reviewer_release_steps", SCRIPT)
-    if spec is None or spec.loader is None:
-        raise AssertionError(f"unable to load release package module: {SCRIPT}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def write(path: Path, value: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(value, encoding="utf-8")
+    return load_module("merge_reviewer_release_steps", SCRIPT)
 
 
 def build_fixture(context, version: str) -> None:
-    context.root = Path(tempfile.mkdtemp(prefix="merge-reviewer-release-feature-"))
+    context.temporary_directory = tempfile.TemporaryDirectory(prefix="merge-reviewer-release-feature-")
+    context.root = Path(context.temporary_directory.name)
     context.skill = context.root / "skill"
     context.output = context.root / "dist"
-    write(context.skill / "SKILL.md", "---\nname: merge-reviewer\n---\n")
-    write(context.skill / "VERSION", f"{version}\n")
-    write(context.skill / "agents" / "openai.yaml", "interface:\n")
-    write(context.skill / "references" / "review-rules.md", "# Rules\n")
-    write(context.skill / "scripts" / "git_review_context.py", "print('ok')\n")
-    write(context.root / "tests" / "test_should_not_ship.py", "not packaged\n")
+    write_text(context.skill / "SKILL.md", "---\nname: merge-reviewer\n---\n")
+    write_text(context.skill / "VERSION", f"{version}\n")
+    write_text(context.skill / "agents" / "openai.yaml", "interface:\n")
+    write_text(context.skill / "references" / "review-rules.md", "# Rules\n")
+    write_text(context.skill / "scripts" / "git_review_context.py", "print('ok')\n")
+    write_text(context.root / "tests" / "test_should_not_ship.py", "not packaged\n")
     context.release = load_release_module()
 
 

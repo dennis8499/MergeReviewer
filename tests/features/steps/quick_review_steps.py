@@ -1,74 +1,30 @@
 from __future__ import annotations
 
-import importlib.util
 import json
-import os
-import shutil
-import stat
 import subprocess
 import tempfile
-import sys
 from unittest import mock
 from pathlib import Path
 
-
-def remove_tree(path: Path) -> None:
-    if not path.exists():
-        return
-
-    def make_writable(function, target, _error):
-        try:
-            os.chmod(target, stat.S_IWRITE | stat.S_IREAD)
-        except OSError:
-            pass
-        function(target)
-
-    shutil.rmtree(path, onerror=make_writable)
+from tests.support import (
+    create_repository_fixture,
+    load_module,
+    remove_temporary_tree,
+    run_git,
+    run_python,
+    write_text as write,
+)
 
 
-def run_git(repo: Path, *args: str, check: bool = True) -> str:
-    completed = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if check and completed.returncode:
-        raise AssertionError(f"git {' '.join(args)} failed: {completed.stderr}")
-    return completed.stdout.strip()
-
-
-def write(path: Path, value: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(value, encoding="utf-8")
-
-
-def make_repo(two_remotes: bool = False) -> tuple[Path, Path]:
-    root = Path(tempfile.mkdtemp(prefix="merge-reviewer-feature-"))
-    repo = root / "repo"
-    remote = root / "origin.git"
-    run_git(root, "init", "--bare", str(remote))
-    run_git(root, "init", "-b", "main", str(repo))
-    run_git(repo, "config", "user.email", "test@example.invalid")
-    run_git(repo, "config", "user.name", "Merge Reviewer Test")
-    write(repo / "base.txt", "base\n")
-    write(repo / "deleted.txt", "kept until the scenario deletes it\n")
-    run_git(repo, "add", ".")
-    run_git(repo, "commit", "-m", "base")
-    run_git(repo, "remote", "add", "origin", str(remote))
-    run_git(repo, "push", "-u", "origin", "main")
-    run_git(root, "--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main")
-    run_git(repo, "switch", "-c", "feature")
-    if two_remotes:
-        upstream = root / "upstream.git"
-        run_git(root, "init", "--bare", str(upstream))
-        run_git(root, "--git-dir", str(upstream), "symbolic-ref", "HEAD", "refs/heads/main")
-        run_git(repo, "remote", "add", "upstream", str(upstream))
-        run_git(repo, "push", "upstream", "main")
-    return repo, root
+def make_repo(two_remotes: bool = False) -> tuple[Path, Path, tempfile.TemporaryDirectory]:
+    temporary_directory = tempfile.TemporaryDirectory(prefix="merge-reviewer-feature-")
+    root = Path(temporary_directory.name)
+    try:
+        repo, _remote = create_repository_fixture(root, two_remotes=two_remotes)
+    except Exception:
+        temporary_directory.cleanup()
+        raise
+    return repo, root, temporary_directory
 
 
 def helper_path() -> Path:
@@ -76,29 +32,11 @@ def helper_path() -> Path:
 
 
 def load_helper_module():
-    path = helper_path()
-    spec = importlib.util.spec_from_file_location("merge_reviewer_feature_helper", path)
-    if spec is None or spec.loader is None:
-        raise AssertionError(f"unable to load helper module: {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_module("merge_reviewer_feature_helper", helper_path())
 
 
 def run_helper(context, *args: str) -> tuple[int, dict | None, str]:
-    environment = os.environ.copy()
-    environment["PYTHONIOENCODING"] = "utf-8"
-    completed = subprocess.run(
-        ["python", str(helper_path()), "--workspace", str(context.repo), *args],
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        env=environment,
-    )
+    completed = run_python(helper_path(), "--workspace", str(context.repo), *args)
     payload = json.loads(completed.stdout) if completed.returncode == 0 else None
     return completed.returncode, payload, completed.stderr
 
@@ -106,19 +44,22 @@ def run_helper(context, *args: str) -> tuple[int, dict | None, str]:
 def before_scenario(context, _scenario):
     context.repo = None
     context.root = None
+    context.temporary_directory = None
     context.context_dirs = []
 
 
 def after_scenario(context, _scenario):
     for context_dir in getattr(context, "context_dirs", []):
-        remove_tree(context_dir)
-    if context.root:
-        remove_tree(context.root)
+        remove_temporary_tree(context_dir)
+    if getattr(context, "temporary_directory", None) is not None:
+        context.temporary_directory.cleanup()
+    elif context.root:
+        remove_temporary_tree(context.root)
 
 
 def ensure_repo(context, *, two_remotes: bool = False):
     if context.repo is None:
-        context.repo, context.root = make_repo(two_remotes=two_remotes)
+        context.repo, context.root, context.temporary_directory = make_repo(two_remotes=two_remotes)
 
 
 def step_given_remote(context):
@@ -126,7 +67,7 @@ def step_given_remote(context):
 
 
 def step_given_two_remotes(context):
-    context.repo, context.root = make_repo(two_remotes=True)
+    context.repo, context.root, context.temporary_directory = make_repo(two_remotes=True)
 
 
 def step_given_unpushed_commit(context):

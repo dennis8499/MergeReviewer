@@ -54,19 +54,19 @@ The helper discovers `.git` directories and worktree `.git` files, resolves work
 
 Treat the helper output as the source of truth for `repo`, `base_sha`, `head_sha`, `diff_base`, `merge_base`, `review_scope`, `review_right`, `snapshot_read_info`, changed files, and merge commits. In committed scope, the comparison is object-based and excludes working-tree changes. In working-tree scope, review the helper's fixed tree snapshot and the files under its context bundle; do not read a mutable file again from the repository. Preserve and report the helper's `working_tree_unchanged` result.
 
-If the helper fails because a ref is invalid, history is shallow, or there are zero or multiple merge bases, stop and report the exact reason. Do not switch comparison modes implicitly.
+If the helper fails because a ref is invalid, history is shallow, or merge mode has zero or multiple merge bases, stop and report the exact reason. Direct mode compares the two fixed commits without requiring a shared base; its manifest `merge_base` is `null` when no unique base exists. Do not switch comparison modes implicitly.
 
 ## Review procedure
 
 Read [references/review-rules.md](references/review-rules.md) before classifying findings. Inspect the complete diff and then the relevant context at `head_sha` using Git object commands; never use checkout to create a review view:
 
 ```powershell
-git -C <repo> diff --no-ext-diff --binary --find-renames --find-copies <diff_base> <review_right> --
+git -C <repo> diff --no-ext-diff --no-textconv --binary --find-renames --find-copies <diff_base> <review_right> --
 git -C <repo> show <review_right>:<path>
 git -C <repo> grep -n <symbol-or-config-key> <review_right> -- <path-or-directory>
 ```
 
-For `review_scope=working-tree`, use the generated `working-tree.patch` and `working-tree-files/` context bundle for changed-file content. The temporary Git object directory is removed after the helper finishes; the bundle is the durable review evidence.
+For `review_scope=working-tree`, use the generated `working-tree.patch` and `working-tree-files/` context bundle for changed-file content. The temporary Git object directory is removed after the helper finishes; the bundle is the durable review evidence. The current snapshot starts from `HEAD`, so a newly force-staged ignored file may be omitted; if such a path is present in the user's staged changes, report the working-tree review as incomplete.
 
 For large changes, process every changed path in batches and record binary files, submodules, renames, and mode-only changes as review limitations. Do not truncate a diff without saying which files were not inspected.
 
@@ -81,7 +81,7 @@ For every merge commit listed by the helper:
 3. Confirm a suspected merge defect is still present in `head_sha`; do not report one that a later commit fixed.
 4. For squash, rebase, or hand-copied changes without merge-parent evidence, review the behavior but do not claim that an identified defect was caused by manual merging.
 
-The helper's default `merge` mode compares `merge_base(base, head)` to `review_right`. `direct` compares `base` to `review_right` for committed inputs. Quick working-tree scope intentionally stays in merge mode and keeps real `head_sha` for merge-history checks. State the selected mode, review scope, and both resolved SHAs/tree identifiers in the report.
+The helper's default `merge` mode compares `merge_base(base, head)` to `review_right`. `direct` compares `base` to `review_right` for committed inputs and may have `merge_base=null`. Quick working-tree scope intentionally stays in merge mode and keeps real `head_sha` for merge-history checks. State the selected mode, review scope, and both resolved SHAs/tree identifiers in the report.
 
 ## Report and side effects
 
