@@ -250,6 +250,8 @@ class QuickReviewTests(unittest.TestCase):
             str(self.remote),
             submodule_path,
         )
+        git(self.repo / submodule_path, "config", "user.email", "test@example.invalid")
+        git(self.repo / submodule_path, "config", "user.name", "Merge Reviewer Test")
         git(self.repo, "commit", "-m", "add submodule")
         git(self.repo, "branch", "submodule-base")
 
