@@ -532,8 +532,8 @@ class QuickReviewTests(unittest.TestCase):
             "--base", "main", "--head", "HEAD", "--mode", "direct", "--no-fetch",
         )
         self.assertNotEqual(ambiguous.returncode, 0)
-        self.assertIn(str(repositories[0]), ambiguous.stderr)
-        self.assertIn(str(repositories[1]), ambiguous.stderr)
+        self.assertIn(str(repositories[0].resolve()), ambiguous.stderr)
+        self.assertIn(str(repositories[1].resolve()), ambiguous.stderr)
 
         selected, payload = self.run_helper(
             "--workspace", str(workspace), "--workspace-file", str(workspace_file),
