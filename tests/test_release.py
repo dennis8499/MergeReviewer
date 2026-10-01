@@ -29,6 +29,7 @@ class ReleasePackageTests(unittest.TestCase):
         (self.skill / "agents" / "openai.yaml").write_text("interface:\n", encoding="utf-8")
         (self.skill / "references" / "review-rules.md").write_text("# Rules\n", encoding="utf-8")
         (self.skill / "scripts" / "git_review_context.py").write_text("print('ok')\n", encoding="utf-8")
+        (self.skill / "scripts" / "review_report.py").write_text("print('report')\n", encoding="utf-8")
         (self.skill / "scripts" / "__pycache__").mkdir()
         (self.skill / "scripts" / "__pycache__" / "stale.cpython-314.pyc").write_bytes(b"cache")
         (self.root / "tests" / "test_should_not_ship.py").parent.mkdir()
@@ -56,6 +57,7 @@ class ReleasePackageTests(unittest.TestCase):
         self.assertIn("merge-reviewer/agents/openai.yaml", names)
         self.assertIn("merge-reviewer/references/review-rules.md", names)
         self.assertIn("merge-reviewer/scripts/git_review_context.py", names)
+        self.assertIn("merge-reviewer/scripts/review_report.py", names)
         self.assertNotIn("merge-reviewer/scripts/__pycache__/stale.cpython-314.pyc", names)
         self.assertNotIn("tests/test_should_not_ship.py", names)
 

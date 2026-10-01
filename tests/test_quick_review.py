@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -140,6 +141,230 @@ class QuickReviewTests(unittest.TestCase):
         self.assertEqual(patch, (bundle / "working-tree.patch").read_bytes())
         self.assertEqual(payload["diff_patch_bytes"], len(patch))
 
+    def test_working_tree_includes_force_staged_ignored_file_without_including_other_ignored_files(self) -> None:
+        ignore_rules = self.repo / ".gitignore"
+        ignore_rules.write_text("forced-secret.py\nordinary-secret.txt\n", encoding="utf-8")
+        git(self.repo, "add", ".gitignore")
+        git(self.repo, "commit", "-m", "ignore generated files")
+        forced_path = self.repo / "forced-secret.py"
+        forced_path.write_text("index_value = 'staged'\n", encoding="utf-8")
+        git(self.repo, "add", "-f", "forced-secret.py")
+        forced_path.write_text("working_value = 'final saved content'\n", encoding="utf-8")
+        (self.repo / "ordinary-secret.txt").write_text("must stay ignored\n", encoding="utf-8")
+        index = Path(git(self.repo, "rev-parse", "--git-path", "index"))
+        if not index.is_absolute():
+            index = self.repo / index
+        index_before = index.read_bytes()
+        state_before = load_helper_module().snapshot(self.repo)
+
+        result, payload = self.run_helper(
+            "--quick", "--base", "main", "--no-fetch", "--include-working-tree", "--format", "json"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        paths = {item["path"] for item in payload["changed_files"]}
+        self.assertIn("forced-secret.py", paths)
+        self.assertNotIn("ordinary-secret.txt", paths)
+        self.assertEqual(
+            (Path(payload["context_dir"]) / "working-tree-files" / "forced-secret.py").read_text(encoding="utf-8"),
+            "working_value = 'final saved content'\n",
+        )
+        self.assertTrue(payload["context_complete"])
+        self.assertEqual(index.read_bytes(), index_before)
+        self.assertEqual(load_helper_module().snapshot(self.repo), state_before)
+
+    def test_working_tree_blob_export_failure_aborts_and_cleans_context(self) -> None:
+        helper = load_helper_module()
+        (self.repo / "base.txt").write_text("saved edit\n", encoding="utf-8")
+        context_dir = self.root / "export-failure"
+        args = helper.parse_args(
+            [
+                "--workspace", str(self.repo), "--quick", "--base", "main", "--no-fetch",
+                "--include-working-tree", "--context-dir", str(context_dir),
+            ]
+        )
+        original = helper.run_git
+
+        def reject_blob(repo, git_args, **kwargs):
+            if git_args[:2] == ["cat-file", "blob"] and git_args[-1].endswith(":base.txt"):
+                raise helper.GitCommandError(git_args, 128, "simulated missing blob")
+            return original(repo, git_args, **kwargs)
+
+        with mock.patch.object(helper, "run_git", side_effect=reject_blob):
+            with self.assertRaisesRegex(helper.ReviewContextError, "無法匯出審查檔案"):
+                helper.build_manifest(args)
+        self.assertFalse(context_dir.exists())
+        self.assertEqual((self.repo / "base.txt").read_text(encoding="utf-8"), "saved edit\n")
+
+    def test_numstat_preserves_zero_change_rename_and_tabbed_paths(self) -> None:
+        helper = load_helper_module()
+        parsed = helper.parse_numstat("0\t0\t\0舊 名稱.py\0新\t名稱.py\0")
+        self.assertEqual(parsed, {"新\t名稱.py": ("0", "0")})
+        self.assertTrue(helper.safe_relative_git_path("資料夾/中文 檔案.py"))
+        self.assertFalse(helper.safe_relative_git_path("../outside.py"))
+        self.assertFalse(helper.safe_relative_git_path(r"..\outside.py"))
+        self.assertFalse(helper.safe_relative_git_path(r"C:\outside.py"))
+
+    def test_pure_rename_is_not_reported_as_inserted_lines(self) -> None:
+        git(self.repo, "mv", "deleted.txt", "renamed.txt")
+        git(self.repo, "commit", "-m", "rename without content changes")
+        result, payload = self.run_helper(
+            "--base", "main", "--head", "HEAD", "--no-fetch", "--mode", "direct", "--format", "json"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        rename = next(item for item in payload["changed_files"] if item["path"] == "renamed.txt")
+        self.assertEqual(rename["old_path"], "deleted.txt")
+        self.assertEqual((rename["additions"], rename["deletions"]), (0, 0))
+        self.assertEqual(rename["old_mode"], rename["new_mode"])
+
+    def test_rename_with_a_small_edit_reports_only_the_changed_lines(self) -> None:
+        original = "".join(f"line {number}\n" for number in range(100))
+        source = self.repo / "rename-source.txt"
+        source.write_text(original, encoding="utf-8")
+        git(self.repo, "add", "rename-source.txt")
+        git(self.repo, "commit", "-m", "add rename source")
+        git(self.repo, "branch", "rename-base")
+        target = self.repo / "rename-target.txt"
+        git(self.repo, "mv", "rename-source.txt", "rename-target.txt")
+        target.write_text(original.replace("line 50\n", "updated line 50\n"), encoding="utf-8")
+        git(self.repo, "add", "rename-target.txt")
+        git(self.repo, "commit", "-m", "rename and update one line")
+
+        result, payload = self.run_helper(
+            "--base", "rename-base", "--head", "HEAD", "--mode", "direct", "--no-fetch", "--format", "json"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        rename = next(item for item in payload["changed_files"] if item["path"] == "rename-target.txt")
+        self.assertRegex(rename["status"], r"^R\d{3}$")
+        self.assertEqual(rename["old_path"], "rename-source.txt")
+        self.assertEqual((rename["additions"], rename["deletions"]), (1, 1))
+
+    def test_copy_detection_uses_the_same_flags_for_status_stats_and_raw_paths(self) -> None:
+        original = "".join(f"line {number}\n" for number in range(100))
+        source = self.repo / "copy-source.txt"
+        source.write_text(original, encoding="utf-8")
+        git(self.repo, "add", "copy-source.txt")
+        git(self.repo, "commit", "-m", "add copy source")
+        git(self.repo, "branch", "copy-base")
+        copied_content = original.replace("line 50\n", "updated line 50\n")
+        source.write_text(copied_content, encoding="utf-8")
+        (self.repo / "copy-target.txt").write_text(copied_content, encoding="utf-8")
+        git(self.repo, "add", "copy-source.txt", "copy-target.txt")
+        git(self.repo, "commit", "-m", "modify and copy source")
+
+        result, payload = self.run_helper(
+            "--base", "copy-base", "--head", "HEAD", "--mode", "direct", "--no-fetch", "--format", "json"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        copy = next(item for item in payload["changed_files"] if item["path"] == "copy-target.txt")
+        self.assertRegex(copy["status"], r"^C\d{3}$")
+        self.assertEqual(copy["old_path"], "copy-source.txt")
+        self.assertEqual((copy["additions"], copy["deletions"]), (1, 1))
+
+    def test_mode_only_change_has_zero_line_counts_and_records_both_modes(self) -> None:
+        script = self.repo / "mode-only.sh"
+        script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        git(self.repo, "add", "mode-only.sh")
+        git(self.repo, "commit", "-m", "add non-executable script")
+        git(self.repo, "branch", "mode-base")
+        git(self.repo, "update-index", "--chmod=+x", "mode-only.sh")
+        git(self.repo, "commit", "-m", "mark script executable")
+
+        result, payload = self.run_helper(
+            "--base", "mode-base", "--head", "HEAD", "--mode", "direct", "--no-fetch", "--format", "json"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        change = next(item for item in payload["changed_files"] if item["path"] == "mode-only.sh")
+        self.assertEqual(change["status"], "M")
+        self.assertEqual((change["additions"], change["deletions"]), (0, 0))
+        self.assertEqual((change["old_mode"], change["new_mode"]), ("100644", "100755"))
+
+    def test_merge_preview_includes_base_only_changes_and_preserves_repository_objects(self) -> None:
+        (self.repo / "feature-only.txt").write_text("feature\n", encoding="utf-8")
+        git(self.repo, "add", "feature-only.txt")
+        git(self.repo, "commit", "-m", "feature change")
+        git(self.repo, "switch", "main")
+        (self.repo / "base-only.txt").write_text("base\n", encoding="utf-8")
+        git(self.repo, "add", "base-only.txt")
+        git(self.repo, "commit", "-m", "base-only change")
+        git(self.repo, "switch", "feature")
+        helper = load_helper_module()
+        state_before = helper.snapshot(self.repo)
+        object_inventory_before = sorted(
+            path.relative_to(self.repo / ".git" / "objects").as_posix()
+            for path in (self.repo / ".git" / "objects").rglob("*")
+            if path.is_file()
+        )
+        context_dir = self.root / "clean-merge-preview"
+        result, payload = self.run_helper(
+            "--base", "main", "--head", "feature", "--no-fetch", "--context-dir", str(context_dir), "--format", "json"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        preview = payload["merge_preview"]
+        self.assertEqual(preview["status"], "clean")
+        self.assertIn("base-only.txt", {item["path"] for item in preview["changed_files"]})
+        self.assertEqual(
+            (context_dir / "merge-preview-files" / "base-only.txt").read_text(encoding="utf-8"),
+            "base\n",
+        )
+        self.assertTrue((context_dir / "merge-preview-objects").exists())
+        self.assertTrue(payload["context_complete"])
+        self.assertEqual(helper.snapshot(self.repo), state_before)
+        object_inventory_after = sorted(
+            path.relative_to(self.repo / ".git" / "objects").as_posix()
+            for path in (self.repo / ".git" / "objects").rglob("*")
+            if path.is_file()
+        )
+        self.assertEqual(object_inventory_after, object_inventory_before)
+
+    def test_conflicting_merge_preview_is_saved_and_marks_context_incomplete(self) -> None:
+        (self.repo / "base.txt").write_text("feature's conflicting value\n", encoding="utf-8")
+        git(self.repo, "add", "base.txt")
+        git(self.repo, "commit", "-m", "feature side of conflict")
+        git(self.repo, "switch", "main")
+        (self.repo / "base.txt").write_text("base's conflicting value\n", encoding="utf-8")
+        git(self.repo, "add", "base.txt")
+        git(self.repo, "commit", "-m", "base side of conflict")
+        git(self.repo, "switch", "feature")
+        context_dir = self.root / "conflicting-merge-preview"
+        result, payload = self.run_helper(
+            "--base", "main", "--head", "feature", "--no-fetch", "--context-dir", str(context_dir), "--format", "json"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        self.assertEqual(payload["merge_preview"]["status"], "conflicts")
+        self.assertFalse(payload["context_complete"])
+        self.assertFalse(payload["review_complete"])
+        self.assertIn("衝突", " ".join(payload["context_gaps"]))
+        self.assertIn("CONFLICT", (context_dir / "merge-preview-status.txt").read_text(encoding="utf-8"))
+
+    def test_git_command_timeout_has_a_user_actionable_diagnostic(self) -> None:
+        helper = load_helper_module()
+        with mock.patch.object(
+            helper.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(cmd=["git", "status"], timeout=0.01),
+        ):
+            with self.assertRaisesRegex(helper.ReviewContextError, "逾時"):
+                helper.run_git(self.repo, ["status"])
+            returncode, _output, detail = helper.run_git_capture(self.repo, ["merge-base", "HEAD", "HEAD"])
+        self.assertEqual(returncode, 124)
+        self.assertIn("逾時", detail)
+        timeout_error = helper.GitCommandError(["merge-base"], 124, detail)
+        self.assertIn("--git-timeout", timeout_error.hint or "")
+        for value in ("0", "-1", "nan", "inf"):
+            with self.subTest(timeout=value), self.assertRaises(argparse.ArgumentTypeError):
+                helper.positive_timeout(value)
+
     def test_explicit_refs_review_commits_with_dirty_worktree_without_changing_it(self) -> None:
         helper = load_helper_module()
         git(self.repo, "branch", "-m", "review-setup")
@@ -246,6 +471,7 @@ class QuickReviewTests(unittest.TestCase):
             if call.args[1][: 1 + len(helper.DIFF_FLAGS)] == ["diff", *helper.DIFF_FLAGS]
             and "--binary" in call.args[1]
             and "--stat" not in call.args[1]
+            and call.args[1][-3:-1] == [payload["diff_base"], payload["review_right"]]
         ]
         self.assertEqual(len(main_patch_calls), 1)
 
@@ -281,6 +507,52 @@ class QuickReviewTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         assert payload is not None
         self.assertNotIn("review-reports/old.md", {item["path"] for item in payload["changed_files"]})
+
+    def test_jsonc_workspace_reports_ambiguous_same_named_repositories_and_accepts_path_selection(self) -> None:
+        workspace = self.root / "多資料夾工作區"
+        repositories = [workspace / "服務 A" / "OrderService", workspace / "服務 B" / "OrderService"]
+        for repo in repositories:
+            repo.mkdir(parents=True)
+            git(workspace, "init", "-b", "main", str(repo))
+            git(repo, "config", "user.email", "test@example.invalid")
+            git(repo, "config", "user.name", "Merge Reviewer Test")
+            (repo / "app.txt").write_text(repo.parent.name + "\n", encoding="utf-8")
+            git(repo, "add", "app.txt")
+            git(repo, "commit", "-m", "base")
+        workspace_file = workspace / "review.code-workspace"
+        workspace_file.write_text(
+            "{\n // Multiple roots with a trailing comma.\n \"folders\": [\n"
+            "  {\"path\": \"服務 A/OrderService\"},\n"
+            "  {\"path\": \"服務 B/OrderService\"},\n ],\n}\n",
+            encoding="utf-8",
+        )
+
+        ambiguous, _ = self.run_helper(
+            "--workspace", str(workspace), "--workspace-file", str(workspace_file),
+            "--base", "main", "--head", "HEAD", "--mode", "direct", "--no-fetch",
+        )
+        self.assertNotEqual(ambiguous.returncode, 0)
+        self.assertIn(str(repositories[0]), ambiguous.stderr)
+        self.assertIn(str(repositories[1]), ambiguous.stderr)
+
+        selected, payload = self.run_helper(
+            "--workspace", str(workspace), "--workspace-file", str(workspace_file),
+            "--project", str(repositories[1]), "--base", "main", "--head", "HEAD",
+            "--mode", "direct", "--no-fetch",
+        )
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        assert payload is not None
+        self.assertEqual(Path(payload["repo"]), repositories[1].resolve())
+
+    def test_invalid_non_object_workspace_json_stops_with_a_diagnostic(self) -> None:
+        workspace_file = self.root / "invalid.code-workspace"
+        workspace_file.write_text("[]\n", encoding="utf-8")
+        result, _ = self.run_helper(
+            "--workspace", str(self.root), "--workspace-file", str(workspace_file),
+            "--base", "main", "--head", "HEAD", "--mode", "direct", "--no-fetch",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("必須是包含 folders 陣列的 JSON 物件", result.stderr)
 
     def test_dirty_submodule_with_non_ascii_path_is_reported_as_limitation(self) -> None:
         nested = self.root / "nested"
@@ -754,7 +1026,7 @@ class QuickReviewTests(unittest.TestCase):
         )
         self.assertEqual(direct_result.returncode, 0, direct_result.stderr)
         assert direct_payload is not None
-        self.assertEqual(direct_payload["schema_version"], 3)
+        self.assertEqual(direct_payload["schema_version"], 4)
         self.assertIsNone(direct_payload["merge_base"])
         self.assertEqual(direct_payload["diff_base"], direct_payload["base_sha"])
         saved_manifest = json.loads(

@@ -5,11 +5,13 @@
 ## 功能
 
 - **合併前審查**：以 `merge-base(基礎版本, 比較版本)` 到比較版本的範圍，檢查即將帶入的變更。
+- **實際合併預覽**：在 repository 外產生基礎與比較版本的預覽合併樹，檢查兩邊變更整合後的相容性。
 - **直接比較**：直接比較指定的基礎版本與比較版本。
 - **Merge commit 檢查**：逐一對照 merge commit 的各個 parent 與合併結果，確認任一側的必要邏輯沒有在解衝突時遺失。
 - **證據導向 finding**：依 P0、P1、P2、P3 排序，記錄觸發條件、程式證據、影響與聚焦的修正方向。
 - **多 repository 工作區支援**：可指定 repository 名稱或路徑，也能處理 VS Code `.code-workspace`。
 - **快速本地分支審查**：一行自動辨識目前分支、遠端預設主分支與最新 base；可選擇納入已儲存但尚未提交的檔案。
+- **可查證的審查報告**：記錄逐檔覆蓋與固定版本證據，驗證一致性後產生 Markdown 和 JSON 報告。
 
 ## 需求環境
 
@@ -48,18 +50,18 @@ Copy-Item -Recurse .\skills\merge-reviewer "$HOME\.codex\skills\merge-reviewer"
 目前版本記錄在 `skills/merge-reviewer/VERSION`，採用 `X.Y.Z` 的 SemVer 格式。GitHub Release 的 tag 必須與版本檔一致，例如：
 
 ```text
-VERSION: 0.1.2
-tag: v0.1.2
+VERSION: 0.3.0
+tag: v0.3.0
 ```
 
 完成版本變更並推送到 `main` 後，建立並推送 tag 即可觸發 Release workflow：
 
 ```powershell
-git tag -a v0.1.2 -m "Release v0.1.2"
-git push origin v0.1.2
+git tag -a v0.3.0 -m "Release v0.3.0"
+git push origin v0.3.0
 ```
 
-Workflow 會先執行單元測試，再建立 `merge-reviewer-0.1.2.zip`。Release 附件內含可直接複製到 Codex skill 目錄的 `merge-reviewer` 資料夾，不包含 repository 的測試檔或其他開發檔案。
+Workflow 會先執行單元測試，再建立 `merge-reviewer-0.3.0.zip`。Release 附件內含可直接複製到 Codex skill 目錄的 `merge-reviewer` 資料夾，不包含 repository 的測試檔或其他開發檔案。
 
 若 workflow 建立 Release 時收到權限錯誤，請在 GitHub repository 的 **Settings → Actions → General → Workflow permissions** 啟用 **Read and write permissions**；組織層級政策可能限制此設定。
 
@@ -87,7 +89,7 @@ $merge-reviewer 快速審查 包含未提交變更
 $merge-reviewer 快速審查 遠端=upstream
 ```
 
-快速模式只需要一行即可使用目前本地分支的 `HEAD`，不要求開發分支已 push。預設只看已提交內容；`包含未提交變更` 會把 staged、unstaged、刪除與未忽略的未追蹤檔案建立成固定快照。若未指定 `--context-dir`，helper 會在 repository 外自動建立可供審查的 context bundle，完成報告後再刪除 `context_dir`。編輯器尚未儲存的內容不在範圍內。
+快速模式只需要一行即可使用目前本地分支的 `HEAD`，不要求開發分支已 push。預設只看已提交內容；`包含未提交變更` 會把 staged、unstaged、刪除與未忽略的未追蹤檔案建立成固定快照，也會包含強制暫存的 ignored 檔案。若未指定 `--context-dir`，helper 會在 repository 外自動建立可供審查的 context bundle，完成報告後再刪除 `context_dir`。編輯器尚未儲存的內容不在範圍內。
 
 ### 輸入參數
 
@@ -109,7 +111,7 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 
 | 模式 | 比較範圍 | 適用情境 |
 | --- | --- | --- |
-| `合併前審查` | `merge-base(基礎版本, 比較版本)` → `比較版本` | 檢查比較分支相對共同祖先新增或保留的行為。 |
+| `合併前審查` | `merge-base(基礎版本, 比較版本)` → 比較版本，並產生預覽合併樹 | 檢查功能分支變更及主分支更新後的整合行為。 |
 | `直接比較` | `基礎版本` → `比較版本` | 需要精確檢查兩個指定版本之間的完整差異。 |
 
 直接比較不要求共同祖先。Manifest 的 `merge_base` 在唯一共同祖先存在時記錄 SHA；沒有或有多個共同祖先時記錄 `null`。合併前審查仍要求唯一共同祖先。
@@ -123,7 +125,7 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 審查過程使用 Git object 命令讀取版本內容，不會：
 
 - checkout、merge、reset、stage 或修改來源分支與 commit；
-- 一般指定版本比較只讀取指定的已提交版本，既存的 staged、unstaged、刪除或未追蹤變更不會混入差異，且不會要求先清理；快速模式明確使用 `包含未提交變更` 時，才會以 repository 外的 alternate index/object directory 建立固定快照。唯讀 Git 查詢會停用選擇性 index 更新；
+- 一般指定版本比較只讀取指定的已提交版本，既存的 staged、unstaged、刪除或未追蹤變更不會混入差異，且不會要求先清理；快速模式明確使用 `包含未提交變更` 時，才會以 repository 外的 alternate index/object directory 建立固定快照。合併預覽也將新 Git objects 寫到 repository 外。唯讀 Git 查詢會停用選擇性 index 更新；
 - 自動修正程式碼、建立 commit、發布評論或推送變更。
 
 為了確認 remote 分支不是過期版本，helper 可能執行 `git fetch --no-tags --no-prune`。除 fetch、repository 外的工作區快照暫存資料與 context bundle 外，helper 不會寫入受審 repository；審查報告是唯一的 repository 產物。
@@ -134,6 +136,7 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 
 ```text
 <repo>/review-reports/merge-review-<UTC-timestamp>-<base-short>-<head-short>.md
+<repo>/review-reports/merge-review-<UTC-timestamp>-<base-short>-<head-short>.json
 ```
 
 報告包含：
@@ -141,6 +144,7 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 - **審查結論**：先給合併建議（`可以合併`、`修正後再合併`、`暫緩合併`、`需補做審查`）與白話一句話摘要，再列 P0–P3 數量、下一步（含處理角色）與會影響結論的檢查缺口；
 - **問題總覽**：用表格列出固定編號、行動導向的優先程度、問題、對使用者／資料／服務的影響，以及建議處理者（開發、維運設定、QA）；
 - **問題詳情**：依 P0 至 P3 排序，每項先用白話說明影響，再列操作情境、預期結果、實際結果、建議處理與技術證據（含工程修正建議）；
+- **JSON 審查結果**：保留逐檔檢查狀態、已驗證的證據版本與行號、P0–P3 數量及一致的結果狀態；
 - **範圍與限制**：用白話說明已檢查與未檢查的範圍、變更檔案摘要、binary／submodule 限制，以及本次靜態審查未執行的測試；
 - **技術審查紀錄（工程師參考）**：專案與 repository 路徑、輸入 ref 與解析後 SHA、比較模式與範圍、共同起點、同步遠端狀態、工作樹狀態及證據來源。
 
@@ -161,9 +165,9 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 | 狀態 | 意義 |
 | --- | --- |
 | `發現具體問題` | 審查範圍完整，至少有一個可由程式或 Git 證據支持的問題；問題總覽會列出所有問題。 |
-| `沒有差異` | 版本與比較範圍有效，但沒有變更檔案。 |
+| `沒有差異` | 固定版本有效、審查範圍沒有差異，且合併預覽沒有額外變更。 |
 | `未發現具體問題` | 已檢查的範圍內沒有找到有證據的問題；不代表程式絕對正確。 |
-| `審查未完成` | 部分內容無法檢查（ref、同步遠端、共同起點、檔案讀取或上下文有缺口），結果不能視為通過；即使已找到部分問題，也必須列出缺口並保留已確認的問題。 |
+| `審查未完成` | 部分內容無法檢查（ref、同步遠端、共同起點、檔案讀取、合併預覽或逐檔覆蓋有缺口），結果不能視為通過；即使已找到部分問題，也必須列出缺口並保留已確認的問題。 |
 
 合併建議依狀態與最高等級判定：`審查未完成` 為 `需補做審查`；有 P0 為 `暫緩合併`；有 P1 為 `修正後再合併`；其他情況為 `可以合併`（P2／P3 排入後續修正）。
 
@@ -180,6 +184,8 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 - 分支同時存在於多個 remote 時，請使用明確的 ref，例如 `origin/release`。
 - Binary、submodule、rename、copy 或 mode-only 變更會列為審查範圍限制，必要時需人工補充檢查。Submodule 變更會辨識 Git link 指標；內部程式碼不在 parent repository 的差異中。
 - Merge Reviewer 是靜態審查工具；除非使用者明確要求且實際執行，報告不會宣稱測試已通過。
+- `git merge-tree --write-tree` 不支援或產生衝突時，整合審查會標記為未完成。
+- 單一 Git 指令預設最多執行 180 秒；使用 `--git-timeout <秒>` 可調整。一般準備指令逾時會停止並附上重試建議；若合併預覽逾時，helper 會記錄 `merge_preview.status=unavailable` 和上下文缺口，報告仍須標為 `審查未完成`。
 - 對 squash、rebase 或手動複製的變更，可以審查最終行為，但不會將問題歸因於人工合併。
 
 ## 手動執行 Git context helper
@@ -187,12 +193,15 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 需要檢查準備資料或整合其他工具時，可直接執行 helper：
 
 ```powershell
+$contextDir = Join-Path $env:TEMP ("merge-reviewer-" + [Guid]::NewGuid().ToString("N"))
 python skills\merge-reviewer\scripts\git_review_context.py `
   --workspace . `
   --project OrderService `
   --base main `
   --head feature/payment `
   --mode merge `
+  --context-dir $contextDir `
+  --git-timeout 180 `
   --format json --pretty
 ```
 
@@ -204,16 +213,17 @@ python skills\merge-reviewer\scripts\git_review_context.py `
 - `--base`、`--head`：指定兩個比較輸入。
 - `--quick`：以目前本地分支 `HEAD` 對遠端預設分支執行快速審查。
 - `--remote`：快速模式指定 remote；多個 remote 時必要。
-- `--include-working-tree`：快速模式納入 staged、unstaged、刪除與未忽略的未追蹤檔案。
+- `--include-working-tree`：快速模式納入 staged、unstaged、刪除與未忽略的未追蹤檔案，也保留使用者以 `git add -f` 暫存的 ignored 檔案。
 - `--mode merge|direct`：選擇比較模式。
 - `--no-fetch`：只允許沒有 remote-qualified ref 的比較；指定 remote branch 時會直接回報參數衝突。
-- `--context-dir`：將 manifest 與完整 patch 寫入新的暫存目錄。
+- `--context-dir`：將 manifest、完整 patch、工作區／合併預覽檔案及其證據摘要寫入新的暫存目錄；保留到雙格式報告完成後再刪除。
+- `--git-timeout`：每個 Git 指令的秒數上限，預設 180 秒。
 
-Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、diff 統計、fetch 結果、遠端選擇與工作樹快照，供審查流程作為來源真相。Manifest schema version 為 3；`merge_base` 在沒有唯一共同祖先的直接比較中為 `null`。工作區模式會另外輸出 `review_tree_sha`、`review_scope=working-tree` 與 `snapshot_read_info`，並在 context bundle 保留可供審查的 `working-tree.patch` 和變更檔案內容。
+Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、diff 統計、fetch 結果、遠端選擇、逐檔證據摘要與工作樹快照，供審查流程作為來源真相。Manifest schema version 為 4，新增 `context_complete`、`context_gaps` 與 `merge_preview`，並保留舊的 `review_complete` 欄位；兩者都只表示準備階段是否完成，不代表 Skill 已逐檔審查。工作區模式另外輸出固定 `review_tree_sha`、`review_scope=working-tree`、逐檔 Git blob SHA／SHA-256 摘要及 `snapshot_read_info`，也會納入使用者以 `git add -f` 暫存的 ignored 檔案。合併預覽會將 Git objects 保留在 context bundle，供報告驗證後清理。
 
 如果 submodule 內有未提交或未初始化內容，helper 會列在 `dirty_submodule_paths` 和 `review_limitations`，此結果不能被回報為完整審查。
 
-工作區快照目前從 `HEAD` 建立；使用 `git add -f` 強制暫存且符合 ignore 規則的新檔案可能未進入快照。遇到這類檔案時，不要把工作區審查報告為完整。
+審查流程會先在 context bundle 建立結構化 `review-result-draft.json`，再使用 `scripts/review_report.py` 驗證每一條證據並產生 Markdown 及 JSON 報告。直接比較模式也須傳入位於 repository 外的 `--context-dir`；報告建立完成後才可清理整個 context bundle。
 
 ## 專案結構
 
@@ -234,7 +244,8 @@ Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、
         ├── references/
         │   └── review-rules.md
         └── scripts/
-            └── git_review_context.py
+            ├── git_review_context.py
+            └── review_report.py
 ```
 
 ## 相關文件
@@ -242,6 +253,8 @@ Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、
 - [Merge Reviewer 技能說明](skills/merge-reviewer/SKILL.md)
 - [審查規則與報告格式](skills/merge-reviewer/references/review-rules.md)
 - [Git context helper](skills/merge-reviewer/scripts/git_review_context.py)
+- [Review report validator](skills/merge-reviewer/scripts/review_report.py)
+- [Skill review acceptance cases](tests/review_quality_cases.md)
 
 ## 開發驗證
 
@@ -253,3 +266,5 @@ python -m unittest discover -s tests -v
 ```
 
 GitHub Actions 會在 pull request、`main` 推送與 tag Release 執行 Linux／Windows × Python 3.10／3.14 測試矩陣。Release 必須先通過相同檢查。
+
+自動 CI 驗證 Git context、輸出證據與報告格式；Skill 的漏報與誤報仍依 [`tests/review_quality_cases.md`](tests/review_quality_cases.md) 人工驗收，避免把 deterministic Git 測試誤當成模型審查品質評估。

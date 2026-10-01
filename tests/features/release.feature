@@ -18,7 +18,7 @@ Feature: Versioned Merge Reviewer releases
     Given a release fixture with version "0.1.0"
     When I build a release package for tag "v0.1.0"
     Then the package root is "merge-reviewer"
-    And the package contains "SKILL.md", "VERSION", "agents/openai.yaml", "references/review-rules.md", and "scripts/git_review_context.py"
+    And the package contains "SKILL.md", "VERSION", "agents/openai.yaml", "references/review-rules.md", "scripts/git_review_context.py", and "scripts/review_report.py"
     And the package excludes "tests/test_should_not_ship.py"
 
   @human-acceptance @REL-004

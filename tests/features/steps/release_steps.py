@@ -25,6 +25,7 @@ def build_fixture(context, version: str) -> None:
     write_text(context.skill / "agents" / "openai.yaml", "interface:\n")
     write_text(context.skill / "references" / "review-rules.md", "# Rules\n")
     write_text(context.skill / "scripts" / "git_review_context.py", "print('ok')\n")
+    write_text(context.skill / "scripts" / "review_report.py", "print('report')\n")
     write_text(context.root / "tests" / "test_should_not_ship.py", "not packaged\n")
     context.release = load_release_module()
 
@@ -88,7 +89,7 @@ def step_package_root(context, root: str) -> None:
     assert all(name == root or name.startswith(f"{root}/") for name in archive_names(context))
 
 
-@then('the package contains "SKILL.md", "VERSION", "agents/openai.yaml", "references/review-rules.md", and "scripts/git_review_context.py"')
+@then('the package contains "SKILL.md", "VERSION", "agents/openai.yaml", "references/review-rules.md", "scripts/git_review_context.py", and "scripts/review_report.py"')
 def step_package_contains_skill_files(context) -> None:
     names = archive_names(context)
     for relative_path in (
@@ -97,6 +98,7 @@ def step_package_contains_skill_files(context) -> None:
         "agents/openai.yaml",
         "references/review-rules.md",
         "scripts/git_review_context.py",
+        "scripts/review_report.py",
     ):
         assert f"merge-reviewer/{relative_path}" in names
 

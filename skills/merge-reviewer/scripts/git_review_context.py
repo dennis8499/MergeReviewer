@@ -9,8 +9,10 @@ branch is the only Git ref mutation performed by default.
 from __future__ import annotations
 
 import argparse
+import contextvars
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -20,7 +22,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
 
@@ -55,7 +57,12 @@ class GitCommandError(ReviewContextError):
     def __init__(self, args: Sequence[str], returncode: int, stderr: str):
         command = "git " + " ".join(args)
         detail = stderr.strip() or "Git command failed without diagnostic output."
-        super().__init__(f"{command} (exit {returncode}): {detail}")
+        hint = (
+            "請確認 repository 或遠端連線狀態；可使用 --git-timeout 增加等待時間後重試。"
+            if returncode == 124
+            else None
+        )
+        super().__init__(f"{command} (exit {returncode}): {detail}", hint=hint)
         self.args_list = list(args)
         self.returncode = returncode
         self.stderr = detail
@@ -69,6 +76,10 @@ class RemoteTarget:
 
 
 DIFF_FLAGS = ("--no-ext-diff", "--no-textconv")
+DEFAULT_GIT_TIMEOUT_SECONDS = 180.0
+GIT_TIMEOUT_SECONDS = contextvars.ContextVar(
+    "merge_reviewer_git_timeout", default=DEFAULT_GIT_TIMEOUT_SECONDS
+)
 
 
 def run_git(
@@ -78,18 +89,27 @@ def run_git(
     check: bool = True,
     binary: bool = False,
     env: Mapping[str, str] | None = None,
+    input_bytes: bytes | None = None,
 ) -> str | bytes:
     command_env = os.environ.copy()
     if env:
         command_env.update(env)
     command_env["GIT_OPTIONAL_LOCKS"] = "0"
-    completed = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        env=command_env,
-    )
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=command_env,
+            timeout=GIT_TIMEOUT_SECONDS.get(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ReviewContextError(
+            f"Git 指令逾時（{GIT_TIMEOUT_SECONDS.get():g} 秒）：git {' '.join(args)}",
+            hint="請確認 repository、磁碟或遠端連線狀態；可使用 --git-timeout 增加等待時間後重試。",
+        ) from exc
     if check and completed.returncode != 0:
         stderr = completed.stderr.decode("utf-8", errors="replace")
         raise GitCommandError(args, completed.returncode, stderr)
@@ -109,13 +129,21 @@ def run_git_capture(
     if env:
         command_env.update(env)
     command_env["GIT_OPTIONAL_LOCKS"] = "0"
-    completed = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        env=command_env,
-    )
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=command_env,
+            timeout=GIT_TIMEOUT_SECONDS.get(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        message = (
+            f"Git 指令逾時（{GIT_TIMEOUT_SECONDS.get():g} 秒）："
+            f"git {' '.join(args)}"
+        )
+        return 124, "", message
     return (
         completed.returncode,
         completed.stdout.decode("utf-8", errors="replace"),
@@ -126,18 +154,38 @@ def run_git_capture(
 def git_ok(repo: Path, args: Sequence[str]) -> bool:
     command_env = os.environ.copy()
     command_env["GIT_OPTIONAL_LOCKS"] = "0"
-    completed = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        env=command_env,
-    )
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            env=command_env,
+            timeout=GIT_TIMEOUT_SECONDS.get(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ReviewContextError(
+            f"Git 指令逾時（{GIT_TIMEOUT_SECONDS.get():g} 秒）：git {' '.join(args)}",
+            hint="請確認 repository 狀態；可使用 --git-timeout 增加等待時間後重試。",
+        ) from exc
     return completed.returncode == 0
 
 
 def normalize_path(value: str | Path) -> Path:
     return Path(value).expanduser().resolve()
+
+
+def safe_relative_git_path(value: str) -> bool:
+    """Reject paths that could escape a bundle on either supported OS."""
+    posix_path = PurePosixPath(value)
+    windows_path = PureWindowsPath(value)
+    return bool(value) and not (
+        posix_path.is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or ".." in posix_path.parts
+        or ".." in windows_path.parts
+    )
 
 
 def remove_tree(path: Path) -> None:
@@ -238,7 +286,15 @@ def workspace_roots(workspace: Path, workspace_file: Path | None) -> list[Path]:
         raw = json.loads(strip_trailing_commas(strip_jsonc(content)))
     except (OSError, json.JSONDecodeError) as exc:
         raise ReviewContextError(f"無法讀取 VS Code workspace: {workspace_file}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ReviewContextError(
+            f"VS Code workspace 必須是包含 folders 陣列的 JSON 物件：{workspace_file}"
+        )
     folders = raw.get("folders", [])
+    if not isinstance(folders, list):
+        raise ReviewContextError(
+            f"VS Code workspace 的 folders 必須是陣列：{workspace_file}"
+        )
     roots: list[Path] = []
     for folder in folders:
         if not isinstance(folder, dict):
@@ -559,14 +615,24 @@ def parse_name_status(raw: str) -> list[dict[str, str | None]]:
 
 def parse_numstat(raw: str) -> dict[str, tuple[str, str]]:
     records: dict[str, tuple[str, str]] = {}
-    for record in raw.split("\0"):
-        if not record:
-            continue
-        fields = record.split("\t", 2)
+    parts = raw.split("\0")
+    if parts and not parts[-1]:
+        parts.pop()
+    index = 0
+    while index < len(parts):
+        fields = parts[index].split("\t", 2)
+        index += 1
         if len(fields) != 3:
-            continue
+            raise ReviewContextError("Git 回傳的 numstat 資料不完整。")
         additions, deletions, path = fields
-        records[path] = (additions, deletions)
+        if path:
+            records[path] = (additions, deletions)
+            continue
+        if index + 1 >= len(parts):
+            raise ReviewContextError("Git 回傳的 rename/copy numstat 路徑不完整。")
+        _old_path, new_path = parts[index], parts[index + 1]
+        index += 2
+        records[new_path] = (additions, deletions)
     return records
 
 
@@ -603,7 +669,8 @@ def collect_changes(
                     "diff",
                     *DIFF_FLAGS,
                     "--numstat",
-                    "--no-renames",
+                    "--find-renames",
+                    "--find-copies",
                     "-z",
                     left,
                     right,
@@ -614,12 +681,44 @@ def collect_changes(
         )
     )
     changes = parse_name_status(name_status)
+    raw_status = str(
+        run_git(
+            repo,
+            ["diff", *DIFF_FLAGS, "--raw", "--no-abbrev", "--find-renames", "--find-copies", "-z", left, right, "--"],
+            env=env,
+        )
+    )
+    raw_parts = raw_status.split("\0")
+    raw_records: dict[tuple[str | None, str], dict[str, str]] = {}
+    index = 0
+    while index < len(raw_parts):
+        metadata = raw_parts[index]
+        index += 1
+        if not metadata:
+            continue
+        fields = metadata.removeprefix(":").split()
+        if len(fields) < 5:
+            raise ReviewContextError("Git 回傳的 raw diff 資料不完整。")
+        old_mode, new_mode, old_blob, new_blob, status = fields[:5]
+        path_count = 2 if status.startswith(("R", "C")) else 1
+        if index + path_count > len(raw_parts):
+            raise ReviewContextError("Git 回傳的 raw diff 路徑資料不完整。")
+        paths = raw_parts[index : index + path_count]
+        index += path_count
+        old_path, path = (paths[0], paths[1]) if path_count == 2 else (None, paths[0])
+        raw_records[(old_path, path)] = {
+            "old_mode": old_mode,
+            "new_mode": new_mode,
+            "old_blob": old_blob,
+            "new_blob": new_blob,
+        }
     for change in changes:
         path = str(change["path"])
         additions, deletions = numstat.get(path, ("0", "0"))
         change["additions"] = None if additions == "-" else int(additions)
         change["deletions"] = None if deletions == "-" else int(deletions)
         change["binary"] = additions == "-" or deletions == "-"
+        change.update(raw_records.get((change["old_path"], path), {}))
     return changes
 
 
@@ -696,6 +795,52 @@ def merge_commit_records(repo: Path, left: str, right: str) -> list[dict[str, An
             }
         )
     return records
+
+
+def create_merge_preview(
+    repo: Path,
+    base_sha: str,
+    head_sha: str,
+    merge_base: str,
+    temporary_dir: Path,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Preview a merge in temporary object storage without writing the repository."""
+    object_directory = temporary_dir / "objects"
+    object_directory.mkdir(parents=True, exist_ok=True)
+    env = {
+        "GIT_OBJECT_DIRECTORY": str(object_directory),
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_path(repo, "objects")),
+    }
+    args = [
+        "merge-tree",
+        "--write-tree",
+        "--messages",
+        f"--merge-base={merge_base}",
+        base_sha,
+        head_sha,
+    ]
+    returncode, output, error = run_git_capture(repo, args, env=env)
+    first_line = output.splitlines()[0].strip() if output.splitlines() else ""
+    if returncode not in (0, 1) or not re.fullmatch(r"[0-9a-fA-F]{40,64}", first_line):
+        detail = error.strip() or output.strip() or f"git merge-tree failed (exit {returncode})"
+        return {
+            "status": "unavailable",
+            "exit_code": returncode,
+            "detail": detail,
+            "tree_sha": None,
+            "changed_files": [],
+        }, env
+    changes = collect_changes(repo, head_sha, first_line, env=env)
+    return {
+        "status": "conflicts" if returncode == 1 else "clean",
+        "exit_code": returncode,
+        "detail": output,
+        "tree_sha": first_line,
+        "head_sha": head_sha,
+        "changed_files": changes,
+        "env": env,
+        "manifest_info": {},
+    }, env
 
 
 def git_path(repo: Path, name: str) -> Path:
@@ -854,6 +999,40 @@ def create_worktree_snapshot(repo: Path) -> tuple[Path, dict[str, str], str]:
         ]
         run_git(repo, ["read-tree", "HEAD"], env=env)
         run_git(repo, ["add", "--all", "--", "."], env=env)
+        staged_paths = str(
+            run_git(
+                repo,
+                [
+                    "diff",
+                    "--cached",
+                    "--no-renames",
+                    "--name-only",
+                    "--diff-filter=ACMRTUXB",
+                    "-z",
+                    "--",
+                ],
+            )
+        )
+        existing_staged_paths = [
+            item
+            for item in staged_paths.split("\0")
+            if item
+            and os.path.lexists(repo.joinpath(*item.split("/")))
+        ]
+        if existing_staged_paths:
+            run_git(
+                repo,
+                [
+                    "--literal-pathspecs",
+                    "add",
+                    "--all",
+                    "--force",
+                    "--pathspec-from-file=-",
+                    "--pathspec-file-nul",
+                ],
+                env=env,
+                input_bytes=b"\0".join(os.fsencode(item) for item in existing_staged_paths) + b"\0",
+            )
         if excluded_report_paths:
             run_git(repo, ["reset", "--quiet", "--", *excluded_report_paths], env=env)
         tree_sha = str(run_git(repo, ["write-tree"], env=env)).strip()
@@ -873,20 +1052,27 @@ def write_context_bundle(
     patch: bytes,
     *,
     env: Mapping[str, str] | None = None,
+    integration: Mapping[str, Any] | None = None,
 ) -> None:
     context_dir = normalize_path(context_dir)
     context_dir.mkdir(parents=True, exist_ok=False)
     try:
-        (context_dir / "manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
         (context_dir / "diff.patch").write_bytes(patch)
         if manifest.get("review_scope") == "working-tree":
             (context_dir / "working-tree.patch").write_bytes(patch)
             snapshot_dir = context_dir / "working-tree-files"
             for change in manifest.get("changed_files", []):
                 path_value = str(change.get("path") or "")
-                if not path_value or path_value.startswith("/") or ".." in Path(path_value).parts:
+                if not safe_relative_git_path(path_value):
+                    continue
+                if (
+                    path_value in manifest.get("submodule_paths", [])
+                    or change.get("old_mode") == "160000"
+                    or change.get("new_mode") == "160000"
+                ):
+                    continue
+                status = str(change.get("status") or "")
+                if status.startswith("D"):
                     continue
                 try:
                     content = run_git(
@@ -895,11 +1081,23 @@ def write_context_bundle(
                         binary=True,
                         env=env,
                     )
-                except GitCommandError:
-                    continue
+                except GitCommandError as exc:
+                    raise ReviewContextError(
+                        f"無法匯出審查檔案「{path_value}」：{exc.stderr}",
+                        hint="請確認該 Git object 可讀取，修復 repository 後重新產生審查內容。",
+                    ) from exc
                 destination = snapshot_dir / Path(path_value)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(content if isinstance(content, bytes) else content.encode())
+                encoded_content = content if isinstance(content, bytes) else content.encode()
+                destination.write_bytes(encoded_content)
+                manifest.setdefault("evidence_files", []).append(
+                    {
+                        "source": "working-tree",
+                        "path": path_value,
+                        "blob_sha": change.get("new_blob"),
+                        "sha256": hashlib.sha256(encoded_content).hexdigest(),
+                    }
+                )
         for merge in manifest["merge_commits"]:
             for parent_view in merge["parent_views"]:
                 parent = parent_view["sha"]
@@ -912,6 +1110,72 @@ def write_context_bundle(
                 (context_dir / filename).write_bytes(
                     parent_patch if isinstance(parent_patch, bytes) else parent_patch.encode()
                 )
+        if integration:
+            (context_dir / "merge-preview-status.txt").write_text(
+                str(integration.get("detail") or ""), encoding="utf-8"
+            )
+            integration_patch = run_git(
+                repo,
+                [
+                    "diff",
+                    *DIFF_FLAGS,
+                    "--binary",
+                    "--find-renames",
+                    "--find-copies",
+                    str(integration["head_sha"]),
+                    str(integration["tree_sha"]),
+                    "--",
+                ],
+                binary=True,
+                env=integration["env"],
+            )
+            (context_dir / "merge-preview.patch").write_bytes(
+                integration_patch if isinstance(integration_patch, bytes) else integration_patch.encode()
+            )
+            for change in integration["changed_files"]:
+                path_value = str(change.get("path") or "")
+                if (
+                    not safe_relative_git_path(path_value)
+                    or path_value in manifest.get("submodule_paths", [])
+                    or change.get("old_mode") == "160000"
+                    or change.get("new_mode") == "160000"
+                    or str(change.get("status", "")).startswith("D")
+                ):
+                    continue
+                try:
+                    content = run_git(
+                        repo,
+                        ["cat-file", "blob", f"{integration['tree_sha']}:{path_value}"],
+                        binary=True,
+                        env=integration["env"],
+                    )
+                except GitCommandError as exc:
+                    raise ReviewContextError(
+                        f"無法匯出合併預覽檔案「{path_value}」：{exc.stderr}",
+                        hint="請確認 repository objects 可讀取，修復後重新產生審查內容。",
+                    ) from exc
+                destination = context_dir / "merge-preview-files" / Path(path_value)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                encoded_content = content if isinstance(content, bytes) else content.encode()
+                destination.write_bytes(encoded_content)
+                manifest.setdefault("evidence_files", []).append(
+                    {
+                        "source": "merge-preview",
+                        "path": path_value,
+                        "blob_sha": change.get("new_blob"),
+                        "sha256": hashlib.sha256(encoded_content).hexdigest(),
+                    }
+                )
+            object_copy = context_dir / "merge-preview-objects"
+            source_objects = Path(str(integration["env"]["GIT_OBJECT_DIRECTORY"]))
+            shutil.copytree(source_objects, object_copy, dirs_exist_ok=True)
+            integration["manifest_info"]["object_directory"] = str(object_copy)
+            integration["manifest_info"]["alternate_objects"] = str(
+                integration["env"]["GIT_ALTERNATE_OBJECT_DIRECTORIES"]
+            )
+        (context_dir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=True, indent=2) + "\n", encoding="utf-8"
+        )
     except Exception:
         remove_tree(context_dir)
         raise
@@ -995,7 +1259,7 @@ def resolve_quick_inputs(
     return f"{selected_remote}/{selected_branch}", "HEAD", selected_remote, selected_branch, selection_source
 
 
-def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
+def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     if args.quick:
         if not args.base and args.head:
             raise ReviewContextError("快速模式需要自動選擇或明確指定 --base；--head 不可單獨使用。")
@@ -1066,6 +1330,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         raise ReviewContextError("合併前審查需要唯一共同祖先。")
 
     temporary_dir: Path | None = None
+    integration_temporary_dir: Path | None = None
     automatic_context_parent: Path | None = None
     context_bundle_written = False
     snapshot_env: dict[str, str] | None = None
@@ -1075,6 +1340,19 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         if args.quick and args.include_working_tree:
             temporary_dir, snapshot_env, review_right = create_worktree_snapshot(repo)
             review_scope = "working-tree"
+        integration: dict[str, Any] | None = None
+        integration_env: dict[str, str] | None = None
+        if args.mode == "merge":
+            integration_temporary_dir = Path(
+                tempfile.mkdtemp(prefix="merge-review-integration-")
+            )
+            integration, integration_env = create_merge_preview(
+                repo,
+                base_sha,
+                head_sha,
+                str(merge_base),
+                integration_temporary_dir,
+            )
         changes = collect_changes(repo, diff_left, review_right, env=snapshot_env)
         merge_commits = merge_commit_records(repo, diff_left, head_sha)
         patch = run_git(
@@ -1113,17 +1391,30 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             | set(after.get("dirty_submodules", []))
         )
         review_limitations: list[str] = []
+        context_gaps: list[str] = []
         if dirty_submodules:
-            review_limitations.append(
+            limitation = (
                 "submodule 內部有未提交或未初始化的內容，未納入本次 Git tree 審查："
                 + ", ".join(dirty_submodules)
             )
+            review_limitations.append(limitation)
+            context_gaps.append(limitation)
         changed_submodules = collect_submodule_paths(repo, diff_left, review_right, env=snapshot_env)
         if changed_submodules:
-            review_limitations.append(
+            limitation = (
                 "submodule 僅檢查 Git link 版本指標，未檢查內部程式碼："
                 + ", ".join(sorted(changed_submodules))
             )
+            review_limitations.append(limitation)
+            context_gaps.append(limitation)
+        if integration and integration["status"] == "conflicts":
+            limitation = "基礎版本與比較版本的合併預覽存在衝突；依路徑逐一處理前，合併相容性審查未完成。"
+            review_limitations.append(limitation)
+            context_gaps.append(limitation)
+        elif integration and integration["status"] == "unavailable":
+            limitation = "無法產生合併預覽：" + str(integration["detail"])
+            review_limitations.append(limitation)
+            context_gaps.append(limitation)
         binary_or_submodule_paths = sorted(
             {
                 str(change["path"])
@@ -1135,7 +1426,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
 
         manifest: dict[str, Any] = {
-            "schema_version": 3,
+            "schema_version": 4,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "workspace": str(workspace),
             "workspace_file": str(workspace_file) if workspace_file else None,
@@ -1167,7 +1458,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "working_tree_after": after,
             "dirty_submodule_paths": dirty_submodules,
             "review_limitations": review_limitations,
-            "review_complete": not dirty_submodules,
+            "context_complete": not context_gaps,
+            "context_gaps": context_gaps,
+            "review_complete": not context_gaps,
             "changed_files": changes,
             "changed_file_count": len(changes),
             "merge_commits": merge_commits,
@@ -1184,7 +1477,25 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 )
             ).strip(),
             "binary_or_submodule_paths": binary_or_submodule_paths,
+            "submodule_paths": sorted(set(dirty_submodules) | changed_submodules),
+            "evidence_files": [],
+            "merge_preview": None,
         }
+        if integration:
+            integration.pop("env", None)
+            integration["manifest_info"] = {
+                "object_directory": None,
+                "alternate_objects": None,
+                "cleaned_after_review": True,
+            }
+            manifest["merge_preview"] = {
+                "status": integration["status"],
+                "exit_code": integration["exit_code"],
+                "detail": str(integration["detail"])[:4000],
+                "tree_sha": integration["tree_sha"],
+                "changed_files": integration["changed_files"],
+                "manifest_info": integration["manifest_info"],
+            }
         if temporary_dir:
             manifest["snapshot_read_info"] = {
                 "index": "repository-external temporary index",
@@ -1209,7 +1520,7 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                     raise ReviewContextError(
                         "工作區快照的 --context-dir 必須位於 repository 外，避免將暫存資料混入審查範圍。"
                     )
-        elif args.quick and args.include_working_tree:
+        elif (args.quick and args.include_working_tree) or args.mode == "merge":
             automatic_context_parent = Path(tempfile.mkdtemp(prefix="merge-review-context-"))
             context_dir = automatic_context_parent / "bundle"
             manifest["context_cleanup_required"] = True
@@ -1223,14 +1534,46 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 review_right,
                 patch if isinstance(patch, bytes) else patch.encode(),
                 env=snapshot_env,
+                integration=(
+                    {
+                        **integration,
+                        "head_sha": head_sha,
+                        "env": integration_env,
+                    }
+                    if integration and integration_env and integration["tree_sha"]
+                    else None
+                ),
             )
             context_bundle_written = True
         return manifest
     finally:
         if temporary_dir:
             remove_tree(temporary_dir)
+        if integration_temporary_dir:
+            remove_tree(integration_temporary_dir)
         if automatic_context_parent and not context_bundle_written:
             remove_tree(automatic_context_parent)
+
+
+def positive_timeout(value: str) -> float:
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("逾時秒數必須為正數。") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise argparse.ArgumentTypeError("逾時秒數必須大於零。")
+    return timeout
+
+
+def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    timeout = getattr(args, "git_timeout", DEFAULT_GIT_TIMEOUT_SECONDS)
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ReviewContextError("--git-timeout 必須大於零。")
+    token = GIT_TIMEOUT_SECONDS.set(timeout)
+    try:
+        return _build_manifest(args)
+    finally:
+        GIT_TIMEOUT_SECONDS.reset(token)
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -1252,6 +1595,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--format", choices=("json",), default="json")
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument("--context-dir", help="Write manifest and complete patch files to this new directory.")
+    parser.add_argument(
+        "--git-timeout",
+        type=positive_timeout,
+        default=DEFAULT_GIT_TIMEOUT_SECONDS,
+        help="Maximum seconds to wait for each Git command (default: 180).",
+    )
     return parser.parse_args(argv)
 
 
