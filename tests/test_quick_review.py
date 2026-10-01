@@ -745,9 +745,10 @@ class QuickReviewTests(unittest.TestCase):
         )
 
         original_write_bytes = Path.write_bytes
+        target_patch = (context_dir / "diff.patch").resolve()
 
         def fail_while_writing_context(path, data):
-            if path == context_dir / "diff.patch":
+            if path.resolve() == target_patch:
                 raise OSError("simulated context write failure")
             return original_write_bytes(path, data)
 
@@ -764,9 +765,10 @@ class QuickReviewTests(unittest.TestCase):
              "--no-fetch", "--context-dir", str(context_dir)]
         )
         original_mkdir = Path.mkdir
+        target_context_dir = context_dir.resolve()
 
         def race_mkdir(path, *args, **kwargs):
-            if path == context_dir and not path.exists():
+            if path.resolve() == target_context_dir and not path.exists():
                 original_mkdir(path, parents=True, exist_ok=False)
                 (path / "belongs-to-other-process.txt").write_text("preserve me\n", encoding="utf-8")
             return original_mkdir(path, *args, **kwargs)
