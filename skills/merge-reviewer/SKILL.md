@@ -7,7 +7,7 @@ metadata:
 
 # Merge Reviewer
 
-Review two Git versions without checking out either one. The normal mode reviews committed refs and previews their isolated merge; quick mode compares the current local branch with a remote's advertised default branch and can optionally include a stable snapshot of saved working-tree files. The skill is designed for a VS Code workspace that may contain more than one repository. It records per-path review coverage and emits validated Traditional Chinese Markdown and JSON reports.
+Review two Git versions without checking out either one. The normal mode reviews committed refs and previews their isolated merge; quick mode compares the current local branch with a remote's advertised default branch and can optionally include a stable snapshot of saved working-tree files. The skill is designed for a VS Code workspace that may contain more than one repository. It records per-path review coverage and emits a validated Traditional Chinese Markdown report, with JSON available on request.
 
 ## Required request
 
@@ -91,14 +91,13 @@ The helper's default `merge` mode compares `merge_base(base, head)` to `review_r
 
 ## Report and side effects
 
-Create the report directory and write one Markdown report to:
+Create the report directory and write the Markdown report to:
 
 ```text
 <repo>/review-reports/merge-review-<UTC-timestamp>-<base-short>-<head-short>.md
-<repo>/review-reports/merge-review-<UTC-timestamp>-<base-short>-<head-short>.json
 ```
 
-Use a fresh shared filename if either report file already exists. Never hand-write or modify one output independently; both formats must be produced by `scripts/review_report.py` from the same validated JSON result. The report must be Traditional Chinese and follow the readable structure in [references/review-rules.md](references/review-rules.md):
+Write the Markdown report by default. When the user requests `輸出JSON`, also write a JSON report with the same stem. Use a fresh filename if either matching output already exists. Never hand-write or modify an output independently; `scripts/review_report.py` must produce each selected report from the same validated JSON result. The report must be Traditional Chinese and follow the readable structure in [references/review-rules.md](references/review-rules.md):
 
 - `審查結論` first, with the merge recommendation (`可以合併`, `修正後再合併`, `暫緩合併`, or `需補做審查`, decided by the rules in the reference), the result state with its plain-language explanation, one plain-language sentence, P0–P3 counts with action labels, one to three next steps with the responsible role, and any evidence gap that changes the conclusion;
 - `問題總覽` as a short Markdown table with a fixed finding ID, action-oriented priority label (for example `P1 合併前必修`), problem, user/data/service impact, and suggested handler (`開發`, `維運設定`, or `QA`);
@@ -151,13 +150,15 @@ python <skill-dir>/scripts/review_report.py `
   --git-timeout 180
 ```
 
-The validator requires a schema-4 context and complete path coverage. It computes the final state, severity counts, and merge recommendation from context gaps, preview status, coverage, and findings. It rejects missing paths, invalid evidence line ranges, duplicate findings, impossible priorities, and invalid roles before creating files. Only this script writes the matching Markdown and JSON reports. If validation fails, correct the draft or restore the evidence bundle and rerun it; do not describe the review as complete.
+Add `--include-json` when the user requests `輸出JSON`.
+
+The validator requires a schema-4 context and complete path coverage. It computes the final state, severity counts, and merge recommendation from context gaps, preview status, coverage, and findings. It rejects missing paths, invalid evidence line ranges, duplicate findings, impossible priorities, and invalid roles before creating files. Only this script writes the selected report files. If validation fails, correct the draft or restore the evidence bundle and rerun it; do not describe the review as complete.
 
 The conclusion, overview, impact statement, operation scenario, and `建議處理` must be plain language: no class, method, variable, file names, SHAs, or English jargon (use the term table in the reference). Keep those terms only in the technical sections.
 
 Use the explicit result states from the reference: `發現具體問題`, `沒有差異`, `未發現具體問題`, or `審查未完成`. Use `審查未完成` whenever a fetch, ref, merge-base, file-read, context, or nested-checkout gap prevents a complete review, even when some findings were confirmed. Use `未發現具體問題` only after the complete feasible scope was checked and no evidence-backed finding was established. Keep the overview count and finding IDs consistent with the details. Do not invent examples for `沒有差異`, `未發現具體問題`, or an unverified finding.
 
-Do not modify source files, configuration, branches, index, or history. Fetching refs, creating the external context bundle, and writing the requested report pair are the only allowed mutations. The helper uses external alternate index/object directories and cleans its private temporary data after saving evidence. Preserve the context bundle until both reports are created; then remove the full external context directory. Do not auto-fix, perform a repository merge, publish comments, or create commits.
+Do not modify source files, configuration, branches, index, or history. Fetching refs, creating the external context bundle, and writing the requested report files are the only allowed mutations. The helper uses external alternate index/object directories and cleans its private temporary data after saving evidence. Preserve the context bundle until all selected reports are created successfully; then remove the full external context directory. If validation or report writing fails, retain the bundle for correction and retry. Do not auto-fix, perform a repository merge, publish comments, or create commits.
 
 Return a concise Traditional Chinese chat summary in plain language, in this order:
 
@@ -166,7 +167,7 @@ Return a concise Traditional Chinese chat summary in plain language, in this ord
 3. up to three highest-priority finding IDs, each with the impact and one short situation example, without class, method, or file names;
 4. next steps with the responsible role;
 5. a note pointing to the full report when more findings exist;
-6. clickable links to both the Markdown report and matching JSON result.
+6. a clickable link to the Markdown report and, only when created, the matching JSON result.
 
 When the result is `沒有差異` or `未發現具體問題`, say that no evidence-backed issue was established and do not invent a situation example. When the result is `審查未完成`, explain the missing evidence first; if findings exist, summarize only those that are supported and say that the review is incomplete. Keep the summary counts and finding IDs consistent with the Markdown report.
 
@@ -178,6 +179,7 @@ When the helper fails, tell the user in plain language what went wrong, then pas
 $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature/payment
 $merge-reviewer 基礎分支=abc123 比較分支=def456 比較模式=直接比較
 $merge-reviewer 快速審查
+$merge-reviewer 快速審查 輸出JSON
 $merge-reviewer 快速審查 包含未提交變更
 $merge-reviewer 快速審查 遠端=upstream
 ```

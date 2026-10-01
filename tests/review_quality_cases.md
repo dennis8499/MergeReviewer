@@ -5,7 +5,7 @@
 ## 執行方式
 
 1. 在系統暫存目錄建立一次性 Git repository，依案例建立共同起點、`main` 和 `feature` 分支。每個案例獨立執行，避免前一案例的物件或報告影響後一案例。
-2. 以 Merge Reviewer 執行 `main` 對 `feature` 的合併模式審查，保留 manifest 和 context bundle，讓 Skill 依規則逐檔檢查並產生 Markdown／JSON 報告。
+2. 以 Merge Reviewer 執行 `main` 對 `feature` 的合併模式審查，保留 manifest 和 context bundle，讓 Skill 依規則逐檔檢查並產生 Markdown 報告；若要逐項檢查結構化 JSON 結果，明確加上 `輸出JSON`。
 3. 將 finding、來源 SHA、路徑、行號、覆蓋狀態、結果狀態與合併建議逐項對照標準答案。報告驗證器成功只代表結構與證據可查，不代表 Skill 找對了問題。
 4. 記錄漏報、誤報、嚴重度偏差和沒有證據的引用；案例全部符合標準答案才通過人工驗收。
 

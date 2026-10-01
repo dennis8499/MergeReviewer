@@ -11,7 +11,7 @@
 - **證據導向 finding**：依 P0、P1、P2、P3 排序，記錄觸發條件、程式證據、影響與聚焦的修正方向。
 - **多 repository 工作區支援**：可指定 repository 名稱或路徑，也能處理 VS Code `.code-workspace`。
 - **快速本地分支審查**：一行自動辨識目前分支、遠端預設主分支與最新 base；可選擇納入已儲存但尚未提交的檔案。
-- **可查證的審查報告**：記錄逐檔覆蓋與固定版本證據，驗證一致性後產生 Markdown 和 JSON 報告。
+- **可查證的審查報告**：記錄逐檔覆蓋與固定版本證據，驗證一致性後預設產生 Markdown；需要程式整合時可選擇附加 JSON 報告。
 
 ## 需求環境
 
@@ -132,19 +132,20 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 
 ## 報告輸出
 
-報告會寫入被審查 repository 的：
+Markdown 報告預設寫入被審查 repository 的：
 
 ```text
 <repo>/review-reports/merge-review-<UTC-timestamp>-<base-short>-<head-short>.md
-<repo>/review-reports/merge-review-<UTC-timestamp>-<base-short>-<head-short>.json
 ```
+
+要求 `輸出JSON` 時，另產生同名 `.json` 報告。
 
 報告包含：
 
 - **審查結論**：先給合併建議（`可以合併`、`修正後再合併`、`暫緩合併`、`需補做審查`）與白話一句話摘要，再列 P0–P3 數量、下一步（含處理角色）與會影響結論的檢查缺口；
 - **問題總覽**：用表格列出固定編號、行動導向的優先程度、問題、對使用者／資料／服務的影響，以及建議處理者（開發、維運設定、QA）；
 - **問題詳情**：依 P0 至 P3 排序，每項先用白話說明影響，再列操作情境、預期結果、實際結果、建議處理與技術證據（含工程修正建議）；
-- **JSON 審查結果**：保留逐檔檢查狀態、已驗證的證據版本與行號、P0–P3 數量及一致的結果狀態；
+- **JSON 審查結果（選用）**：使用 `輸出JSON` 要求時，保留逐檔檢查狀態、已驗證的證據版本與行號、P0–P3 數量及一致的結果狀態；
 - **範圍與限制**：用白話說明已檢查與未檢查的範圍、變更檔案摘要、binary／submodule 限制，以及本次靜態審查未執行的測試；
 - **技術審查紀錄（工程師參考）**：專案與 repository 路徑、輸入 ref 與解析後 SHA、比較模式與範圍、共同起點、同步遠端狀態、工作樹狀態及證據來源。
 
@@ -216,14 +217,15 @@ python skills\merge-reviewer\scripts\git_review_context.py `
 - `--include-working-tree`：快速模式納入 staged、unstaged、刪除與未忽略的未追蹤檔案，也保留使用者以 `git add -f` 暫存的 ignored 檔案。
 - `--mode merge|direct`：選擇比較模式。
 - `--no-fetch`：只允許沒有 remote-qualified ref 的比較；指定 remote branch 時會直接回報參數衝突。
-- `--context-dir`：將 manifest、完整 patch、工作區／合併預覽檔案及其證據摘要寫入新的暫存目錄；保留到雙格式報告完成後再刪除。
+- `--context-dir`：將 manifest、完整 patch、工作區／合併預覽檔案及其證據摘要寫入新的暫存目錄；保留到本次選定的報告都成功產生後再刪除。
+- `--include-json`：除了 Markdown，另外寫入同名的結構化 JSON 審查結果。
 - `--git-timeout`：每個 Git 指令的秒數上限，預設 180 秒。
 
 Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、diff 統計、fetch 結果、遠端選擇、逐檔證據摘要與工作樹快照，供審查流程作為來源真相。Manifest schema version 為 4，新增 `context_complete`、`context_gaps` 與 `merge_preview`，並保留舊的 `review_complete` 欄位；兩者都只表示準備階段是否完成，不代表 Skill 已逐檔審查。工作區模式另外輸出固定 `review_tree_sha`、`review_scope=working-tree`、逐檔 Git blob SHA／SHA-256 摘要及 `snapshot_read_info`，也會納入使用者以 `git add -f` 暫存的 ignored 檔案。合併預覽會將 Git objects 保留在 context bundle，供報告驗證後清理。
 
 如果 submodule 內有未提交或未初始化內容，helper 會列在 `dirty_submodule_paths` 和 `review_limitations`，此結果不能被回報為完整審查。
 
-審查流程會先在 context bundle 建立結構化 `review-result-draft.json`，再使用 `scripts/review_report.py` 驗證每一條證據並產生 Markdown 及 JSON 報告。直接比較模式也須傳入位於 repository 外的 `--context-dir`；報告建立完成後才可清理整個 context bundle。
+審查流程會先在 context bundle 建立結構化 `review-result-draft.json`，再使用 `scripts/review_report.py` 驗證每一條證據並預設產生 Markdown 報告。使用者要求 `輸出JSON` 時，再加上 `--include-json` 產生同名 JSON 報告。直接比較模式也須傳入位於 repository 外的 `--context-dir`；本次選定的報告全部建立完成後才可清理整個 context bundle，若驗證或寫入失敗則保留以供重試。
 
 ## 專案結構
 

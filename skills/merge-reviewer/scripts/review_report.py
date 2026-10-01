@@ -625,7 +625,8 @@ def publish_report(
     report_dir: Path | None = None,
     *,
     timeout: float = 180.0,
-) -> tuple[Path, Path]:
+    include_json: bool = False,
+) -> tuple[Path, Path | None]:
     context_dir = context_dir.expanduser().resolve()
     result_file = result_file.expanduser().resolve()
     manifest_path = context_dir / "manifest.json"
@@ -655,19 +656,22 @@ def publish_report(
         if markdown_path.exists() or json_path.exists():
             continue
         result["report_markdown"] = markdown_path.name
-        result["report_json"] = json_path.name
-        json_payload = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+        if include_json:
+            result["report_json"] = json_path.name
         with tempfile.TemporaryDirectory(prefix="merge-review-report-", dir=report_dir) as temp_dir:
             temp_root = Path(temp_dir)
             temp_md = temp_root / markdown_path.name
-            temp_json = temp_root / json_path.name
             temp_md.write_text(markdown, encoding="utf-8")
-            temp_json.write_text(json_payload, encoding="utf-8")
+            if include_json:
+                temp_json = temp_root / json_path.name
+                json_payload = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+                temp_json.write_text(json_payload, encoding="utf-8")
             linked_markdown = False
             try:
                 os.link(temp_md, markdown_path)
                 linked_markdown = True
-                os.link(temp_json, json_path)
+                if include_json:
+                    os.link(temp_json, json_path)
             except FileExistsError:
                 if linked_markdown:
                     markdown_path.unlink(missing_ok=True)
@@ -676,7 +680,7 @@ def publish_report(
                 if linked_markdown:
                     markdown_path.unlink(missing_ok=True)
                 raise
-        return markdown_path, json_path
+        return markdown_path, json_path if include_json else None
     raise ReportValidationError("同一秒內建立報告次數已達上限。")
 
 
@@ -685,6 +689,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--context-dir", required=True, help="Immutable review context bundle.")
     parser.add_argument("--result", required=True, help="Structured draft result JSON.")
     parser.add_argument("--report-dir", help="Report output directory (defaults to repository/review-reports).")
+    parser.add_argument(
+        "--include-json", action="store_true", help="Also write the structured JSON report."
+    )
     parser.add_argument("--git-timeout", type=float, default=180.0)
     return parser.parse_args(argv)
 
@@ -700,11 +707,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             Path(args.result),
             Path(args.report_dir) if args.report_dir else None,
             timeout=args.git_timeout,
+            include_json=args.include_json,
         )
     except (ReportValidationError, OSError, subprocess.TimeoutExpired) as exc:
         print(f"review-report: 審查報告未建立：{exc}", file=sys.stderr)
         return 2
-    print(json.dumps({"markdown_report": str(markdown_path), "json_report": str(json_path)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "markdown_report": str(markdown_path),
+                "json_report": str(json_path) if json_path is not None else None,
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

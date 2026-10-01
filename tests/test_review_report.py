@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import hashlib
+import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.support import create_repository_fixture, load_module, remove_temporary_tree, run_git
 
@@ -91,18 +94,30 @@ class ReviewReportTests(unittest.TestCase):
             "limitations": [],
         }
 
-    def publish(self, draft: dict | None = None):
+    def publish(self, draft: dict | None = None, *, include_json: bool = False):
         draft_path = self.context_dir / "draft.json"
         draft_path.write_text(
             json.dumps(draft or self.valid_draft(), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         return self.report_module.publish_report(
-            self.context_dir, draft_path, self.report_dir
+            self.context_dir, draft_path, self.report_dir, include_json=include_json
         )
 
-    def test_valid_report_writes_json_and_markdown_with_identical_verdict(self) -> None:
+    def test_default_report_writes_markdown_only_and_keeps_context_for_cleanup_by_caller(self) -> None:
         markdown_path, json_path = self.publish()
+        markdown = markdown_path.read_text(encoding="utf-8")
+        self.assertIsNone(json_path)
+        self.assertFalse(markdown_path.with_suffix(".json").exists())
+        self.assertIn("## 問題總覽", markdown)
+        self.assertIn("context manifest SHA-256", markdown)
+        self.assertTrue((self.context_dir / "manifest.json").exists())
+        self.assertTrue((self.context_dir / "draft.json").exists())
+
+    def test_include_json_writes_matching_json_and_markdown_reports(self) -> None:
+        markdown_path, json_path = self.publish(include_json=True)
+        self.assertIsNotNone(json_path)
+        assert json_path is not None
         result = json.loads(json_path.read_text(encoding="utf-8"))
         markdown = markdown_path.read_text(encoding="utf-8")
         self.assertEqual(result["review_status"], "未發現具體問題")
@@ -111,6 +126,56 @@ class ReviewReportTests(unittest.TestCase):
         self.assertIn("## 問題總覽", markdown)
         self.assertIn("context manifest SHA-256", markdown)
         self.assertEqual(result["report_markdown"], markdown_path.name)
+        self.assertEqual(result["report_json"], json_path.name)
+        self.assertEqual(json_path.stem, markdown_path.stem)
+
+    def test_cli_default_reports_null_json_path(self) -> None:
+        draft_path = self.context_dir / "draft.json"
+        draft_path.write_text(
+            json.dumps(self.valid_draft(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            exit_code = self.report_module.main(
+                [
+                    "--context-dir",
+                    str(self.context_dir),
+                    "--result",
+                    str(draft_path),
+                    "--report-dir",
+                    str(self.report_dir),
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertIsNotNone(payload["markdown_report"])
+        self.assertIsNone(payload["json_report"])
+        self.assertTrue(Path(payload["markdown_report"]).exists())
+
+    def test_cli_include_json_flag_writes_and_returns_json_path(self) -> None:
+        draft_path = self.context_dir / "draft.json"
+        draft_path.write_text(
+            json.dumps(self.valid_draft(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            exit_code = self.report_module.main(
+                [
+                    "--context-dir",
+                    str(self.context_dir),
+                    "--result",
+                    str(draft_path),
+                    "--report-dir",
+                    str(self.report_dir),
+                    "--include-json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertIsNotNone(payload["json_report"])
+        self.assertTrue(Path(payload["json_report"]).exists())
 
     def test_direct_review_does_not_require_a_merge_preview(self) -> None:
         self.manifest["mode"] = "direct"
@@ -119,7 +184,8 @@ class ReviewReportTests(unittest.TestCase):
             json.dumps(self.manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
 
-        _markdown_path, json_path = self.publish()
+        _markdown_path, json_path = self.publish(include_json=True)
+        assert json_path is not None
         result = json.loads(json_path.read_text(encoding="utf-8"))
         self.assertEqual(result["review_status"], "未發現具體問題")
 
@@ -142,7 +208,8 @@ class ReviewReportTests(unittest.TestCase):
                 "evidence": [draft["coverage"][0]["evidence"][0]],
             }
         ]
-        markdown_path, json_path = self.publish(draft)
+        markdown_path, json_path = self.publish(draft, include_json=True)
+        assert json_path is not None
         result = json.loads(json_path.read_text(encoding="utf-8"))
         markdown = markdown_path.read_text(encoding="utf-8")
         self.assertEqual(result["review_status"], "發現具體問題")
@@ -236,7 +303,8 @@ class ReviewReportTests(unittest.TestCase):
         draft = self.valid_draft()
         draft["coverage"][0]["status"] = "metadata-only"
         draft["coverage"][0]["reason"] = "只確認了 Git mode，無法讀取檔案內容。"
-        markdown_path, json_path = self.publish(draft)
+        markdown_path, json_path = self.publish(draft, include_json=True)
+        assert json_path is not None
         result = json.loads(json_path.read_text(encoding="utf-8"))
         self.assertEqual(result["review_status"], "審查未完成")
         self.assertEqual(result["merge_recommendation"], "需補做審查")
@@ -251,7 +319,8 @@ class ReviewReportTests(unittest.TestCase):
         (self.context_dir / "manifest.json").write_text(
             json.dumps(self.manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        markdown_path, json_path = self.publish()
+        markdown_path, json_path = self.publish(include_json=True)
+        assert json_path is not None
         result = json.loads(json_path.read_text(encoding="utf-8"))
         self.assertEqual(result["review_status"], "審查未完成")
         self.assertEqual(result["merge_recommendation"], "需補做審查")
@@ -260,11 +329,68 @@ class ReviewReportTests(unittest.TestCase):
 
     def test_generated_reports_get_a_unique_suffix_when_timestamp_collides(self) -> None:
         first_markdown, first_json = self.publish()
-        second_markdown, second_json = self.publish()
+        second_markdown, second_json = self.publish(include_json=True)
+        self.assertIsNone(first_json)
+        assert second_json is not None
         self.assertNotEqual(first_markdown, second_markdown)
         self.assertEqual(second_markdown.stem, first_markdown.stem + "-01")
-        self.assertEqual(first_json.stem, first_markdown.stem)
         self.assertEqual(second_json.stem, second_markdown.stem)
+
+    def test_existing_json_report_is_not_overwritten_in_markdown_only_mode(self) -> None:
+        stamp = "20261001T030000Z"
+        orphan_json = self.report_dir / f"merge-review-{stamp}-{self.head[:8]}-{self.head[:8]}.json"
+        orphan_json.parent.mkdir(parents=True)
+        orphan_json.write_text("preserve existing report\n", encoding="utf-8")
+
+        markdown_path, json_path = self.publish()
+
+        self.assertIsNone(json_path)
+        self.assertEqual(markdown_path.stem, orphan_json.stem + "-01")
+        self.assertEqual(orphan_json.read_text(encoding="utf-8"), "preserve existing report\n")
+
+    def test_publish_failure_rolls_back_partial_files_and_allows_retry(self) -> None:
+        for include_json in (False, True):
+            with self.subTest(include_json=include_json):
+                report_dir = self.root / ("rollback-json" if include_json else "rollback-markdown")
+                draft_path = self.context_dir / "draft.json"
+                draft_path.write_text(
+                    json.dumps(self.valid_draft(), ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                original_link = os.link
+                calls = 0
+
+                def fail_on_last_link(source, destination):
+                    nonlocal calls
+                    calls += 1
+                    expected_calls = 2 if include_json else 1
+                    if calls == expected_calls:
+                        raise OSError("simulated report write failure")
+                    return original_link(source, destination)
+
+                with patch.object(self.report_module.os, "link", side_effect=fail_on_last_link):
+                    with self.assertRaisesRegex(OSError, "simulated report write failure"):
+                        self.report_module.publish_report(
+                            self.context_dir,
+                            draft_path,
+                            report_dir,
+                            include_json=include_json,
+                        )
+
+                self.assertEqual(list(report_dir.iterdir()), [])
+                markdown_path, json_path = self.report_module.publish_report(
+                    self.context_dir,
+                    draft_path,
+                    report_dir,
+                    include_json=include_json,
+                )
+                self.assertTrue(markdown_path.exists())
+                if include_json:
+                    self.assertIsNotNone(json_path)
+                    assert json_path is not None
+                    self.assertTrue(json_path.exists())
+                else:
+                    self.assertIsNone(json_path)
 
     def test_traversal_evidence_paths_are_rejected(self) -> None:
         draft = self.valid_draft()
@@ -304,7 +430,8 @@ class ReviewReportTests(unittest.TestCase):
             "line_end": 1,
         }
 
-        _markdown_path, json_path = self.publish(draft)
+        _markdown_path, json_path = self.publish(draft, include_json=True)
+        assert json_path is not None
         self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["review_status"], "未發現具體問題")
 
         (working_tree_dir / "base.txt").write_bytes(b"tampered working-tree version\n")
@@ -356,7 +483,8 @@ class ReviewReportTests(unittest.TestCase):
             }
         )
 
-        _markdown_path, json_path = self.publish(draft)
+        _markdown_path, json_path = self.publish(draft, include_json=True)
+        assert json_path is not None
         self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["review_status"], "未發現具體問題")
 
         self.manifest["evidence_files"][0]["blob_sha"] = "0" * 40
