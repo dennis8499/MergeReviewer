@@ -71,6 +71,8 @@ Workflow 會先執行單元測試，再建立 `merge-reviewer-0.1.2.zip`。Relea
 $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature/payment
 ```
 
+一般分支或 commit 比較只審查指定版本的已提交內容。專案即使有已暫存、未暫存、已刪除或未追蹤的檔案，也能直接執行；這些本機內容不會納入比較，原始修改會保留，不必先 stage、commit 或 stash。
+
 使用 commit，並改用直接比較：
 
 ```text
@@ -121,7 +123,7 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 審查過程使用 Git object 命令讀取版本內容，不會：
 
 - checkout、merge、reset、stage 或修改來源分支與 commit；
-- 預設不會將未提交的工作樹變更混入比較範圍；快速模式明確使用 `包含未提交變更` 時，會以 repository 外的 alternate index/object directory 建立固定快照。唯讀 Git 查詢會停用選擇性 index 更新；
+- 一般指定版本比較只讀取指定的已提交版本，既存的 staged、unstaged、刪除或未追蹤變更不會混入差異，且不會要求先清理；快速模式明確使用 `包含未提交變更` 時，才會以 repository 外的 alternate index/object directory 建立固定快照。唯讀 Git 查詢會停用選擇性 index 更新；
 - 自動修正程式碼、建立 commit、發布評論或推送變更。
 
 為了確認 remote 分支不是過期版本，helper 可能執行 `git fetch --no-tags --no-prune`。除 fetch、repository 外的工作區快照暫存資料與 context bundle 外，helper 不會寫入受審 repository；審查報告是唯一的 repository 產物。

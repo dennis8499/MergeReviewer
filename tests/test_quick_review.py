@@ -140,6 +140,86 @@ class QuickReviewTests(unittest.TestCase):
         self.assertEqual(patch, (bundle / "working-tree.patch").read_bytes())
         self.assertEqual(payload["diff_patch_bytes"], len(patch))
 
+    def test_explicit_refs_review_commits_with_dirty_worktree_without_changing_it(self) -> None:
+        helper = load_helper_module()
+        git(self.repo, "branch", "-m", "review-setup")
+        git(self.repo, "branch", "feature/payment")
+        git(self.repo, "switch", "feature/payment")
+        (self.repo / "base.txt").write_text("committed payment change\n", encoding="utf-8")
+        (self.repo / "payment.txt").write_text("committed payment path\n", encoding="utf-8")
+        git(self.repo, "add", "base.txt", "payment.txt")
+        git(self.repo, "commit", "-m", "payment change")
+        expected_head = git(self.repo, "rev-parse", "feature/payment")
+
+        baseline: dict[str, tuple[set[str], bytes]] = {}
+        for mode in ("merge", "direct"):
+            context_dir = self.root / f"explicit-{mode}-baseline"
+            result, payload = self.run_helper(
+                "--base", "main", "--head", "feature/payment", "--mode", mode,
+                "--no-fetch", "--context-dir", str(context_dir), "--format", "json",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            assert payload is not None
+            self.assertEqual(payload["review_scope"], "committed")
+            baseline[mode] = (
+                {item["path"] for item in payload["changed_files"]},
+                (context_dir / "diff.patch").read_bytes(),
+            )
+            self.assertEqual(baseline[mode][0], {"base.txt", "payment.txt"})
+
+        git(self.repo, "switch", "main")
+        (self.repo / "base.txt").write_text("staged local edit\n", encoding="utf-8")
+        git(self.repo, "add", "base.txt")
+        (self.repo / "base.txt").write_text("unstaged local edit\n", encoding="utf-8")
+        (self.repo / "deleted.txt").unlink()
+        (self.repo / "untracked.txt").write_text("untracked local edit\n", encoding="utf-8")
+
+        state_before = helper.snapshot(self.repo)
+        status_before = git(self.repo, "status", "--porcelain=v1", "--untracked-files=all")
+        index_path = helper.git_path(self.repo, "index")
+        index_before = index_path.read_bytes()
+        self.assertTrue(status_before)
+        self.assertIn("base.txt", status_before)
+        self.assertIn("deleted.txt", status_before)
+        self.assertIn("untracked.txt", status_before)
+
+        for mode in ("merge", "direct"):
+            context_dir = self.root / f"explicit-{mode}-dirty"
+            result, payload = self.run_helper(
+                "--base", "main", "--head", "feature/payment", "--mode", mode,
+                "--no-fetch", "--context-dir", str(context_dir), "--format", "json",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            assert payload is not None
+            self.assertEqual(payload["review_scope"], "committed")
+            self.assertEqual(payload["head_sha"], expected_head)
+            self.assertEqual(
+                {item["path"] for item in payload["changed_files"]}, baseline[mode][0]
+            )
+            self.assertEqual((context_dir / "diff.patch").read_bytes(), baseline[mode][1])
+            self.assertTrue(payload["review_complete"])
+            self.assertTrue(payload["working_tree_unchanged"])
+            self.assertEqual(payload["working_tree_before"], state_before)
+            self.assertEqual(payload["working_tree_after"], state_before)
+            self.assertEqual(helper.snapshot(self.repo), state_before)
+            self.assertEqual(index_path.read_bytes(), index_before)
+            self.assertEqual(
+                git(self.repo, "status", "--porcelain=v1", "--untracked-files=all"),
+                status_before,
+            )
+            self.assertEqual(git(self.repo, "branch", "--show-current"), "main")
+
+        result, payload = self.run_helper(
+            "--base", "main", "--head", "main", "--no-fetch", "--format", "json"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert payload is not None
+        self.assertEqual(payload["changed_file_count"], 0)
+        self.assertEqual(payload["review_scope"], "committed")
+        self.assertTrue(payload["review_complete"])
+        self.assertTrue(payload["working_tree_unchanged"])
+        self.assertEqual(helper.snapshot(self.repo), state_before)
+
     def test_diff_bundle_ignores_configured_textconv_and_reuses_patch(self) -> None:
         helper = load_helper_module()
         (self.repo / ".gitattributes").write_text("base.txt diff=masked\n", encoding="utf-8")
