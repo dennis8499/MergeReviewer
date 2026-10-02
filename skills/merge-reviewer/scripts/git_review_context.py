@@ -26,6 +26,9 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 SKIP_DIRECTORIES = {
     ".git",
@@ -1427,6 +1430,7 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
 
         manifest: dict[str, Any] = {
             "schema_version": 4,
+            **({"mr_context": args.mr_task} if getattr(args, "mr_task", None) else {}),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "workspace": str(workspace),
             "workspace_file": str(workspace_file) if workspace_file else None,
@@ -1571,6 +1575,12 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         raise ReviewContextError("--git-timeout 必須大於零。")
     token = GIT_TIMEOUT_SECONDS.set(timeout)
     try:
+        if getattr(args, "group_root", None):
+            import group_review
+            return group_review.build(args, sys.modules[__name__])
+        if getattr(args, "mr_context", None):
+            import mr_contract
+            mr_contract.prepare(args, sys.modules[__name__])
         return _build_manifest(args)
     finally:
         GIT_TIMEOUT_SECONDS.reset(token)
@@ -1579,6 +1589,8 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect immutable Git context for Merge Reviewer.")
     parser.add_argument("--workspace", default=os.getcwd(), help="Workspace root to search for repositories.")
+    parser.add_argument("--group-root", help="Review all direct-child Repos' staged and working files locally with --quick.")
+    parser.add_argument("--mr-context", help="MergeReviewTask/v1 JSON with exact local Repo and source/target SHAs.")
     parser.add_argument("--workspace-file", help="Optional VS Code .code-workspace file.")
     parser.add_argument("--project", help="Repository folder name or path.")
     parser.add_argument("--quick", action="store_true", help="Compare the current local branch with a remote default branch.")

@@ -1,6 +1,6 @@
 ---
 name: merge-reviewer
-description: Review Git merges and branch differences from inside a workspace, including one-line comparison of the current local branch with a remote default branch, merge-base and direct modes, optional saved working-tree snapshots, merge-commit checks, and a Traditional Chinese Markdown report.
+description: Review Git merges, fixed GitLab MR versions, or all direct-child Repos from a non-Git Group root. Group 快速審查 compares staged and working-file snapshots to local HEAD without fetching. Retains single-Repo/ref review, merge-base and direct modes, and validated Traditional Chinese Markdown reports with version evidence.
 metadata:
   short-description: Review Git merges and branch differences
 ---
@@ -8,6 +8,21 @@ metadata:
 # Merge Reviewer
 
 Review two Git versions without checking out either one. The normal mode reviews committed refs and previews their isolated merge; quick mode compares the current local branch with a remote's advertised default branch and can optionally include a stable snapshot of saved working-tree files. The skill is designed for a VS Code workspace that may contain more than one repository. It records per-path review coverage and emits a validated Traditional Chinese Markdown report, with JSON available on request.
+
+## Group and GitlabWorkSpace entrypoints
+
+When quick review is requested from a non-Git Group folder, read
+[references/group-review.md](references/group-review.md) and use the explicit
+`--group-root <Group> --quick` route. Review every direct-child Repo's index and
+working files separately. Do not substitute the installed Skill path or run
+legacy remote-default quick review for this request.
+
+For a fixed GitlabWorkSpace MR task, read
+[references/mr-contract.md](references/mr-contract.md) and use `--mr-context`.
+The exact local Repo and source/current-target SHAs override no branches:
+missing fixed versions stop the task. The legacy workflow below handles the
+schema-4 context, then its renderer adds the MR-bound metadata and JSON
+companion. Group context/result uses its separate v1 contract.
 
 ## Required request
 

@@ -270,3 +270,7 @@ python -m unittest discover -s tests -v
 GitHub Actions 會在 pull request、`main` 推送與 tag Release 執行 Linux／Windows × Python 3.10／3.14 測試矩陣。Release 必須先通過相同檢查。
 
 自動 CI 驗證 Git context、輸出證據與報告格式；Skill 的漏報與誤報仍依 [`tests/review_quality_cases.md`](tests/review_quality_cases.md) 人工驗收，避免把 deterministic Git 測試誤當成模型審查品質評估。
+
+## Group 與 GitlabWorkSpace（0.5.0）
+
+在未受版控的 Group 使用 `--group-root <Group> --quick`，分別審查每個直接子 Repo 的暫存區與工作檔，不查遠端。Group 報告存於 Group/review-reports/run-id。工作台 MR 使用 `--mr-context <task.json>` 固定實際 Repo、來源與目標 SHA；Markdown 與 JSON 報告帶有可核對的 MR 身分及正文摘要。參見 Skill 的 group-review.md 與 mr-contract.md。

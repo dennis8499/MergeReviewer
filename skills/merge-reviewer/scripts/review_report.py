@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Sequence
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 PRIORITIES = ("P0", "P1", "P2", "P3")
 ACTION_LABELS = {
@@ -635,8 +638,17 @@ def publish_report(
         draft = json.loads(result_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ReportValidationError(f"無法讀取審查 context 或結果 JSON：{exc}") from exc
+    if manifest.get("schema") == "merge-reviewer-group-context/v1":
+        import group_review
+        return group_review.publish(context_dir, draft, manifest, report_dir, include_json)
     result = validate_result(draft, manifest, context_dir, timeout=timeout)
     markdown = render_markdown(result, manifest)
+    if manifest.get("mr_context"):
+        import mr_contract
+        body = mr_contract.normalize_body(markdown)
+        markdown, metadata = mr_contract.bind_report(body, manifest, result)
+        result.update(report_metadata=metadata, report_body=body)
+        include_json = True
     if report_dir is None:
         report_dir = Path(manifest["repo"]) / "review-reports"
     report_dir = report_dir.expanduser().resolve()
@@ -709,7 +721,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout=args.git_timeout,
             include_json=args.include_json,
         )
-    except (ReportValidationError, OSError, subprocess.TimeoutExpired) as exc:
+    except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
         print(f"review-report: 審查報告未建立：{exc}", file=sys.stderr)
         return 2
     print(
