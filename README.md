@@ -11,7 +11,9 @@
 - **證據導向 finding**：依 P0、P1、P2、P3 排序，記錄觸發條件、程式證據、影響與聚焦的修正方向。
 - **多 repository 工作區支援**：可指定 repository 名稱或路徑，也能處理 VS Code `.code-workspace`。
 - **快速本地分支審查**：一行自動辨識目前分支、遠端預設主分支與最新 base；可選擇納入已儲存但尚未提交的檔案。
-- **可查證的審查報告**：記錄逐檔覆蓋與固定版本證據，驗證一致性後預設產生 Markdown；需要程式整合時可選擇附加 JSON 報告。
+- **可查證的審查報告**：記錄逐檔覆蓋與固定版本證據，驗證一致性後預設產生 Markdown；單一 Repo 可選 JSON。GitLab MR 模式會固定兩邊 SHA，並自動產生綁定版本的 Markdown 與 JSON 報告。
+- **Group 快速審查**：從未受 Git 版控的 Group 根目錄，分別取得每個直屬 Repo 的 staged index 與工作檔快照，再與本機 HEAD 比較；不連線或更新遠端分支。
+- **GitLab MR 報告**：使用 GitlabWorkSpace 傳入的實際 Repo、來源／目標專案與 SHA；分別保留 fork 身分及正文摘要供工作台驗證。
 
 ## 需求環境
 
@@ -50,18 +52,19 @@ Copy-Item -Recurse .\skills\merge-reviewer "$HOME\.codex\skills\merge-reviewer"
 目前版本記錄在 `skills/merge-reviewer/VERSION`，採用 `X.Y.Z` 的 SemVer 格式。GitHub Release 的 tag 必須與版本檔一致，例如：
 
 ```text
-VERSION: 0.3.0
-tag: v0.3.0
+VERSION: 0.5.0
+tag: v0.5.0
 ```
 
 完成版本變更並推送到 `main` 後，建立並推送 tag 即可觸發 Release workflow：
 
 ```powershell
-git tag -a v0.3.0 -m "Release v0.3.0"
-git push origin v0.3.0
+$releaseVersion = (Get-Content skills\merge-reviewer\VERSION -Raw).Trim()
+git tag -a "v$releaseVersion" -m "Release v$releaseVersion"
+git push origin "v$releaseVersion"
 ```
 
-Workflow 會先執行單元測試，再建立 `merge-reviewer-0.3.0.zip`。Release 附件內含可直接複製到 Codex skill 目錄的 `merge-reviewer` 資料夾，不包含 repository 的測試檔或其他開發檔案。
+將版本更新寫入 `skills/merge-reviewer/VERSION` 後，以該值建立對應的 tag。已發布的 [v0.5.0 Release](https://github.com/dennis8499/MergeReviewer/releases/tag/v0.5.0) 附有 `merge-reviewer-0.5.0.zip`；套件只含可複製到 Codex skill 目錄的 `merge-reviewer` 資料夾，不含 repository 測試或開發檔案。該版本的 [GitHub Actions CI](https://github.com/dennis8499/MergeReviewer/actions/runs/37129508793) 已成功。
 
 若 workflow 建立 Release 時收到權限錯誤，請在 GitHub repository 的 **Settings → Actions → General → Workflow permissions** 啟用 **Read and write permissions**；組織層級政策可能限制此設定。
 
@@ -95,13 +98,15 @@ $merge-reviewer 快速審查 遠端=upstream
 
 | 參數 | 必要性 | 說明 |
 | --- | --- | --- |
-| `專案名稱` | 多 repository 時必要 | Repository 資料夾名稱或路徑。工作區只有一個 repository 時可省略。 |
-| `基礎分支` | 必要 | 本機分支、明確 remote ref、tag 或 commit。未加 remote 前綴的分支只查本機。 |
-| `比較分支` | 必要 | 要審查的本機分支、明確 remote ref、tag 或 commit。未加 remote 前綴的分支只查本機。 |
-| `比較模式` | 選填 | `合併前審查`（預設）或 `直接比較`。 |
-| `快速審查` | 選填 | 使用目前本地分支與遠端預設主分支；不可同時指定 `比較分支`。 |
-| `遠端` | 快速模式選填 | 多個 remote 時指定要使用的 remote；單一 remote 會自動選取。 |
-| `包含未提交變更` | 快速模式選填 | 將工作區建立成固定 tree 快照後納入比較。 |
+| `專案名稱` | 多 Repo ref／快速模式時可選 | Repository 名稱或路徑。目標 workspace 只有一個 Repo 時可省略。 |
+| `基礎分支` | ref 比較必需；Group／MR／快速模式不需要 | 指定 ref 比較的 base。快速模式自動選遠端預設分支；MR 模式讀取任務中的固定目標 SHA。 |
+| `比較分支` | ref 比較必需；Group／MR／快速模式不需要 | 指定 ref 比較的 head。快速模式使用本機 `HEAD`；MR 模式讀取任務中的固定來源 SHA。 |
+| `比較模式` | 選填，僅 ref 比較 | `合併前審查`（預設）或 `直接比較`。 |
+| `快速審查` | 單一 Repo 快速模式選填；Group 模式須和 `--group-root` 一起使用 | 單 Repo 使用目前本機分支與遠端預設分支；Group 使用每個 Repo 的本機快照，不查遠端。 |
+| `Group 根目錄`／`--group-root` | Group 快速審查必需 | 明確指定非 Git Group 根目錄；只掃描直屬 Git Repo，每個 Repo 分開凍結 index 與工作檔證據。 |
+| `MR 任務`／`--mr-context` | GitlabWorkSpace MR 模式必需 | 指定固定的 `MergeReviewTask/v1` JSON；使用實際 GitLab／fork 身分及來源／目標 SHA。 |
+| `遠端` | 單 Repo 快速模式選填 | 多個 remote 時明確指定；Group 模式不連線遠端。 |
+| `包含未提交變更` | 單 Repo 快速模式選填 | 建立固定 tree snapshot，納入 staged、unstaged 與非 ignored 的 untracked files。 |
 
 Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求選擇。指定的 ref 找不到時會直接回傳錯誤，不會改查 upstream、同名本機／遠端分支或過期快取。
 
@@ -268,6 +273,14 @@ python -m unittest discover -s tests -v
 ```
 
 GitHub Actions 會在 pull request、`main` 推送與 tag Release 執行 Linux／Windows × Python 3.10／3.14 測試矩陣。Release 必須先通過相同檢查。
+
+MR 任務可直接交由 helper 建立版本固定 context：
+
+```powershell
+python skills\merge-reviewer\scripts\git_review_context.py --mr-context <task.json> --format json --pretty
+```
+
+MR 模式自動產生 Markdown 與 JSON companion，兩份報告都綁定 GitLab MR、Repo 與實際比較 SHA。Group 模式指令、快照契約及獨立結果格式見 [Group 快速審查](skills/merge-reviewer/references/group-review.md)；任務 JSON 及工作台驗證方式見 [固定 MR 任務與可攜報告](skills/merge-reviewer/references/mr-contract.md)。Merge Reviewer 不會替使用者發佈留言、核准或合併 MR。
 
 自動 CI 驗證 Git context、輸出證據與報告格式；Skill 的漏報與誤報仍依 [`tests/review_quality_cases.md`](tests/review_quality_cases.md) 人工驗收，避免把 deterministic Git 測試誤當成模型審查品質評估。
 
