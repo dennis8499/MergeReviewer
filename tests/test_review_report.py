@@ -137,7 +137,7 @@ class ReviewReportTests(unittest.TestCase):
 
         self.assertTrue(markdown_path.is_file())
         self.assertIsNone(json_path)
-        self.assertEqual([markdown_path], list(self.report_dir.iterdir()))
+        self.assertEqual([markdown_path.resolve()], [path.resolve() for path in self.report_dir.iterdir()])
         self.assertFalse(context.exists())
 
     def test_owned_context_is_removed_when_validation_fails(self) -> None:
@@ -180,7 +180,7 @@ class ReviewReportTests(unittest.TestCase):
         self.assertTrue(context.exists())
         reports = list(self.report_dir.glob("*.md"))
         self.assertEqual(1, len(reports))
-        self.assertIn(str(reports[0]), stderr.getvalue())
+        self.assertIn(str(reports[0].resolve()), stderr.getvalue())
 
     def test_fixed_mr_report_defaults_to_markdown_with_import_metadata(self) -> None:
         self.manifest["diff_base"] = self.head
