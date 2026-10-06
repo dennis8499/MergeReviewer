@@ -1,5 +1,10 @@
 # Change log
 
+## 0.7.0
+
+- Standalone release contains only the single-repository reviewer. Group review and GitLab MR support now arrive as a separately installed Workspace extension.
+- Add an optional `workspace_extension.py` adapter hook; native argument parsing and report publishing remain unchanged when no extension is installed.
+
 ## 0.6.0
 
 - All review modes keep evidence contexts in marked system-temporary directories. Report generation cleans the current owned context on success and failure; interrupted reviews have a verified cleanup command.

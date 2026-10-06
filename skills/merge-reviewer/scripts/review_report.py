@@ -682,16 +682,15 @@ def _publish_report_contents(
         draft = json.loads(result_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ReportValidationError(f"無法讀取審查 context 或結果 JSON：{exc}") from exc
-    if manifest.get("schema") == "merge-reviewer-group-context/v1":
-        import group_review
-        return group_review.publish(context_dir, draft, manifest, report_dir, include_json)
+    extension = _workspace_extension()
+    if extension:
+        routed = extension.publish_group(context_dir, draft, manifest, report_dir, include_json)
+        if routed is not None:
+            return routed
     result = validate_result(draft, manifest, context_dir, timeout=timeout)
     markdown = render_markdown(result, manifest)
-    if manifest.get("mr_context"):
-        import mr_contract
-        body = mr_contract.normalize_body(markdown)
-        markdown, metadata = mr_contract.bind_report(body, manifest, result)
-        result.update(report_metadata=metadata, report_body=body)
+    if extension:
+        markdown = extension.adapt_report(markdown, manifest, result)
     if report_dir is None:
         report_dir = Path(manifest["repo"]) / "review-reports"
     report_dir = report_dir.expanduser().resolve()
@@ -737,6 +736,21 @@ def _publish_report_contents(
                 raise
         return markdown_path, json_path if include_json else None
     raise ReportValidationError("同一秒內建立報告次數已達上限。")
+
+
+def _workspace_extension():
+    """Load an optional host-specific adapter supplied alongside the installed Skill."""
+    import importlib.util
+
+    path = Path(__file__).with_name("workspace_extension.py")
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("merge_reviewer_workspace_extension", path)
+    if spec is None or spec.loader is None:
+        raise ReportValidationError("無法載入本機 Merge Reviewer extension。")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:

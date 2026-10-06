@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import base64
 import hashlib
 import io
 import os
@@ -181,50 +180,6 @@ class ReviewReportTests(unittest.TestCase):
         reports = list(self.report_dir.glob("*.md"))
         self.assertEqual(1, len(reports))
         self.assertIn(str(reports[0].resolve()), stderr.getvalue())
-
-    def test_fixed_mr_report_defaults_to_markdown_with_import_metadata(self) -> None:
-        self.manifest["diff_base"] = self.head
-        self.manifest["mr_context"] = {
-            "schema": "MergeReviewTask/v1", "origin": "https://gitlab.example.invalid",
-            "projectId": 10, "mrIid": 4, "targetProjectId": 10, "sourceProjectId": 20,
-            "sourceSha": self.head, "targetSha": self.head, "sourceBranch": "feature",
-            "targetBranch": "main", "repoPath": str(self.repo), "sourceRemoteUrl": "unused",
-            "targetRemoteUrl": "unused", "mode": "merge",
-        }
-        (self.context_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
-
-        markdown_path, json_path = self.publish()
-
-        self.assertIsNone(json_path)
-        markdown = markdown_path.read_text(encoding="utf-8")
-        metadata = json.loads(base64.b64decode(markdown.split("<!-- merge-review-report:")[1].split(" -->")[0]))
-        self.assertEqual("MergeReviewReport/v1", metadata["schema"])
-        self.assertEqual(20, metadata["sourceProjectId"])
-        self.assertEqual(self.head, metadata["targetSha"])
-
-    def test_fixed_mr_report_automatically_preserves_portable_json_and_incomplete_state(self) -> None:
-        self.manifest["diff_base"] = self.head
-        self.manifest["mr_context"] = {
-            "schema": "MergeReviewTask/v1", "origin": "https://gitlab.example.invalid",
-            "projectId": 10, "mrIid": 4, "targetProjectId": 10, "sourceProjectId": 20,
-            "sourceSha": self.head, "targetSha": self.head, "sourceBranch": "feature",
-            "targetBranch": "main", "repoPath": str(self.repo), "sourceRemoteUrl": "unused",
-            "targetRemoteUrl": "unused", "mode": "merge",
-        }
-        (self.context_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
-        draft = self.valid_draft()
-        draft["limitations"] = ["One dependency was unavailable."]
-        draft["coverage"][0].update(status="metadata-only", reason="Dependency content unavailable.")
-        markdown_path, json_path = self.publish(draft, include_json=True)
-        self.assertIsNotNone(json_path)
-        payload = json.loads(json_path.read_text(encoding="utf-8"))
-        markdown = markdown_path.read_text(encoding="utf-8")
-        encoded = markdown.split("<!-- merge-review-report:")[1].split(" -->")[0]
-        metadata = json.loads(base64.b64decode(encoded))
-        self.assertEqual(metadata, payload["report_metadata"])
-        self.assertFalse(metadata["reviewComplete"])
-        self.assertEqual(20, metadata["sourceProjectId"])
-        self.assertEqual(hashlib.sha256(payload["report_body"].encode("utf-8")).hexdigest(), metadata["bodySha256"])
 
     def test_include_json_writes_matching_json_and_markdown_reports(self) -> None:
         markdown_path, json_path = self.publish(include_json=True)

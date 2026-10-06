@@ -1577,13 +1577,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     token = GIT_TIMEOUT_SECONDS.set(timeout)
     succeeded = False
     try:
-        if getattr(args, "group_root", None):
-            import group_review
-            result = group_review.build(args, sys.modules[__name__])
-        else:
-            if getattr(args, "mr_context", None) or getattr(args, "mr_context_base64", None):
-                import mr_contract
-                mr_contract.prepare(args, sys.modules[__name__])
+        extension = _workspace_extension()
+        result = extension.prepare_manifest(args, sys.modules[__name__]) if extension else None
+        if result is None:
             result = _build_manifest(args)
         succeeded = True
         return result
@@ -1599,10 +1595,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect immutable Git context for Merge Reviewer.")
     parser.add_argument("--workspace", default=os.getcwd(), help="Workspace root to search for repositories.")
-    parser.add_argument("--group-root", help="Review all direct-child Repos' staged and working files locally with --quick.")
-    mr_context = parser.add_mutually_exclusive_group()
-    mr_context.add_argument("--mr-context", help="Read a MergeReviewTask/v1 JSON file.")
-    mr_context.add_argument("--mr-context-base64", help="Read a base64-encoded MergeReviewTask/v1 JSON value.")
+    extension = _workspace_extension()
+    if extension:
+        extension.extend_parser(parser)
     parser.add_argument("--workspace-file", help="Optional VS Code .code-workspace file.")
     parser.add_argument("--project", help="Repository folder name or path.")
     parser.add_argument("--quick", action="store_true", help="Compare the current local branch with a remote default branch.")
@@ -1626,6 +1621,21 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Maximum seconds to wait for each Git command (default: 180).",
     )
     return parser.parse_args(argv)
+
+
+def _workspace_extension():
+    """Load an optional host-specific adapter supplied alongside the installed Skill."""
+    import importlib.util
+
+    path = Path(__file__).with_name("workspace_extension.py")
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("merge_reviewer_workspace_extension", path)
+    if spec is None or spec.loader is None:
+        raise ReviewContextError("無法載入本機 Merge Reviewer extension。")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def main(argv: Sequence[str] | None = None) -> int:

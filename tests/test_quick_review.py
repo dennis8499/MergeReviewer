@@ -46,6 +46,12 @@ class QuickReviewTests(unittest.TestCase):
             self.context_dirs.append(Path(payload["context_dir"]))
         return result, payload
 
+    def test_group_and_mr_arguments_are_not_part_of_the_native_skill(self) -> None:
+        result = run_python(SCRIPT, "--help")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("--group-root", result.stdout)
+        self.assertNotIn("--mr-context", result.stdout)
+
     def test_quick_uses_current_head_and_remote_default_branch(self) -> None:
         (self.repo / "local.txt").write_text("local\n", encoding="utf-8")
         git(self.repo, "add", "local.txt")
