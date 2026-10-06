@@ -44,11 +44,14 @@ behavior findings and retains all source citations. Never merge different
 version-specific failures.
 
 Run `review_report.py --context-dir <context> --result <draft>`; optional
-`--include-json` retains the structured report. The default output is
+`--include-json` retains the structured report. The report command removes the
+owned system-temporary context after successful or failed publication. If a
+review ends before publication, run `review_session.py cleanup --context-dir
+<context>` first. The default output is
 `<Group>/review-reports/<run-id>/summary.md` and one report per Repo. Use
 submission recommendations, not merge recommendations. Show all Repo states,
-P0–P3 counts, findings, source/version citations and uncovered paths. Keep the
-context until all reports are successfully created; retain it on errors.
+P0–P3 counts, findings, source/version citations and uncovered paths. A failed
+publication clears the current owned context; rebuild it when trying again.
 
 This review does not replace Megin's independent review/verification/acceptance
 gates and never stages, commits or fixes products.

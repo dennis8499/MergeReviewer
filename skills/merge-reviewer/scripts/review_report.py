@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Sequence
 
+sys.dont_write_bytecode = True
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -630,7 +632,49 @@ def publish_report(
     timeout: float = 180.0,
     include_json: bool = False,
 ) -> tuple[Path, Path | None]:
-    context_dir = context_dir.expanduser().resolve()
+    import review_session
+
+    context_dir = context_dir.expanduser().absolute()
+    published: tuple[Path, Path | None] | None = None
+    cleanup_required = False
+    try:
+        manifest_path = context_dir / "manifest.json"
+        if manifest_path.is_file():
+            try:
+                manifest_hint = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                manifest_hint = {}
+            cleanup_required = manifest_hint.get("context_cleanup_required") is True
+            if cleanup_required:
+                review_session.validate_session(context_dir)
+        published = _publish_report_contents(
+            context_dir, result_file, report_dir, timeout=timeout, include_json=include_json
+        )
+        return published
+    finally:
+        try:
+            if cleanup_required:
+                review_session.cleanup_session(context_dir)
+            else:
+                review_session.cleanup_if_owned(context_dir)
+        except (OSError, ValueError) as exc:
+            if published:
+                raise review_session.SessionError(
+                    f"報告已建立，但暫存清理失敗；報告：{published[0]}"
+                    + (f"、{published[1]}" if published[1] else "")
+                    + f"；殘留路徑：{context_dir}（{exc}）"
+                ) from exc
+            raise
+
+
+def _publish_report_contents(
+    context_dir: Path,
+    result_file: Path,
+    report_dir: Path | None = None,
+    *,
+    timeout: float = 180.0,
+    include_json: bool = False,
+) -> tuple[Path, Path | None]:
     result_file = result_file.expanduser().resolve()
     manifest_path = context_dir / "manifest.json"
     try:
@@ -648,7 +692,6 @@ def publish_report(
         body = mr_contract.normalize_body(markdown)
         markdown, metadata = mr_contract.bind_report(body, manifest, result)
         result.update(report_metadata=metadata, report_body=body)
-        include_json = True
     if report_dir is None:
         report_dir = Path(manifest["repo"]) / "review-reports"
     report_dir = report_dir.expanduser().resolve()
@@ -709,6 +752,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    import review_session
+
     args = parse_args(argv if argv is not None else sys.argv[1:])
     if not math.isfinite(args.git_timeout) or args.git_timeout <= 0:
         print("review-report: --git-timeout 必須大於零。", file=sys.stderr)
@@ -721,6 +766,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout=args.git_timeout,
             include_json=args.include_json,
         )
+    except review_session.SessionError as exc:
+        print(f"review-report: cleanup failed: {exc}", file=sys.stderr)
+        return 2
     except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
         print(f"review-report: 審查報告未建立：{exc}", file=sys.stderr)
         return 2

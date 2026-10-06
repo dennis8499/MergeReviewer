@@ -121,7 +121,7 @@ def step_run_working_tree(context):
     context.index_path = index_path
     context.context_dirs = getattr(context, "context_dirs", [])
     if context.payload and context.payload.get("context_dir"):
-        context.context_dirs.append(Path(context.payload["context_dir"]).parent)
+        context.context_dirs.append(Path(context.payload["context_dir"]))
 
 
 def step_run_with_base(context, base):
@@ -314,7 +314,7 @@ def step_run_both(context):
     for result in (context.first_result, context.second_result):
         if result[1] and result[1].get("context_dir"):
             context.context_dirs = getattr(context, "context_dirs", [])
-            context.context_dirs.append(Path(result[1]["context_dir"]).parent)
+            context.context_dirs.append(Path(result[1]["context_dir"]))
 
 
 def step_working_changes(context):

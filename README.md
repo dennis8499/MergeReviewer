@@ -92,7 +92,7 @@ $merge-reviewer 快速審查 包含未提交變更
 $merge-reviewer 快速審查 遠端=upstream
 ```
 
-快速模式只需要一行即可使用目前本地分支的 `HEAD`，不要求開發分支已 push。預設只看已提交內容；`包含未提交變更` 會把 staged、unstaged、刪除與未忽略的未追蹤檔案建立成固定快照，也會包含強制暫存的 ignored 檔案。若未指定 `--context-dir`，helper 會在 repository 外自動建立可供審查的 context bundle，完成報告後再刪除 `context_dir`。編輯器尚未儲存的內容不在範圍內。
+快速模式只需要一行即可使用目前本地分支的 `HEAD`，不要求開發分支已 push。預設只看已提交內容；`包含未提交變更` 會把 staged、unstaged、刪除與未忽略的未追蹤檔案建立成固定快照，也會包含強制暫存的 ignored 檔案。各模式都把 context bundle 放入系統暫存目錄；報告成功、驗證失敗或寫入失敗時都會清除本次受管理的資料。審查提前中止時，依 manifest 提示執行 `review_session.py cleanup --context-dir <context>`。編輯器尚未儲存的內容不在範圍內。
 
 ### 輸入參數
 
@@ -104,7 +104,7 @@ $merge-reviewer 快速審查 遠端=upstream
 | `比較模式` | 選填，僅 ref 比較 | `合併前審查`（預設）或 `直接比較`。 |
 | `快速審查` | 單一 Repo 快速模式選填；Group 模式須和 `--group-root` 一起使用 | 單 Repo 使用目前本機分支與遠端預設分支；Group 使用每個 Repo 的本機快照，不查遠端。 |
 | `Group 根目錄`／`--group-root` | Group 快速審查必需 | 明確指定非 Git Group 根目錄；只掃描直屬 Git Repo，每個 Repo 分開凍結 index 與工作檔證據。 |
-| `MR 任務`／`--mr-context` | GitlabWorkSpace MR 模式必需 | 指定固定的 `MergeReviewTask/v1` JSON；使用實際 GitLab／fork 身分及來源／目標 SHA。 |
+| `MR 任務`／`--mr-context-base64` | GitlabWorkSpace MR 模式必需 | 直接接收固定的 `MergeReviewTask/v1` JSON Base64；使用實際 GitLab／fork 身分及來源／目標 SHA。舊的 `--mr-context` 檔案輸入仍相容。 |
 | `遠端` | 單 Repo 快速模式選填 | 多個 remote 時明確指定；Group 模式不連線遠端。 |
 | `包含未提交變更` | 單 Repo 快速模式選填 | 建立固定 tree snapshot，納入 staged、unstaged 與非 ignored 的 untracked files。 |
 
@@ -133,7 +133,7 @@ Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求�
 - 一般指定版本比較只讀取指定的已提交版本，既存的 staged、unstaged、刪除或未追蹤變更不會混入差異，且不會要求先清理；快速模式明確使用 `包含未提交變更` 時，才會以 repository 外的 alternate index/object directory 建立固定快照。合併預覽也將新 Git objects 寫到 repository 外。唯讀 Git 查詢會停用選擇性 index 更新；
 - 自動修正程式碼、建立 commit、發布評論或推送變更。
 
-為了確認 remote 分支不是過期版本，helper 可能執行 `git fetch --no-tags --no-prune`。除 fetch、repository 外的工作區快照暫存資料與 context bundle 外，helper 不會寫入受審 repository；審查報告是唯一的 repository 產物。
+為了確認 remote 分支不是過期版本，helper 可能執行 `git fetch --no-tags --no-prune`。審查 context、結果草稿與執行時產生的 Git 證據都使用系統暫存目錄；審查報告是唯一會保留在 Repo 或 Group 工作目錄的產物。
 
 ## 報告輸出
 
@@ -222,7 +222,7 @@ python skills\merge-reviewer\scripts\git_review_context.py `
 - `--include-working-tree`：快速模式納入 staged、unstaged、刪除與未忽略的未追蹤檔案，也保留使用者以 `git add -f` 暫存的 ignored 檔案。
 - `--mode merge|direct`：選擇比較模式。
 - `--no-fetch`：只允許沒有 remote-qualified ref 的比較；指定 remote branch 時會直接回報參數衝突。
-- `--context-dir`：將 manifest、完整 patch、工作區／合併預覽檔案及其證據摘要寫入新的暫存目錄；保留到本次選定的報告都成功產生後再刪除。
+- `--context-dir`：指定系統暫存目錄下的新路徑；完成報告後自動清除受管理的本次暫存資料。審查提前中止時，使用 `review_session.py cleanup --context-dir <context>` 清除。
 - `--include-json`：除了 Markdown，另外寫入同名的結構化 JSON 審查結果。
 - `--git-timeout`：每個 Git 指令的秒數上限，預設 180 秒。
 
@@ -230,7 +230,7 @@ Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、
 
 如果 submodule 內有未提交或未初始化內容，helper 會列在 `dirty_submodule_paths` 和 `review_limitations`，此結果不能被回報為完整審查。
 
-審查流程會先在 context bundle 建立結構化 `review-result-draft.json`，再使用 `scripts/review_report.py` 驗證每一條證據並預設產生 Markdown 報告。使用者要求 `輸出JSON` 時，再加上 `--include-json` 產生同名 JSON 報告。直接比較模式也須傳入位於 repository 外的 `--context-dir`；本次選定的報告全部建立完成後才可清理整個 context bundle，若驗證或寫入失敗則保留以供重試。
+審查流程會先在受管理的系統暫存目錄建立 `review-result-draft.json`，再使用 `scripts/review_report.py` 驗證證據並預設只產生 Markdown 報告。MR 的 Markdown 內含可核對身分與 SHA 的中繼資料，維持工作台匯入能力。使用者要求 `輸出JSON` 時，再加上 `--include-json` 產生同名 JSON 報告。報告指令會自動清除本次暫存，包含驗證或寫入失敗；審查提前中止時，應使用受管理的 cleanup 指令清除 context bundle。
 
 ## 專案結構
 
@@ -277,13 +277,13 @@ GitHub Actions 會在 pull request、`main` 推送與 tag Release 執行 Linux�
 MR 任務可直接交由 helper 建立版本固定 context：
 
 ```powershell
-python skills\merge-reviewer\scripts\git_review_context.py --mr-context <task.json> --format json --pretty
+python skills\merge-reviewer\scripts\git_review_context.py --mr-context-base64 <task-base64> --format json --pretty
 ```
 
-MR 模式自動產生 Markdown 與 JSON companion，兩份報告都綁定 GitLab MR、Repo 與實際比較 SHA。Group 模式指令、快照契約及獨立結果格式見 [Group 快速審查](skills/merge-reviewer/references/group-review.md)；任務 JSON 及工作台驗證方式見 [固定 MR 任務與可攜報告](skills/merge-reviewer/references/mr-contract.md)。Merge Reviewer 不會替使用者發佈留言、核准或合併 MR。
+MR 模式預設只產生 Markdown，報告含有 GitLab MR、Repo 與實際比較 SHA 的驗證中繼資料；要求 JSON 時才產生 JSON companion。Group 模式指令、快照契約及獨立結果格式見 [Group 快速審查](skills/merge-reviewer/references/group-review.md)；固定 MR 任務及工作台驗證方式見 [固定 MR 任務與可攜報告](skills/merge-reviewer/references/mr-contract.md)。Merge Reviewer 不會替使用者發佈留言、核准或合併 MR。
 
 自動 CI 驗證 Git context、輸出證據與報告格式；Skill 的漏報與誤報仍依 [`tests/review_quality_cases.md`](tests/review_quality_cases.md) 人工驗收，避免把 deterministic Git 測試誤當成模型審查品質評估。
 
-## Group 與 GitlabWorkSpace（0.5.0）
+## Group 與 GitlabWorkSpace（0.6.0）
 
-在未受版控的 Group 使用 `--group-root <Group> --quick`，分別審查每個直接子 Repo 的暫存區與工作檔，不查遠端。Group 報告存於 Group/review-reports/run-id。工作台 MR 使用 `--mr-context <task.json>` 固定實際 Repo、來源與目標 SHA；Markdown 與 JSON 報告帶有可核對的 MR 身分及正文摘要。參見 Skill 的 group-review.md 與 mr-contract.md。
+在未受版控的 Group 使用 `--group-root <Group> --quick`，分別審查每個直接子 Repo 的暫存區與工作檔，不查遠端。Group 報告存於 Group/review-reports/run-id。工作台 MR 使用 `--mr-context-base64 <task-base64>` 固定實際 Repo、來源與目標 SHA；Markdown 報告帶有可核對的 MR 身分及正文摘要，JSON 為選用輸出。兩種入口都會自動清除本次受管理的暫存證據。參見 Skill 的 group-review.md 與 mr-contract.md。

@@ -26,6 +26,8 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
 
+sys.dont_write_bytecode = True
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -1058,7 +1060,7 @@ def write_context_bundle(
     integration: Mapping[str, Any] | None = None,
 ) -> None:
     context_dir = normalize_path(context_dir)
-    context_dir.mkdir(parents=True, exist_ok=False)
+    context_dir.mkdir(parents=True, exist_ok=True)
     try:
         (context_dir / "diff.patch").write_bytes(patch)
         if manifest.get("review_scope") == "working-tree":
@@ -1334,7 +1336,6 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
 
     temporary_dir: Path | None = None
     integration_temporary_dir: Path | None = None
-    automatic_context_parent: Path | None = None
     context_bundle_written = False
     snapshot_env: dict[str, str] | None = None
     review_right = head_sha
@@ -1512,51 +1513,44 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "temporary": True,
                 "cleaned_up_after_generation": True,
             }
-        context_dir: Path | None = None
-        if args.context_dir:
-            context_dir = normalize_path(args.context_dir)
-            if args.quick and args.include_working_tree:
-                try:
-                    context_dir.relative_to(repo)
-                except ValueError:
-                    pass
-                else:
-                    raise ReviewContextError(
-                        "工作區快照的 --context-dir 必須位於 repository 外，避免將暫存資料混入審查範圍。"
-                    )
-        elif (args.quick and args.include_working_tree) or args.mode == "merge":
-            automatic_context_parent = Path(tempfile.mkdtemp(prefix="merge-review-context-"))
-            context_dir = automatic_context_parent / "bundle"
-            manifest["context_cleanup_required"] = True
-            manifest["context_cleanup_note"] = "審查報告完成後可刪除 context_dir；helper 會保留它供工作區內容審查。"
-        if context_dir:
-            manifest["context_dir"] = str(context_dir)
-            write_context_bundle(
-                context_dir,
-                manifest,
-                repo,
-                review_right,
-                patch if isinstance(patch, bytes) else patch.encode(),
-                env=snapshot_env,
-                integration=(
-                    {
-                        **integration,
-                        "head_sha": head_sha,
-                        "env": integration_env,
-                    }
-                    if integration and integration_env and integration["tree_sha"]
-                    else None
-                ),
+        context_dir = normalize_path(args.context_dir)
+        try:
+            context_dir.relative_to(repo)
+        except ValueError:
+            pass
+        else:
+            raise ReviewContextError(
+                "--context-dir 必須位於 repository 外，避免將暫存資料混入審查範圍。"
             )
-            context_bundle_written = True
+        manifest["context_cleanup_required"] = True
+        manifest["context_cleanup_note"] = (
+            "本次 context 位於系統暫存目錄；審查結束或中止時請執行 "
+            "review_session.py cleanup --context-dir。"
+        )
+        manifest["context_dir"] = str(context_dir)
+        write_context_bundle(
+            context_dir,
+            manifest,
+            repo,
+            review_right,
+            patch if isinstance(patch, bytes) else patch.encode(),
+            env=snapshot_env,
+            integration=(
+                {
+                    **integration,
+                    "head_sha": head_sha,
+                    "env": integration_env,
+                }
+                if integration and integration_env and integration["tree_sha"]
+                else None
+            ),
+        )
         return manifest
     finally:
         if temporary_dir:
             remove_tree(temporary_dir)
         if integration_temporary_dir:
             remove_tree(integration_temporary_dir)
-        if automatic_context_parent and not context_bundle_written:
-            remove_tree(automatic_context_parent)
 
 
 def positive_timeout(value: str) -> float:
@@ -1570,27 +1564,45 @@ def positive_timeout(value: str) -> float:
 
 
 def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    import review_session
+
     timeout = getattr(args, "git_timeout", DEFAULT_GIT_TIMEOUT_SECONDS)
     if not math.isfinite(timeout) or timeout <= 0:
         raise ReviewContextError("--git-timeout 必須大於零。")
+    try:
+        session_dir = review_session.create_session(getattr(args, "context_dir", None))
+    except (OSError, ValueError) as exc:
+        raise ReviewContextError(str(exc)) from exc
+    args.context_dir = str(session_dir)
     token = GIT_TIMEOUT_SECONDS.set(timeout)
+    succeeded = False
     try:
         if getattr(args, "group_root", None):
             import group_review
-            return group_review.build(args, sys.modules[__name__])
-        if getattr(args, "mr_context", None):
-            import mr_contract
-            mr_contract.prepare(args, sys.modules[__name__])
-        return _build_manifest(args)
+            result = group_review.build(args, sys.modules[__name__])
+        else:
+            if getattr(args, "mr_context", None) or getattr(args, "mr_context_base64", None):
+                import mr_contract
+                mr_contract.prepare(args, sys.modules[__name__])
+            result = _build_manifest(args)
+        succeeded = True
+        return result
     finally:
         GIT_TIMEOUT_SECONDS.reset(token)
+        if not succeeded:
+            try:
+                review_session.cleanup_session(session_dir)
+            except (OSError, ValueError) as cleanup_error:
+                print(f"merge-reviewer: temporary cleanup failed: {cleanup_error}", file=sys.stderr)
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect immutable Git context for Merge Reviewer.")
     parser.add_argument("--workspace", default=os.getcwd(), help="Workspace root to search for repositories.")
     parser.add_argument("--group-root", help="Review all direct-child Repos' staged and working files locally with --quick.")
-    parser.add_argument("--mr-context", help="MergeReviewTask/v1 JSON with exact local Repo and source/target SHAs.")
+    mr_context = parser.add_mutually_exclusive_group()
+    mr_context.add_argument("--mr-context", help="Read a MergeReviewTask/v1 JSON file.")
+    mr_context.add_argument("--mr-context-base64", help="Read a base64-encoded MergeReviewTask/v1 JSON value.")
     parser.add_argument("--workspace-file", help="Optional VS Code .code-workspace file.")
     parser.add_argument("--project", help="Repository folder name or path.")
     parser.add_argument("--quick", action="store_true", help="Compare the current local branch with a remote default branch.")
@@ -1606,7 +1618,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--format", choices=("json",), default="json")
     parser.add_argument("--pretty", action="store_true")
-    parser.add_argument("--context-dir", help="Write manifest and complete patch files to this new directory.")
+    parser.add_argument("--context-dir", help="Create the owned evidence directory at this new path inside the system temp directory.")
     parser.add_argument(
         "--git-timeout",
         type=positive_timeout,

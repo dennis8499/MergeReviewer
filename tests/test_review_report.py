@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,10 +15,17 @@ from tests.support import create_repository_fixture, load_module, remove_tempora
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "skills" / "merge-reviewer" / "scripts" / "review_report.py"
+SESSION_SCRIPT = SCRIPT.with_name("review_session.py")
+sys.path.insert(0, str(SCRIPT.parent))
+import review_session
 
 
 def load_report_module():
     return load_module("merge_reviewer_review_report", SCRIPT)
+
+
+def load_session_module():
+    return load_module("merge_reviewer_report_test_session", SESSION_SCRIPT)
 
 
 class ReviewReportTests(unittest.TestCase):
@@ -115,6 +123,85 @@ class ReviewReportTests(unittest.TestCase):
         self.assertTrue((self.context_dir / "manifest.json").exists())
         self.assertTrue((self.context_dir / "draft.json").exists())
 
+    def test_owned_context_is_removed_after_markdown_publication(self) -> None:
+        session = load_session_module()
+        context = session.create_session(self.root / "owned-context")
+        self.manifest["context_cleanup_required"] = True
+        (context / "manifest.json").write_text(
+            json.dumps(self.manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        draft_path = context / "draft.json"
+        draft_path.write_text(json.dumps(self.valid_draft(), ensure_ascii=False), encoding="utf-8")
+
+        markdown_path, json_path = self.report_module.publish_report(context, draft_path, self.report_dir)
+
+        self.assertTrue(markdown_path.is_file())
+        self.assertIsNone(json_path)
+        self.assertEqual([markdown_path], list(self.report_dir.iterdir()))
+        self.assertFalse(context.exists())
+
+    def test_owned_context_is_removed_when_validation_fails(self) -> None:
+        session = load_session_module()
+        context = session.create_session(self.root / "invalid-context")
+        self.manifest["context_cleanup_required"] = True
+        (context / "manifest.json").write_text(
+            json.dumps(self.manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        invalid = {**self.valid_draft(), "coverage": []}
+        draft_path = context / "draft.json"
+        draft_path.write_text(json.dumps(invalid, ensure_ascii=False), encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            self.report_module.publish_report(context, draft_path, self.report_dir)
+        self.assertFalse(context.exists())
+        self.assertFalse(self.report_dir.exists())
+
+    def test_cleanup_failure_returns_failure_and_preserves_report_paths(self) -> None:
+        context = review_session.create_session(self.root / "cleanup-failure-context")
+        self.manifest["context_cleanup_required"] = True
+        (context / "manifest.json").write_text(
+            json.dumps(self.manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        draft_path = context / "draft.json"
+        draft_path.write_text(json.dumps(self.valid_draft(), ensure_ascii=False), encoding="utf-8")
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            patch("review_session._remove_tree", side_effect=OSError("temporary volume is busy")),
+            patch("sys.stdout", stdout),
+            patch("sys.stderr", stderr),
+        ):
+            exit_code = self.report_module.main([
+                "--context-dir", str(context), "--result", str(draft_path),
+                "--report-dir", str(self.report_dir),
+            ])
+
+        self.assertEqual(2, exit_code)
+        self.assertIn("cleanup failed", stderr.getvalue())
+        self.assertTrue(context.exists())
+        reports = list(self.report_dir.glob("*.md"))
+        self.assertEqual(1, len(reports))
+        self.assertIn(str(reports[0]), stderr.getvalue())
+
+    def test_fixed_mr_report_defaults_to_markdown_with_import_metadata(self) -> None:
+        self.manifest["diff_base"] = self.head
+        self.manifest["mr_context"] = {
+            "schema": "MergeReviewTask/v1", "origin": "https://gitlab.example.invalid",
+            "projectId": 10, "mrIid": 4, "targetProjectId": 10, "sourceProjectId": 20,
+            "sourceSha": self.head, "targetSha": self.head, "sourceBranch": "feature",
+            "targetBranch": "main", "repoPath": str(self.repo), "sourceRemoteUrl": "unused",
+            "targetRemoteUrl": "unused", "mode": "merge",
+        }
+        (self.context_dir / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+
+        markdown_path, json_path = self.publish()
+
+        self.assertIsNone(json_path)
+        markdown = markdown_path.read_text(encoding="utf-8")
+        metadata = json.loads(base64.b64decode(markdown.split("<!-- merge-review-report:")[1].split(" -->")[0]))
+        self.assertEqual("MergeReviewReport/v1", metadata["schema"])
+        self.assertEqual(20, metadata["sourceProjectId"])
+        self.assertEqual(self.head, metadata["targetSha"])
+
     def test_fixed_mr_report_automatically_preserves_portable_json_and_incomplete_state(self) -> None:
         self.manifest["diff_base"] = self.head
         self.manifest["mr_context"] = {
@@ -128,7 +215,7 @@ class ReviewReportTests(unittest.TestCase):
         draft = self.valid_draft()
         draft["limitations"] = ["One dependency was unavailable."]
         draft["coverage"][0].update(status="metadata-only", reason="Dependency content unavailable.")
-        markdown_path, json_path = self.publish(draft)
+        markdown_path, json_path = self.publish(draft, include_json=True)
         self.assertIsNotNone(json_path)
         payload = json.loads(json_path.read_text(encoding="utf-8"))
         markdown = markdown_path.read_text(encoding="utf-8")

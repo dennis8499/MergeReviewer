@@ -1,6 +1,8 @@
 # Fixed MR tasks and portable reports
 
-Use `git_review_context.py --mr-context <task.json>` for a GitlabWorkSpace MR.
+Use `git_review_context.py --mr-context-base64 <task-base64>` for a
+GitlabWorkSpace MR; `--mr-context <task.json>` remains compatible with existing
+task files.
 The MergeReviewTask/v1 contains origin, projectId, mrIid, sourceProjectId,
 targetProjectId, sourceBranch, targetBranch, sourceSha, targetSha, repoPath,
 sourceRemoteUrl, targetRemoteUrl and mode. repoPath is the actual local Git root,
@@ -14,12 +16,12 @@ rules remain in effect; task metadata is bound to that context.
 
 Use the normal validated review-report workflow. For an MR-bound context the
 renderer additionally embeds base64 MergeReviewReport/v1 metadata in Markdown
-and automatically writes a JSON companion with report_metadata and report_body.
-Both artifacts identify the GitLab origin, MR/project, source and target SHAs,
-actual comparison base, context digest and normalized body SHA-256. Ordinary
-single-Repo JSON output remains optional.
+and keeps the version metadata in the Markdown. The bound report identifies the
+GitLab origin, MR/project, source and target SHAs, actual comparison base,
+context digest and normalized body SHA-256. JSON output remains optional and
+contains the same bound metadata when requested.
 
-Paste the complete Markdown including its metadata or import its JSON companion
+Paste the complete Markdown including its metadata or import its optional JSON companion
 into GitlabWorkSpace. Editing the body invalidates its digest; regenerate or
 reimport a valid report. Old plain text is an unverified general comment.
 Workspace verifies identity, body digest and live source/target versions before

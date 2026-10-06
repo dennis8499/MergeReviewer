@@ -96,7 +96,7 @@ def capture_repo(api, repo: Path, output: Path, key: str) -> dict:
 
 
 def build(args, api) -> dict:
-    if not args.quick or args.project or args.base or args.head or args.mr_context:
+    if not args.quick or args.project or args.base or args.head or args.mr_context or getattr(args, "mr_context_base64", None):
         raise ValueError("--group-root requires --quick and cannot combine with project/base/head/MR context")
     root = Path(args.group_root).expanduser().resolve()
     if not root.is_dir():
@@ -105,9 +105,11 @@ def build(args, api) -> dict:
     context = Path(args.context_dir).expanduser().resolve() if args.context_dir else Path(tempfile.mkdtemp(prefix="group-review-")) / "bundle"
     if any(context.is_relative_to(p.resolve()) for p in candidates):
         raise ValueError("Group context must be outside all target Repos")
-    context.mkdir(parents=True, exist_ok=False)
+    context.mkdir(parents=True, exist_ok=True)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     result = {"schema": CONTEXT, "group_root": str(root), "context_dir": str(context),
+              "context_cleanup_required": True,
+              "context_cleanup_note": "本次 context 位於系統暫存目錄；審查結束或中止時請執行 review_session.py cleanup --context-dir。",
               "run_id": run_id, "generated_at": datetime.now(timezone.utc).isoformat(),
               "repositories": [], "limitations": [], "network_used": False}
     if not candidates:

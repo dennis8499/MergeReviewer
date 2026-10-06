@@ -38,9 +38,19 @@ def validate_task(value: dict) -> dict:
 
 
 def prepare(args, api) -> dict:
-    task = validate_task(json.loads(Path(args.mr_context).read_text(encoding="utf-8")))
+    encoded = getattr(args, "mr_context_base64", None)
+    if encoded is not None:
+        try:
+            task_json = base64.b64decode(encoded, validate=True).decode("utf-8")
+            raw_task = json.loads(task_json)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("base64 MR 任務必須是有效的 UTF-8 MergeReviewTask/v1 JSON。") from exc
+    else:
+        task_json = Path(args.mr_context).read_text(encoding="utf-8")
+        raw_task = json.loads(task_json)
+    task = validate_task(raw_task)
     if args.quick or args.group_root or args.base or args.head or args.project:
-        raise ValueError("--mr-context cannot combine with quick/group/project/base/head")
+        raise ValueError("MR context cannot combine with quick/group/project/base/head")
     repo = Path(task["repoPath"]).resolve()
     if repo.is_symlink() or Path(str(api.run_git(repo, ["rev-parse", "--show-toplevel"])).strip()).resolve() != repo:
         raise ValueError("MR local Repo path is not its Git root")

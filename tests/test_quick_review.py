@@ -43,7 +43,7 @@ class QuickReviewTests(unittest.TestCase):
         result = run_python(SCRIPT, "--workspace", str(self.repo), *args, env=environment)
         payload = json.loads(result.stdout) if result.returncode == 0 else None
         if payload and payload.get("context_dir"):
-            self.context_dirs.append(Path(payload["context_dir"]).parent)
+            self.context_dirs.append(Path(payload["context_dir"]))
         return result, payload
 
     def test_quick_uses_current_head_and_remote_default_branch(self) -> None:
@@ -1126,7 +1126,7 @@ class QuickReviewTests(unittest.TestCase):
             return original_mkdir(path, *args, **kwargs)
 
         with mock.patch.object(Path, "mkdir", new=race_mkdir):
-            with self.assertRaises(FileExistsError):
+            with self.assertRaises(helper.ReviewContextError):
                 helper.build_manifest(args)
         self.assertEqual((context_dir / "belongs-to-other-process.txt").read_text(encoding="utf-8"), "preserve me\n")
 

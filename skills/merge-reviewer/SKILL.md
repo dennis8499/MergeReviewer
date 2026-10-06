@@ -18,7 +18,8 @@ working files separately. Do not substitute the installed Skill path or run
 legacy remote-default quick review for this request.
 
 For a fixed GitlabWorkSpace MR task, read
-[references/mr-contract.md](references/mr-contract.md) and use `--mr-context`.
+[references/mr-contract.md](references/mr-contract.md) and use
+`--mr-context-base64`; the legacy `--mr-context` file option remains supported.
 The exact local Repo and source/current-target SHAs override no branches:
 missing fixed versions stop the task. The legacy workflow below handles the
 schema-4 context, then its renderer adds the MR-bound metadata and JSON
@@ -50,11 +51,11 @@ python <skill-dir>/scripts/git_review_context.py `
   --head <head-ref> `
   --mode merge `
   --git-timeout 180 `
-  --context-dir <new-directory-outside-repository> `
+  --context-dir <new-directory-inside-system-temp> `
   --format json --pretty
 ```
 
-Use `--mode direct` for direct comparison. Add `--workspace-file <file.code-workspace>` when the user identifies a specific VS Code workspace. Omit `--project` only when the helper finds exactly one repository. Always create a unique `--context-dir` outside the target repository so the result JSON and evidence bundle survive until validation and report creation.
+Use `--mode direct` for direct comparison. Add `--workspace-file <file.code-workspace>` when the user identifies a specific VS Code workspace. Omit `--project` only when the helper finds exactly one repository. The helper creates a marked evidence directory under the system temporary folder for every review mode. Pass `--context-dir` only when a fresh directory inside that folder is useful. Never create evidence under a Group, repository, or `review-reports` folder.
 
 For a one-line review of the current branch, use:
 
@@ -63,11 +64,11 @@ python <skill-dir>/scripts/git_review_context.py `
   --workspace <workspace-root> `
   --quick `
   --git-timeout 180 `
-  --context-dir <new-directory-outside-repository> `
+  --context-dir <new-directory-inside-system-temp> `
   --format json --pretty
 ```
 
-Add `--remote <name>` when the repository has multiple remotes and `--include-working-tree` to review saved local changes. `--no-fetch` is valid only when every input is local, a tag, a commit, or `HEAD`; a remote-qualified input always requires network verification and causes an immediate parameter error with `--no-fetch`. The snapshot includes force-staged ignored files and preserves the real index. Use a unique external `--context-dir` in every mode. Remove it only after the final JSON and Markdown reports have been written. Each Git command times out after 180 seconds by default; increase `--git-timeout` for unusually large repositories. The helper uses `git ls-remote --symref <remote> HEAD` to find the remote default branch. `--base <remote>/<branch>` is an explicit quick-mode override and cannot be combined with `--remote`.
+Add `--remote <name>` when the repository has multiple remotes and `--include-working-tree` to review saved local changes. `--no-fetch` is valid only when every input is local, a tag, a commit, or `HEAD`; a remote-qualified input always requires network verification and causes an immediate parameter error with `--no-fetch`. The snapshot includes force-staged ignored files and preserves the real index. The helper's output manifest gives the owned context path and cleanup command. Report generation clears its owned context on every exit, including validation and write failures. If review stops before report generation or the user cancels, run `python <skill-dir>/scripts/review_session.py cleanup --context-dir <context-directory>`. After a failed report attempt, rebuild the context and repeat the review. Each Git command times out after 180 seconds by default; increase `--git-timeout` for unusually large repositories. The helper uses `git ls-remote --symref <remote> HEAD` to find the remote default branch. `--base <remote>/<branch>` is an explicit quick-mode override and cannot be combined with `--remote`.
 
 The helper discovers `.git` directories and worktree `.git` files, resolves workspace folders, fetches only explicitly selected remote branches with an exact refspec, and then freezes the inputs to commit SHAs. It never pulls, checks out, resets, merges, or changes the user's index. A fetch failure is fatal; never silently review stale remote refs. Pure commit IDs, tags, and local branches—including local branches with an upstream—are not fetched. Use an explicit remote ref such as `origin/release` when the remote namespace is intended.
 
@@ -167,13 +168,13 @@ python <skill-dir>/scripts/review_report.py `
 
 Add `--include-json` when the user requests `輸出JSON`.
 
-The validator requires a schema-4 context and complete path coverage. It computes the final state, severity counts, and merge recommendation from context gaps, preview status, coverage, and findings. It rejects missing paths, invalid evidence line ranges, duplicate findings, impossible priorities, and invalid roles before creating files. Only this script writes the selected report files. If validation fails, correct the draft or restore the evidence bundle and rerun it; do not describe the review as complete.
+The validator requires a schema-4 context and complete path coverage. It computes the final state, severity counts, and merge recommendation from context gaps, preview status, coverage, and findings. It rejects missing paths, invalid evidence line ranges, duplicate findings, impossible priorities, and invalid roles before creating files. Only this script writes the selected report files. Report creation always clears the owned context on success or failure. If validation fails, start a new review instead of relying on a retained context.
 
 The conclusion, overview, impact statement, operation scenario, and `建議處理` must be plain language: no class, method, variable, file names, SHAs, or English jargon (use the term table in the reference). Keep those terms only in the technical sections.
 
 Use the explicit result states from the reference: `發現具體問題`, `沒有差異`, `未發現具體問題`, or `審查未完成`. Use `審查未完成` whenever a fetch, ref, merge-base, file-read, context, or nested-checkout gap prevents a complete review, even when some findings were confirmed. Use `未發現具體問題` only after the complete feasible scope was checked and no evidence-backed finding was established. Keep the overview count and finding IDs consistent with the details. Do not invent examples for `沒有差異`, `未發現具體問題`, or an unverified finding.
 
-Do not modify source files, configuration, branches, index, or history. Fetching refs, creating the external context bundle, and writing the requested report files are the only allowed mutations. The helper uses external alternate index/object directories and cleans its private temporary data after saving evidence. Preserve the context bundle until all selected reports are created successfully; then remove the full external context directory. If validation or report writing fails, retain the bundle for correction and retry. Do not auto-fix, perform a repository merge, publish comments, or create commits.
+Do not modify source files, configuration, branches, index, or history. Fetching refs, creating the owned context under system temporary storage, and writing the requested report files are the only allowed mutations. The helper uses alternate index/object directories and cleans its snapshot data after saving evidence. The report command removes the entire owned context in `finally`, including when validation or report writing fails. If semantic review stops before report creation or is cancelled, run `review_session.py cleanup --context-dir <context-directory>` before finishing. Cleanup accepts only a marked, unlinked context under system temporary storage. Never delete an old or caller-owned directory. Do not auto-fix, perform a repository merge, publish comments, or create commits.
 
 Return a concise Traditional Chinese chat summary in plain language, in this order:
 

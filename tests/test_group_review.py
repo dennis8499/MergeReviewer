@@ -1,4 +1,5 @@
 from __future__ import annotations
+import base64
 import hashlib
 import json
 import os
@@ -215,6 +216,14 @@ class GroupReviewTests(unittest.TestCase):
         self.assertFalse(meta["reviewComplete"])
         self.assertIn("merge-review-report:", body)
         self.assertEqual(hashlib.sha256(b"Review").hexdigest(), meta["bodySha256"])
+        encoded = base64.b64encode(json.dumps(task).encode("utf-8")).decode("ascii")
+        encoded_context = self.root / "encoded-mr-context"
+        inline_result = run_python(SCRIPTS / "git_review_context.py", "--mr-context-base64", encoded,
+                                   "--context-dir", str(encoded_context))
+        self.assertEqual(0, inline_result.returncode, inline_result.stderr)
+        inline_manifest = json.loads(inline_result.stdout)
+        self.assertEqual(task, inline_manifest["mr_context"])
+        self.assertTrue((encoded_context / "manifest.json").is_file())
         manifest["head_sha"] = "b" * 40
         with self.assertRaises(ValueError):
             mr_contract.bind_report("Review", manifest, {})

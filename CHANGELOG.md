@@ -1,5 +1,12 @@
 # Change log
 
+## 0.6.0
+
+- All review modes keep evidence contexts in marked system-temporary directories. Report generation cleans the current owned context on success and failure; interrupted reviews have a verified cleanup command.
+- Fixed MR Markdown keeps portable version metadata while JSON becomes optional by default.
+- GitLab Workspace can pass fixed MR tasks inline as base64 JSON instead of saving a task file in the Group.
+- Python helper entrypoints suppress runtime bytecode in installed Skill directories.
+
 ## 0.5.0
 
 - Group quick review captures direct-child Repos, including worktrees and unborn repositories,
