@@ -42,21 +42,26 @@ def _is_link(path: Path) -> bool:
 def _path_in_temp(path: Path, root: Path) -> Path:
     lexical = Path(os.path.abspath(path))
     try:
-        lexical.relative_to(root)
-    except ValueError as exc:
+        resolved = lexical.resolve(strict=True)
+        is_root = os.path.samefile(resolved, root)
+    except OSError as exc:
         raise SessionError(f"審查暫存目錄必須位於系統暫存目錄內：{path}") from exc
+    if is_root:
+        raise SessionError(f"拒絕以系統暫存目錄本身作為審查暫存：{path}")
+
     probe = lexical
-    while probe != root:
+    while True:
         if _is_link(probe):
             raise SessionError(f"審查暫存路徑不能包含符號連結或 Junction：{probe}")
+        try:
+            reaches_root = os.path.samefile(probe, root)
+        except OSError as exc:
+            raise SessionError(f"審查暫存目錄必須位於系統暫存目錄內：{path}") from exc
+        if reaches_root:
+            break
+        if probe.parent == probe:
+            raise SessionError(f"審查暫存目錄必須位於系統暫存目錄內：{path}")
         probe = probe.parent
-    try:
-        resolved = path.resolve(strict=True)
-        resolved.relative_to(root)
-    except (OSError, ValueError) as exc:
-        raise SessionError(f"審查暫存目錄必須位於系統暫存目錄內：{path}") from exc
-    if resolved == root:
-        raise SessionError(f"拒絕以系統暫存目錄本身作為審查暫存：{path}")
     return resolved
 
 

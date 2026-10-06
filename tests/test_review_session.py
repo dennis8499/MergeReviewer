@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ctypes
+import os
 from pathlib import Path
 import tempfile
+import uuid
 import unittest
 
 from tests.support import load_module
@@ -45,6 +48,31 @@ class ReviewSessionTests(unittest.TestCase):
         with self.assertRaises(SESSION.SessionError):
             SESSION.create_session(outside)
         self.assertFalse(outside.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows short-path aliases are platform-specific")
+    def test_short_path_alias_inside_the_system_temp_folder_is_accepted(self) -> None:
+        root = SESSION.temp_root()
+        buffer = ctypes.create_unicode_buffer(32768)
+        get_short_path_name = ctypes.windll.kernel32.GetShortPathNameW
+        get_short_path_name.argtypes = (
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+        )
+        get_short_path_name.restype = ctypes.c_uint32
+        length = get_short_path_name(str(root), ctypes.cast(buffer, ctypes.c_wchar_p), len(buffer))
+        if not length or length >= len(buffer):
+            self.skipTest("the system temporary directory has no short-path alias")
+        alias = Path(buffer.value)
+        if os.path.normcase(str(alias)) == os.path.normcase(str(root)):
+            self.skipTest("the system temporary directory has no short-path alias")
+
+        context = SESSION.create_session(alias / f"merge-reviewer-short-{uuid.uuid4().hex}")
+        try:
+            self.assertEqual(root, context.parent)
+            self.assertEqual(context, SESSION.validate_session(context))
+        finally:
+            SESSION.cleanup_session(context)
 
     def test_linked_session_paths_are_rejected(self) -> None:
         context = SESSION.create_session(self.root / "context")
