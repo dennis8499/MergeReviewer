@@ -1581,6 +1581,20 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         result = extension.prepare_manifest(args, sys.modules[__name__]) if extension else None
         if result is None:
             result = _build_manifest(args)
+        if getattr(args, "megin_receipt", None) and not getattr(args, "megin_binding", None):
+            from delivery_binding import bind_delivery
+            if getattr(args, "include_working_tree", False):
+                raise ReviewContextError("--megin-receipt requires committed refs without working-tree changes")
+            try:
+                receipt = json.loads(Path(args.megin_receipt).read_text(encoding="utf-8"))
+                result["megin_binding"] = bind_delivery(receipt, result)
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                raise ReviewContextError(f"Megin receipt is invalid: {exc}") from exc
+        elif getattr(args, "megin_binding", None):
+            result["megin_binding"] = args.megin_binding
+        if result.get("megin_binding"):
+            Path(args.context_dir, "manifest.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         succeeded = True
         return result
     finally:
@@ -1598,6 +1612,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     extension = _workspace_extension()
     if extension:
         extension.extend_parser(parser)
+    if "--megin-receipt" not in parser._option_string_actions:
+        parser.add_argument("--megin-receipt", help="Optional immutable single-Repo Megin delivery receipt.")
     parser.add_argument("--workspace-file", help="Optional VS Code .code-workspace file.")
     parser.add_argument("--project", help="Repository folder name or path.")
     parser.add_argument("--quick", action="store_true", help="Compare the current local branch with a remote default branch.")

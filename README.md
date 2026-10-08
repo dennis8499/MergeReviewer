@@ -1,5 +1,7 @@
 # Merge Reviewer
 
+本機同步加入選填的 `--megin-receipt <receipt.json>`，可審查原生 Megin 已驗收交付的固定 feature／merge commit。Context 與報告會保存 `megin_binding`；擷取和發佈均核對歷史證據，工具可獨立安裝。未帶收據的操作維持相容，版本仍為 0.7.0。參考[收據綁定說明](skills/merge-reviewer/references/megin-receipt.md)。
+
 `Merge Reviewer` 是一個用於審查 Git 分支或 commit 合併結果的 Codex skill。它不需要 checkout 任一版本，就能以 Git object 為基礎比較兩個已提交的版本，或快速比較目前本地分支與遠端主分支，檢查合併整合可能遺失的驗證、授權、錯誤處理、設定或資料轉換邏輯，並產生繁體中文 Markdown 報告。
 
 ## 功能

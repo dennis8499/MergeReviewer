@@ -1,5 +1,10 @@
 # Change log
 
+## Unreleased local sync
+
+- Add optional native Megin delivery receipt binding to fixed committed capture and validated Markdown/JSON reports, with independent historical proof validation and no Megin installation dependency.
+- Preserve native single-Repo scope and the existing 0.7.0 version.
+
 ## 0.7.0
 
 - Standalone release contains only the single-repository reviewer. Group review and GitLab MR support now arrive as a separately installed Workspace extension.

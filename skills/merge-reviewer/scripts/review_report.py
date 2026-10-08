@@ -206,6 +206,12 @@ def validate_result(
 ) -> dict[str, Any]:
     _require(isinstance(draft, dict), "審查結果最上層必須是 JSON 物件。")
     _require(isinstance(manifest, dict), "context manifest 最上層必須是 JSON 物件。")
+    if "megin_binding" in manifest:
+        from delivery_binding import verify_manifest_binding
+        try:
+            verify_manifest_binding(manifest)
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            raise ReportValidationError(str(exc)) from exc
     _require(type(draft.get("schema_version")) is int and draft["schema_version"] == 1, "review-result schema_version 必須為 1。")
     _require(isinstance(draft.get("summary"), str) and bool(draft["summary"].strip()), "summary 不可空白。")
     for field in ("coverage", "findings", "next_steps", "tests_executed", "tests_not_executed", "limitations"):
@@ -475,6 +481,8 @@ def validate_result(
             "無法產生合併預覽：" + str(preview.get("detail") or "Git merge-tree 執行失敗。")
         )
     result["limitations"] = list(dict.fromkeys(result["limitations"]))
+    if "megin_binding" in manifest:
+        result["megin_binding"] = manifest["megin_binding"]
     return result
 
 
@@ -539,6 +547,12 @@ def render_markdown(result: dict[str, Any], manifest: dict[str, Any]) -> str:
         "| 編號 | 優先程度 | 問題 | 影響 | 建議處理者 |",
         "| --- | --- | --- | --- | --- |",
     ]
+    binding = result.get("megin_binding")
+    if binding:
+        lines[3:3] = ["## Megin 本機交付", "",
+                      f"- Work ID：`{binding['work_id']}`；計畫：`{binding['plan_version']}`",
+                      f"- 交付收據 SHA-256：`{binding['receipt_sha256']}`",
+                      f"- 固定審查 head：`{binding['head_sha']}`", ""]
     findings = result["findings"]
     for finding in findings:
         label = f"{finding['priority']} {ACTION_LABELS[finding['priority']]}"

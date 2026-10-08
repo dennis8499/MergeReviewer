@@ -20,6 +20,7 @@ Collect either the explicit values or the quick-review request:
 - `快速審查` (optional): use the current local branch as the head and discover the remote default branch
 - `遠端` (optional in quick mode): required when more than one remote exists
 - `包含未提交變更` (optional in quick mode): include staged, unstaged, and non-ignored untracked files
+- `Megin 交付收據` (optional): bind a completed single-Repo delivery to its exact feature or merge commit
 
 Do not invent a missing base or head. If there are multiple repositories or ambiguous remotes, show the candidates and ask the user to choose. An unresolved ref is an immediate error: do not substitute a local branch, upstream, tag, or stale remote-tracking ref. An unqualified branch name (`main` or `feature/login`) and `refs/heads/...` resolve only in the local branch namespace; an unqualified name may still resolve a local tag when no same-named local branch exists. `origin/main` and `refs/remotes/origin/main` resolve only in the named remote namespace. Quick mode uses the current local branch's `HEAD`, does not require that branch to be pushed, and rejects detached `HEAD`.
 
@@ -40,6 +41,8 @@ python <skill-dir>/scripts/git_review_context.py `
 ```
 
 Use `--mode direct` for direct comparison. Add `--workspace-file <file.code-workspace>` when the user identifies a specific VS Code workspace. Omit `--project` only when the helper finds exactly one repository. The helper creates a marked evidence directory under the system temporary folder for every review mode. Pass `--context-dir` only when a fresh directory inside that folder is useful. Never create evidence inside the selected repository or its `review-reports` folder.
+
+For a completed native Megin delivery, read [megin-receipt.md](references/megin-receipt.md) and add `--megin-receipt <receipt.json>`. Review only its fixed feature or merge commit, preserve `megin_binding`, and publish through the normal report helper, which revalidates the historical proof. Receipt capture works independently of an installed Megin bundle.
 
 For a one-line review of the current branch, use:
 
