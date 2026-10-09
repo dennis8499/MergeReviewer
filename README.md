@@ -1,6 +1,6 @@
 # Merge Reviewer
 
-本機同步加入選填的 `--megin-receipt <receipt.json>`，可審查原生 Megin 已驗收交付的固定 feature／merge commit。Context 與報告會保存 `megin_binding`；擷取和發佈均核對歷史證據，工具可獨立安裝。未帶收據的操作維持相容，版本仍為 0.7.0。參考[收據綁定說明](skills/merge-reviewer/references/megin-receipt.md)。
+0.8.0 加入選填的 `--megin-receipt <receipt.json>`，可審查原生 Megin 已驗收交付的固定 feature／merge commit。Context 與報告會保存 `megin_binding`；擷取和發佈均核對歷史證據，工具可獨立安裝。未帶收據的操作維持相容。參考[收據綁定說明](skills/merge-reviewer/references/megin-receipt.md)。
 
 `Merge Reviewer` 是一個用於審查 Git 分支或 commit 合併結果的 Codex skill。它不需要 checkout 任一版本，就能以 Git object 為基礎比較兩個已提交的版本，或快速比較目前本地分支與遠端主分支，檢查合併整合可能遺失的驗證、授權、錯誤處理、設定或資料轉換邏輯，並產生繁體中文 Markdown 報告。
 
@@ -52,8 +52,8 @@ Copy-Item -Recurse .\skills\merge-reviewer "$HOME\.codex\skills\merge-reviewer"
 目前版本記錄在 `skills/merge-reviewer/VERSION`，採用 `X.Y.Z` 的 SemVer 格式。GitHub Release 的 tag 必須與版本檔一致，例如：
 
 ```text
-VERSION: 0.5.0
-tag: v0.5.0
+VERSION: 0.8.0
+tag: v0.8.0
 ```
 
 完成版本變更並推送到 `main` 後，建立並推送 tag 即可觸發 Release workflow：
@@ -64,7 +64,7 @@ git tag -a "v$releaseVersion" -m "Release v$releaseVersion"
 git push origin "v$releaseVersion"
 ```
 
-將版本更新寫入 `skills/merge-reviewer/VERSION` 後，以該值建立對應的 tag。已發布的 [v0.5.0 Release](https://github.com/dennis8499/MergeReviewer/releases/tag/v0.5.0) 附有 `merge-reviewer-0.5.0.zip`；套件只含可複製到 Codex skill 目錄的 `merge-reviewer` 資料夾，不含 repository 測試或開發檔案。該版本的 [GitHub Actions CI](https://github.com/dennis8499/MergeReviewer/actions/runs/37129508793) 已成功。
+將版本更新寫入 `skills/merge-reviewer/VERSION` 後，以該值建立對應的 tag。Release workflow 通過跨平台 CI 後，會在 [Releases 頁面](https://github.com/dennis8499/MergeReviewer/releases) 提供 `merge-reviewer-<版本>.zip`；套件只含可複製到 Codex skill 目錄的 `merge-reviewer` 資料夾，不含 repository 測試或開發檔案。
 
 若 workflow 建立 Release 時收到權限錯誤，請在 GitHub repository 的 **Settings → Actions → General → Workflow permissions** 啟用 **Read and write permissions**；組織層級政策可能限制此設定。
 

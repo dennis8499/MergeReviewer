@@ -1,9 +1,9 @@
 # Change log
 
-## Unreleased local sync
+## 0.8.0
 
 - Add optional native Megin delivery receipt binding to fixed committed capture and validated Markdown/JSON reports, with independent historical proof validation and no Megin installation dependency.
-- Preserve native single-Repo scope and the existing 0.7.0 version.
+- Preserve native single-Repo scope and compatibility for reviews without a receipt.
 
 ## 0.7.0
 
