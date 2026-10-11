@@ -30,3 +30,5 @@ or a mismatched head block publication and trigger owned-context cleanup.
 Use normal per-path review coverage and fixed Git version evidence. The receipt
 binds a local delivery and does not replace review, prove test relevance, assert
 remote publication or claim an MR was merged.
+
+Native v2 contract/evidence is supported in 0.9.0. Every discovery, scan, exact-plan human approval, raw red/green output and immutable review attempt must be present and hashed in the receipt. The policy is bundled and verified independently of a Megin installation. Initial review is separate from the three-correction cap; a failed third correction cannot claim completion.

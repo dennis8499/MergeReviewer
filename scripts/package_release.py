@@ -7,7 +7,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -58,10 +58,15 @@ def build_release(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     archive_path = output_dir / f"merge-reviewer-{version}.zip"
-    with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as archive:
+    # Fixed metadata and no compressor dependency keep source pins portable.
+    with ZipFile(archive_path, "w", compression=ZIP_STORED) as archive:
         for path in files:
             relative_path = path.relative_to(skill_dir).as_posix()
-            archive.write(path, f"{ARCHIVE_ROOT}/{relative_path}")
+            info = ZipInfo(f"{ARCHIVE_ROOT}/{relative_path}", (1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            info.compress_type = ZIP_STORED
+            archive.writestr(info, path.read_bytes())
     return archive_path
 
 

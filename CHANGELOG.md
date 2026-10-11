@@ -1,5 +1,11 @@
 # Change log
 
+## 0.9.0 - 2026-10-12
+
+- Validate complete native Megin v2 discovery, approval, scenario/TDD and review-history evidence with no Megin installation dependency.
+- Retain standalone explicit-ref, local modification and native v1 receipt review.
+- Use fixed ZIP metadata without compressor dependencies so release hashes are reproducible across checkout times and platforms.
+
 ## 0.8.0
 
 - Add optional native Megin delivery receipt binding to fixed committed capture and validated Markdown/JSON reports, with independent historical proof validation and no Megin installation dependency.

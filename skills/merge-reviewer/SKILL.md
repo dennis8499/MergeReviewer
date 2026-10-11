@@ -188,3 +188,5 @@ $merge-reviewer 快速審查 遠端=upstream
 ```
 
 For installation outside this repository, copy or symlink `skills/merge-reviewer` into `$CODEX_HOME/skills/merge-reviewer` (or `~/.codex/skills/merge-reviewer` when `CODEX_HOME` is unset), then invoke `$merge-reviewer` or allow normal automatic skill discovery.
+
+Megin native v2 receipts require complete discovery, exact-plan human approval, requirement/BDD/TDD traceability and the append-only initial review plus up to three correction attempts. Validate these with the bundled independent `delivery_binding.py`; Megin does not need to be installed. Legacy native v1 receipts remain supported. Missing receipt evidence prevents an evidence-backed completion claim but does not prevent an ordinary standalone code review.

@@ -95,8 +95,9 @@ def validate_receipt(receipt: dict, repo: Path) -> dict:
     _require(all(isinstance(p, str) and p in raw_files for p in refs), "receipt lacks its contract/quality/delivery records")
     _require(refs[0] == prefix + version + "/quality-contract.json", "receipt contract version differs")
     contract, quality, delivery = [_json(raw_files[p]) for p in refs]
-    for value, schema in ((contract, "megin-repo-quality-contract/v1"),
-                          (quality, "megin-repo-quality-evidence/v1"),
+    native_version = "v2" if contract.get("schema") == "megin-repo-quality-contract/v2" else "v1"
+    for value, schema in ((contract, "megin-repo-quality-contract/" + native_version),
+                          (quality, "megin-repo-quality-evidence/" + native_version),
                           (delivery, "megin-repo-delivery-result/v1")):
         _require((value.get("schema"), value.get("work_id"), value.get("plan_version")) == (schema, work, version),
                  "receipt evidence identity differs")
@@ -226,6 +227,28 @@ def validate_receipt(receipt: dict, repo: Path) -> dict:
             _require(result.get("verification_inputs_sha256") == digest, "fixed input proof missing")
             expected["verification_inputs"] = "Verification inputs SHA-256: " + digest
         claims(result.get("output"), expected, require_locator=True)
+    if native_version == "v2":
+        from quality_policy import validate_evidence, evidence_paths, read_json
+        from behavior_trace import validate_trace
+        validate_trace(contract)
+        required = ((evidence_paths(contract) | evidence_paths(quality)) & set(records)) | {contract["approval_ref"]}
+        for relative in list(required):
+            _require(relative in raw_files, "new Megin evidence missing from receipt")
+            if relative.endswith(".json"):
+                required.update(evidence_paths(_json(raw_files[relative])) & set(records))
+        _require(required.issubset(raw_files), "nested Megin evidence missing from receipt")
+        reasons = []
+        def delivered_test(relative):
+            rows = _git(repo, "ls-tree", "-z", feature, "--", relative).split(b"\0")
+            _require(len(rows) == 2 and bool(rows[0]), "delivered TDD test missing")
+            metadata, name = rows[0].split(b"\t", 1)
+            mode, kind, _blob = metadata.decode("ascii").split()
+            _require(name.decode("utf-8") == relative and kind == "blob" and mode in ("100644", "100755"),
+                     "delivered TDD test is not a regular blob")
+            return _git(repo, "cat-file", "blob", feature + ":" + relative)
+        validate_evidence(repo, work, {"requirements_revision": contract.get("requirements_revision")},
+                          contract, set(records), quality, snapshot, "completion", reasons, test_reader=delivered_test)
+        _require(not reasons, "; ".join(reasons))
     return receipt
 
 

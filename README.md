@@ -52,8 +52,8 @@ Copy-Item -Recurse .\skills\merge-reviewer "$HOME\.codex\skills\merge-reviewer"
 目前版本記錄在 `skills/merge-reviewer/VERSION`，採用 `X.Y.Z` 的 SemVer 格式。GitHub Release 的 tag 必須與版本檔一致，例如：
 
 ```text
-VERSION: 0.8.0
-tag: v0.8.0
+VERSION: 0.9.0
+tag: v0.9.0
 ```
 
 完成版本變更並推送到 `main` 後，建立並推送 tag 即可觸發 Release workflow：
@@ -273,3 +273,5 @@ python -m unittest discover -s tests -v
 GitHub Actions 會在 pull request、`main` 推送與 tag Release 執行 Linux／Windows × Python 3.10／3.14 測試矩陣。Release 必須先通過相同檢查。
 
 自動 CI 驗證 Git context、輸出證據與報告格式；Skill 的漏報與誤報仍依 [`tests/review_quality_cases.md`](tests/review_quality_cases.md) 人工驗收，避免把 deterministic Git 測試誤當成模型審查品質評估。
+
+0.9.0 支援原生 Megin v2 的完整探索、核准、BDD/TDD 和追加式審查證據驗證，仍可獨立指定 Git 版本或本機修改進行 Code Review。

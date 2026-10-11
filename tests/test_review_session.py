@@ -51,7 +51,9 @@ class ReviewSessionTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "Windows short-path aliases are platform-specific")
     def test_short_path_alias_inside_the_system_temp_folder_is_accepted(self) -> None:
-        root = SESSION.temp_root()
+        # The user's Temp path may already be 8.3-compatible (e.g. denni),
+        # while an owned long-name child still has a real short alias.
+        root = self.root.resolve()
         buffer = ctypes.create_unicode_buffer(32768)
         get_short_path_name = ctypes.windll.kernel32.GetShortPathNameW
         get_short_path_name.argtypes = (

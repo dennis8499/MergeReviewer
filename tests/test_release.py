@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -73,6 +74,23 @@ class ReleasePackageTests(unittest.TestCase):
             )
 
         self.assertFalse(self.output.exists())
+
+    def test_archive_bytes_ignore_checkout_time_and_platform(self) -> None:
+        release = load_release_module()
+        arguments = dict(tag="v0.1.0", version_file=self.skill / "VERSION",
+                         skill_dir=self.skill, output_dir=self.output)
+        first = release.build_release(**arguments).read_bytes()
+        for path in self.skill.rglob("*"):
+            if path.is_file():
+                os.utime(path, (1700000000, 1700000000))
+        archive_path = release.build_release(**arguments)
+        self.assertEqual(archive_path.read_bytes(), first)
+        with ZipFile(archive_path) as archive:
+            for info in archive.infolist():
+                self.assertEqual(info.date_time, (1980, 1, 1, 0, 0, 0))
+                self.assertEqual(info.create_system, 3)
+                self.assertEqual(info.external_attr >> 16, 0o100644)
+                self.assertEqual(info.compress_type, 0)
 
     def test_invalid_version_stops_before_creating_archive(self) -> None:
         release = load_release_module()

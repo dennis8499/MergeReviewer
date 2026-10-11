@@ -209,7 +209,10 @@ def validate_result(
     if "megin_binding" in manifest:
         from delivery_binding import verify_manifest_binding
         try:
-            verify_manifest_binding(manifest)
+            extension = _workspace_extension()
+            handled = extension and getattr(extension, "verify_binding", lambda _manifest: False)(manifest)
+            if not handled:
+                verify_manifest_binding(manifest)
         except (ValueError, OSError, KeyError, TypeError) as exc:
             raise ReportValidationError(str(exc)) from exc
     _require(type(draft.get("schema_version")) is int and draft["schema_version"] == 1, "review-result schema_version 必須為 1。")
@@ -552,7 +555,9 @@ def render_markdown(result: dict[str, Any], manifest: dict[str, Any]) -> str:
         lines[3:3] = ["## Megin 本機交付", "",
                       f"- Work ID：`{binding['work_id']}`；計畫：`{binding['plan_version']}`",
                       f"- 交付收據 SHA-256：`{binding['receipt_sha256']}`",
-                      f"- 固定審查 head：`{binding['head_sha']}`", ""]
+                      # Host bindings can use a different receipt schema; the
+                      # validated context always supplies the fixed review head.
+                      f"- 固定審查 head：`{manifest['head_sha']}`", ""]
     findings = result["findings"]
     for finding in findings:
         label = f"{finding['priority']} {ACTION_LABELS[finding['priority']]}"
