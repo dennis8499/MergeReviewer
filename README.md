@@ -1,8 +1,8 @@
 # Merge Reviewer
 
-0.8.0 加入選填的 `--megin-receipt <receipt.json>`，可審查原生 Megin 已驗收交付的固定 feature／merge commit。Context 與報告會保存 `megin_binding`；擷取和發佈均核對歷史證據，工具可獨立安裝。未帶收據的操作維持相容。參考[收據綁定說明](skills/merge-reviewer/references/megin-receipt.md)。
+0.10.0 將單 Repo、Group、Stage 與未提交審查納入獨立套件。核心由 Codex 直接執行語意 Code Review，從所選變更追蹤呼叫端與上下游契約，並驗證逐檔與功能鏈覆蓋。參考[新審查流程與結果契約](skills/merge-reviewer/references/workspace-review.md)。
 
-`Merge Reviewer` 是一個用於審查 Git 分支或 commit 合併結果的 Codex skill。它不需要 checkout 任一版本，就能以 Git object 為基礎比較兩個已提交的版本，或快速比較目前本地分支與遠端主分支，檢查合併整合可能遺失的驗證、授權、錯誤處理、設定或資料轉換邏輯，並產生繁體中文 Markdown 報告。
+`Merge Reviewer` 是一個審查 Git 分支／commit、Stage 與未提交內容的 Codex skill。它以固定 Git object 或獨立快照檢查本次變更及相關功能鏈，涵蓋驗證、授權、錯誤處理、設定、資料轉換與契約相容性，並產生繁體中文 Markdown 報告。
 
 ## 功能
 
@@ -12,12 +12,14 @@
 - **Merge commit 檢查**：逐一對照 merge commit 的各個 parent 與合併結果，確認任一側的必要邏輯沒有在解衝突時遺失。
 - **證據導向 finding**：依 P0、P1、P2、P3 排序，記錄觸發條件、程式證據、影響與聚焦的修正方向。
 - **多 repository 工作區支援**：可指定 repository 名稱或路徑，也能處理 VS Code `.code-workspace`。
+- **Group 功能鏈**：以指定 Repo 為起點，追蹤相關但沒有變更的消費端、事件、套件與共用契約；無關 Repo 保留排除原因。
+- **獨立本機審查**：Stage 只看 index；未提交模式看已儲存的最終檔案，兩者都不需要 remote。
 - **快速本地分支審查**：一行自動辨識單一 Repo 的目前分支、遠端預設分支與最新 base；可選擇納入已儲存但尚未提交的檔案。
 - **可查證的審查報告**：記錄逐檔覆蓋與固定版本證據，驗證一致性後預設產生 Markdown；可選 JSON。
 
 ## 需求環境
 
-- Git，且基礎版本與比較版本可由本機 repository 或其 remote 解析。
+- Git；分支模式的基礎／比較版本需可解析，Stage 與未提交模式不要求 remote。
 - Python 3.10 以上，用於執行內附的 Git context helper。
 - 可載入 Codex skill 的環境。
 
@@ -52,8 +54,8 @@ Copy-Item -Recurse .\skills\merge-reviewer "$HOME\.codex\skills\merge-reviewer"
 目前版本記錄在 `skills/merge-reviewer/VERSION`，採用 `X.Y.Z` 的 SemVer 格式。GitHub Release 的 tag 必須與版本檔一致，例如：
 
 ```text
-VERSION: 0.9.0
-tag: v0.9.0
+VERSION: 0.10.0
+tag: v0.10.0
 ```
 
 完成版本變更並推送到 `main` 後，建立並推送 tag 即可觸發 Release workflow：
@@ -69,6 +71,29 @@ git push origin "v$releaseVersion"
 若 workflow 建立 Release 時收到權限錯誤，請在 GitHub repository 的 **Settings → Actions → General → Workflow permissions** 啟用 **Read and write permissions**；組織層級政策可能限制此設定。
 
 ## 快速開始
+
+新審查預設自動辨識單 Repo／Group；在 Group 中會延伸所選變更的功能鏈。關聯 Repo 使用工作區目前版本，不自動套用相同分支名稱：
+
+```text
+$merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature/payment
+$merge-reviewer 專案名稱=OrderService 審查目標=Stage
+$merge-reviewer 專案名稱=OrderService 審查目標=未提交
+$merge-reviewer 專案名稱=OrderService 審查範圍=單Repo 審查目標=Stage
+```
+
+Helper 的新介面為 `--scope auto|repo|group` 與 `--target branch|staged|uncommitted`。用 `--workspace-file` 提供 VS Code 的實際工作區，或以 `--group-root` 指定 Group。分支模式仍支援 base/head、SHA、merge/direct；本機模式獨立於分支比較。多 Repo 分支審查需要明確起點；Group 本機審查未指定起點時，從有修改的 Repo 開始。
+
+```powershell
+python skills/merge-reviewer/scripts/git_review_context.py --workspace <root> --scope auto --target staged --project <Repo>
+python skills/merge-reviewer/scripts/git_review_context.py --workspace <root> --scope auto --target uncommitted --project <Repo>
+python skills/merge-reviewer/scripts/git_review_context.py --workspace <root> --scope auto --target branch --project <Repo> --base main --head feature/payment
+```
+
+新模式使用獨立的 workspace context/result schema，報告由同一個 `review_report.py` 發佈至 `review-reports/merge-review-<run-id>/summary.md`，並附各相關 Repo 明細。每個變更需連結固定證據與受審功能鏈節點；必要上下游有缺口時維持「審查未完成」。Git helper 不會自行判定語意正確；Codex 會反覆搜尋、閱讀與追查，搜尋與覆蓋紀錄留在報告中。
+
+### 相容用法
+
+以下既有 CLI 與 quick 用法維持原語意；MR 與選填的 [Megin 收據](skills/merge-reviewer/references/megin-receipt.md)也維持原契約。獨立套件現在同時包含[舊 Group 雙來源 quick](skills/merge-reviewer/references/group-quick.md)。
 
 指定專案、基礎分支與比較分支：
 
@@ -274,4 +299,6 @@ GitHub Actions 會在 pull request、`main` 推送與 tag Release 執行 Linux�
 
 自動 CI 驗證 Git context、輸出證據與報告格式；Skill 的漏報與誤報仍依 [`tests/review_quality_cases.md`](tests/review_quality_cases.md) 人工驗收，避免把 deterministic Git 測試誤當成模型審查品質評估。
 
-0.9.0 支援原生 Megin v2 的完整探索、核准、BDD/TDD 和追加式審查證據驗證，仍可獨立指定 Git 版本或本機修改進行 Code Review。
+0.10.0 的實際 Codex 跨 Repo 審查與安全反例執行紀錄見 [`tests/skill_acceptance_results.md`](tests/skill_acceptance_results.md)；這是本次工作階段的靜態技能驗收，不代表一般化的模型準確率。
+
+0.10.0 保留原生 Megin v2 收據驗證及舊版分支／quick 介面。新 Repo／Group 功能鏈審查不要求安裝 Megin 或 GitlabWorkSpace。

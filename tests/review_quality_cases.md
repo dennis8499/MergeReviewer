@@ -64,3 +64,12 @@ export function charge(amount: number): Receipt { /* ... */ }
 ## 通過準則
 
 案例 1、2 必須抓到問題並引用固定版本的正確證據；案例 3、4、5 不得產生對應誤報；案例 6 必須保留逐檔缺口並維持未完成狀態。所有案例的問題編號、嚴重度、報告數量和合併建議也必須一致。測試者應保存審查報告並註記 Skill／模型版本與執行日期，供後續比較漏報和誤報變化。
+
+## 案例 7、8：跨 Repo 功能鏈與安全反例
+
+使用 `python -B tests/skill_acceptance.py --case regression` 或 `--case safe` 建立獨立的系統暫存 Group 與固定審查 context。以輸出的 request 執行實際 Codex 技能審查；這個程式只建立來源，不模擬模型的審查結論。依 workspace-review.md 搜尋、閱讀、追鏈並發佈 JSON／Markdown。
+
+- 案例 7：只有 orders-api 修改金額欄位名稱。應確認未修改 web 的回應欄位讀取、invoice-worker 的事件處理及 shared-contracts 的驗證仍要求舊欄位；至少建立一項有固定證據的相容性問題，並涵蓋前端金額錯誤與背景結算停止。相同根因可合併成一項問題。unrelated-admin 保持排除。
+- 案例 8：orders-api 同時保留舊欄位並新增別名。應追查同一條功能鏈，但不回報改名相容性問題；在全部必要檢查完成後可輸出未發現具體問題。
+- 兩例都要記錄所有 candidate Repo 的搜尋及處置；各 Repo 沿用工作區 HEAD，不要求同名 feature 分支。只有來源快照準備成功不算通過。
+- 發佈後以 review_session.py cleanup 清理 fixture_root；若提前中止，同時清理輸出的 context_dir。不要保留一次性 Git Repo 到產品目錄。

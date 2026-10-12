@@ -1,5 +1,13 @@
 # Change log
 
+## 0.10.0 - 2026-10-12
+
+- Add portable Repo/Group review with explicit auto/repo/group boundaries and independent branch/staged/uncommitted targets.
+- Freeze related Repos at their own workspace versions, retain exact index/working content and support unborn Repos without a remote.
+- Add fixed-source inventory/read/search helpers, auditable impact graphs, candidate dispositions and source-specific change coverage.
+- Validate reachable impact gaps, evidence versions, reviewed-change anchors and live version drift before publishing Group summaries and Repo details.
+- Include legacy dual-source Group quick in standalone archives; retain schema-4 quick/ref, MR and optional Megin receipt contracts.
+
 ## 0.9.0 - 2026-10-12
 
 - Validate complete native Megin v2 discovery, approval, scenario/TDD and review-history evidence with no Megin installation dependency.

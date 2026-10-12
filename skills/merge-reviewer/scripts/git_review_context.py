@@ -1580,7 +1580,14 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         extension = _workspace_extension()
         result = extension.prepare_manifest(args, sys.modules[__name__]) if extension else None
         if result is None:
-            result = _build_manifest(args)
+            if getattr(args, "scope", None) or getattr(args, "target", None):
+                from review_workspace import build
+                result = build(args, sys.modules[__name__])
+            elif getattr(args, "group_root", None):
+                from legacy_group_review import build
+                result = build(args, sys.modules[__name__])
+            else:
+                result = _build_manifest(args)
         if getattr(args, "megin_receipt", None) and not getattr(args, "megin_binding", None):
             from delivery_binding import bind_delivery
             if getattr(args, "include_working_tree", False):
@@ -1609,6 +1616,10 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect immutable Git context for Merge Reviewer.")
     parser.add_argument("--workspace", default=os.getcwd(), help="Workspace root to search for repositories.")
+    parser.add_argument("--scope", choices=("auto", "repo", "group"), help="Review boundary; new workflow defaults to auto. Omit both scope/target for legacy behavior.")
+    parser.add_argument("--target", choices=("branch", "staged", "uncommitted"), help="Fixed branch versions, index only, or final saved local files.")
+    parser.add_argument("--group-root", help="Explicit local Group root. With only --quick, preserve legacy dual-source Group review.")
+    parser.add_argument("--supporting-sources", help="Legacy Group quick supplemental committed evidence JSON.")
     extension = _workspace_extension()
     if extension:
         extension.extend_parser(parser)
@@ -1655,6 +1666,9 @@ def _workspace_extension():
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     args = parse_args(argv or sys.argv[1:])
     try:
         manifest = build_manifest(args)

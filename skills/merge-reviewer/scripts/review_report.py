@@ -204,6 +204,9 @@ def _check_snapshot_file(
 def validate_result(
     draft: dict[str, Any], manifest: dict[str, Any], context_dir: Path, *, timeout: float = 180.0
 ) -> dict[str, Any]:
+    if isinstance(manifest, dict) and manifest.get("schema") == "merge-reviewer-workspace-context/v1":
+        from workspace_report import validate
+        return validate(draft, manifest, context_dir, timeout=timeout)
     _require(isinstance(draft, dict), "審查結果最上層必須是 JSON 物件。")
     _require(isinstance(manifest, dict), "context manifest 最上層必須是 JSON 物件。")
     if "megin_binding" in manifest:
@@ -701,6 +704,12 @@ def _publish_report_contents(
         draft = json.loads(result_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ReportValidationError(f"無法讀取審查 context 或結果 JSON：{exc}") from exc
+    if manifest.get("schema") == "merge-reviewer-workspace-context/v1":
+        from workspace_report import publish
+        return publish(context_dir, draft, manifest, report_dir, include_json, timeout=timeout)
+    if manifest.get("schema") == "merge-reviewer-group-context/v1":
+        from legacy_group_review import publish
+        return publish(context_dir, draft, manifest, report_dir, include_json)
     extension = _workspace_extension()
     if extension:
         routed = extension.publish_group(context_dir, draft, manifest, report_dir, include_json)
@@ -787,6 +796,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     import review_session
 
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     args = parse_args(argv if argv is not None else sys.argv[1:])
     if not math.isfinite(args.git_timeout) or args.git_timeout <= 0:
         print("review-report: --git-timeout 必須大於零。", file=sys.stderr)
