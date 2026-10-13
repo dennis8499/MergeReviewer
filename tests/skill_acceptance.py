@@ -45,6 +45,7 @@ def prepare(case):
                                "package.json": '{"name":"invoice-worker","dependencies":{"@demo/contracts":"workspace:*"}}\n'},
             "shared-contracts": {"order.ts": "export interface OrderCreated { id: string; totalCents: number }\nexport function validateOrderCreated(payload: any): OrderCreated {\n  if (!Number.isInteger(payload.totalCents)) throw new Error('Missing totalCents');\n  return payload;\n}\nexport function buildSettlement(order: OrderCreated) {\n  return { orderId: order.id, amount: order.totalCents / 100 };\n}\n",
                                  "package.json": '{"name":"@demo/contracts","version":"1.0.0","exports":"./order.ts"}\n'},
+            "settlement-worker": {"settlement.ts": "declare function subscribe(topic: string, handler: (payload: any) => void): void;\ndeclare function settle(orderId: string, amount: number): void;\nsubscribe('settlements.ready', payload => settle(payload.orderId, payload.amount));\n"},
             "unrelated-admin": {"users.ts": "export function countUsers(users: string[]) { return users.length; }\n"},
         }
         for name, sources in files.items():

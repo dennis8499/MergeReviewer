@@ -1,6 +1,6 @@
 # Merge Reviewer
 
-0.10.0 將單 Repo、Group、Stage 與未提交審查納入獨立套件。核心由 Codex 直接執行語意 Code Review，從所選變更追蹤呼叫端與上下游契約，並驗證逐檔與功能鏈覆蓋。參考[新審查流程與結果契約](skills/merge-reviewer/references/workspace-review.md)。
+0.11.0 統一所有 Group 入口為 v2 跨 Repo 審查，保留 quick 的 index／working 雙來源，並將搜尋與排除判定綁定至實際變更契約；可獨立驗證 Megin Repo／Group v2 交付收據。Codex 直接執行語意 Code Review，工具驗證固定來源、逐檔與功能鏈覆蓋。參考[新審查流程與結果契約](skills/merge-reviewer/references/workspace-review.md)。
 
 `Merge Reviewer` 是一個審查 Git 分支／commit、Stage 與未提交內容的 Codex skill。它以固定 Git object 或獨立快照檢查本次變更及相關功能鏈，涵蓋驗證、授權、錯誤處理、設定、資料轉換與契約相容性，並產生繁體中文 Markdown 報告。
 
@@ -54,8 +54,8 @@ Copy-Item -Recurse .\skills\merge-reviewer "$HOME\.codex\skills\merge-reviewer"
 目前版本記錄在 `skills/merge-reviewer/VERSION`，採用 `X.Y.Z` 的 SemVer 格式。GitHub Release 的 tag 必須與版本檔一致，例如：
 
 ```text
-VERSION: 0.10.0
-tag: v0.10.0
+VERSION: 0.11.0
+tag: v0.11.0
 ```
 
 完成版本變更並推送到 `main` 後，建立並推送 tag 即可觸發 Release workflow：
@@ -81,7 +81,7 @@ $merge-reviewer 專案名稱=OrderService 審查目標=未提交
 $merge-reviewer 專案名稱=OrderService 審查範圍=單Repo 審查目標=Stage
 ```
 
-Helper 的新介面為 `--scope auto|repo|group` 與 `--target branch|staged|uncommitted`。用 `--workspace-file` 提供 VS Code 的實際工作區，或以 `--group-root` 指定 Group。分支模式仍支援 base/head、SHA、merge/direct；本機模式獨立於分支比較。多 Repo 分支審查需要明確起點；Group 本機審查未指定起點時，從有修改的 Repo 開始。
+Helper 的新介面為 `--scope auto|repo|group` 與 `--target branch|staged|uncommitted`。用 `--workspace-file` 提供 VS Code 的實際工作區，或以 `--group-root` 指定 Group。包含 Repo 的非 Git 容器預設維持 Group，即使目前只有一個 Repo；只有明確 `--scope repo` 才縮小該 Group。直接指定 Git 根目錄則維持單 Repo。分支模式仍支援 base/head、SHA、merge/direct；本機模式獨立於分支比較。多 Repo 分支審查需要明確起點；Group 本機審查未指定起點時，從有修改的 Repo 開始。
 
 ```powershell
 python skills/merge-reviewer/scripts/git_review_context.py --workspace <root> --scope auto --target staged --project <Repo>
@@ -299,6 +299,6 @@ GitHub Actions 會在 pull request、`main` 推送與 tag Release 執行 Linux�
 
 自動 CI 驗證 Git context、輸出證據與報告格式；Skill 的漏報與誤報仍依 [`tests/review_quality_cases.md`](tests/review_quality_cases.md) 人工驗收，避免把 deterministic Git 測試誤當成模型審查品質評估。
 
-0.10.0 的實際 Codex 跨 Repo 審查與安全反例執行紀錄見 [`tests/skill_acceptance_results.md`](tests/skill_acceptance_results.md)；這是本次工作階段的靜態技能驗收，不代表一般化的模型準確率。
+0.11.0 的實際 Codex 跨 Repo 審查與安全反例執行紀錄見 [`tests/skill_acceptance_results.md`](tests/skill_acceptance_results.md)；這是本次工作階段的靜態技能驗收，不代表一般化的模型準確率。
 
-0.10.0 保留原生 Megin v2 收據驗證及舊版分支／quick 介面。新 Repo／Group 功能鏈審查不要求安裝 Megin 或 GitlabWorkSpace。
+0.11.0 保留原生 Megin v2 收據驗證及舊版分支／quick 介面。新 Repo／Group 功能鏈審查不要求安裝 Megin 或 GitlabWorkSpace。

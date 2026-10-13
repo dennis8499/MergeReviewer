@@ -204,7 +204,7 @@ def _check_snapshot_file(
 def validate_result(
     draft: dict[str, Any], manifest: dict[str, Any], context_dir: Path, *, timeout: float = 180.0
 ) -> dict[str, Any]:
-    if isinstance(manifest, dict) and manifest.get("schema") == "merge-reviewer-workspace-context/v1":
+    if isinstance(manifest, dict) and manifest.get("schema") in ("merge-reviewer-workspace-context/v1", "merge-reviewer-workspace-context/v2"):
         from workspace_report import validate
         return validate(draft, manifest, context_dir, timeout=timeout)
     _require(isinstance(draft, dict), "審查結果最上層必須是 JSON 物件。")
@@ -704,7 +704,7 @@ def _publish_report_contents(
         draft = json.loads(result_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ReportValidationError(f"無法讀取審查 context 或結果 JSON：{exc}") from exc
-    if manifest.get("schema") == "merge-reviewer-workspace-context/v1":
+    if manifest.get("schema") in ("merge-reviewer-workspace-context/v1", "merge-reviewer-workspace-context/v2"):
         from workspace_report import publish
         return publish(context_dir, draft, manifest, report_dir, include_json, timeout=timeout)
     if manifest.get("schema") == "merge-reviewer-group-context/v1":

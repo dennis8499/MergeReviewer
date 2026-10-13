@@ -67,6 +67,10 @@ def _json(raw: bytes) -> dict:
 
 
 def validate_receipt(receipt: dict, repo: Path) -> dict:
+    if isinstance(receipt, dict) and receipt.get("schema") in (
+            "megin-repo-delivery-receipt/v2", "megin-delivery-receipt/v2"):
+        from delivery_binding_v2 import validate_receipt as validate_v2
+        return validate_v2(receipt, repo)
     repo = Path(repo).resolve()
     _require(isinstance(receipt, dict) and receipt.get("schema") == "megin-repo-delivery-receipt/v1",
              "expected a single-Repo Megin delivery receipt")
@@ -253,6 +257,18 @@ def validate_receipt(receipt: dict, repo: Path) -> dict:
 
 
 def bind_delivery(receipt: dict, manifest: dict) -> dict:
+    if isinstance(receipt, dict) and receipt.get("schema") in (
+            "megin-repo-delivery-receipt/v2", "megin-delivery-receipt/v2"):
+        from delivery_binding_v2 import bind_delivery as bind_v2
+        return bind_v2(receipt, manifest)
+    if manifest.get("schema") == "merge-reviewer-workspace-context/v2":
+        _require(manifest.get("target") == "branch" and len(manifest.get("seed_repos", [])) == 1,
+                 "historical Repo receipt requires one fixed branch seed")
+        seed = next(r for r in manifest["repositories"] if r["id"] == manifest["seed_repos"][0])
+        native = seed.get("native")
+        _require(isinstance(native, dict), "historical receipt seed comparison missing")
+        return {"schema": "megin-historical-review-binding/v1", "binding": bind_delivery(receipt, native),
+                "receipt": receipt, "historical_only": True}
     _require(manifest.get("review_scope") == "committed" and manifest.get("review_right") == manifest.get("head_sha"),
              "Megin receipt requires fixed committed refs")
     validate_receipt(receipt, Path(manifest["repo"]))
@@ -268,5 +284,11 @@ def verify_manifest_binding(manifest: dict) -> dict | None:
         return None
     binding = manifest["megin_binding"]
     _require(isinstance(binding, dict), "invalid Megin report binding")
+    if binding.get("schema") == "megin-review-binding/v2":
+        from delivery_binding_v2 import verify_manifest_binding as verify_v2
+        return verify_v2(manifest)
+    if binding.get("schema") == "megin-historical-review-binding/v1":
+        _require(bind_delivery(binding.get("receipt"), manifest) == binding, "historical Megin report binding changed")
+        return binding
     _require(bind_delivery(binding.get("receipt"), manifest) == binding, "Megin report binding changed")
     return binding

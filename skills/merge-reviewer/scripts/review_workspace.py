@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import sys
@@ -22,8 +23,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-CONTEXT = "merge-reviewer-workspace-context/v1"
-RESULT = "merge-reviewer-workspace-result/v1"
+CONTEXT = "merge-reviewer-workspace-context/v2"
+RESULT = "merge-reviewer-workspace-result/v2"
+LEGACY_CONTEXT = "merge-reviewer-workspace-context/v1"
+LEGACY_RESULT = "merge-reviewer-workspace-result/v1"
 
 
 def require(condition, message):
@@ -69,7 +72,7 @@ def load(context: Path) -> dict:
     from review_session import validate_session
     context = validate_session(context)
     manifest = json.loads(safe_path(context, "manifest.json").read_text(encoding="utf-8"))
-    require(manifest.get("schema") == CONTEXT, "not a portable workspace context")
+    require(manifest.get("schema") in (CONTEXT, LEGACY_CONTEXT), "not a portable workspace context")
     return manifest
 
 
@@ -124,7 +127,7 @@ def add_source(context: Path, repo: dict, name: str, reference: str, api, *, env
 def local_snapshot(context: Path, repo: dict, target: str, api):
     path = Path(repo["path"])
     storage = safe_path(context, f"repos/{repo['id']}/snapshot")
-    storage.mkdir(parents=True)
+    storage.mkdir(parents=True, exist_ok=True)
     env = api.snapshot_environment(path, storage)
     require(not str(api.run_git(path, ["ls-files", "--unmerged", "-z"])), "unresolved index conflict")
     empty = str(api.run_git(path, ["hash-object", "-w", "-t", "tree", "--stdin"], input_bytes=b"", env=env)).strip()
@@ -133,14 +136,19 @@ def local_snapshot(context: Path, repo: dict, target: str, api):
     add_source(context, repo, "base", base, api, env=env)
     index = api.git_path(path, "index")
     if index.exists():
-        shutil.copyfile(index, env["GIT_INDEX_FILE"])
+        # Preserve its timestamp: a newly dated copy can hide a same-size racy
+        # working edit by making stale cache entries look older than the index.
+        shutil.copy2(index, env["GIT_INDEX_FILE"])
         shared = str(api.run_git(path, ["rev-parse", "--shared-index-path"])).strip()
         if shared:
             shared_path = Path(shared) if Path(shared).is_absolute() else path / shared
-            shutil.copyfile(shared_path, storage / shared_path.name)
+            shutil.copy2(shared_path, storage / shared_path.name)
     else:
         api.run_git(path, ["read-tree", "--empty"], env=env)
-    if target == "uncommitted":
+    if target in ("uncommitted", "quick"):
+        if target == "quick":
+            index_tree = str(api.run_git(path, ["write-tree"], env=env)).strip()
+            add_source(context, repo, "index", index_tree, api, env=env)
         # Starting from the real index preserves explicitly force-staged ignored files.
         flags = api.run_git(path, ["ls-files", "-v", "-z"], binary=True, env=env).split(b"\0")
         assumed = [row[2:] for row in flags if row[:1].islower()]
@@ -169,6 +177,15 @@ def local_snapshot(context: Path, repo: dict, target: str, api):
     destination = safe_path(context, f"repos/{repo['id']}/{name}.patch")
     destination.write_bytes(patch)
     repo["patches"] = [destination.relative_to(context).as_posix()]
+    if target == "quick":
+        repo["changed_files"] = [
+            *[{**c, "source": "index"} for c in api.collect_changes(path, base, index_tree, env=env)],
+            *repo["changed_files"],
+        ]
+        index_patch = safe_path(context, f"repos/{repo['id']}/index.patch")
+        index_patch.write_bytes(api.run_git(path, ["diff", *api.DIFF_FLAGS, "--binary", "--find-renames",
+                                                  base, index_tree, "--"], binary=True, env=env))
+        repo["patches"].insert(0, index_patch.relative_to(context).as_posix())
     repo["diff_base"] = base
 
 
@@ -214,15 +231,8 @@ def validate_root(path: Path, api) -> Path:
 
 def build(args, api) -> dict:
     target = args.target or "branch"
-    require(not (getattr(args, "mr_task", None) or getattr(args, "mr_context", None)
-                 or getattr(args, "mr_context_base64", None) or getattr(args, "megin_receipt", None)),
-            "MR/receipt binding uses the compatible branch workflow; omit --scope/--target")
-    require(not getattr(args, "supporting_sources", None), "--supporting-sources is legacy Group-quick-only; use fixed-source search/read")
-    require(not args.include_working_tree, "use --target uncommitted, or omit --scope/--target for legacy quick + working-tree")
-    if target != "branch":
-        require(not (args.base or args.head or args.quick or args.remote),
-                "staged/uncommitted compare local HEAD only; omit base/head/quick/remote")
-        require(args.mode == "merge", "--mode direct applies only to branch review")
+    require(not (args.group_root and args.workspace_file),
+            "an explicit Group root cannot be narrowed by --workspace-file; use one declared boundary")
     declared_root = Path(args.group_root or args.workspace).expanduser().absolute()
     require(not is_link(declared_root), "workspace root cannot be a link or junction")
     root = api.normalize_path(declared_root)
@@ -236,8 +246,19 @@ def build(args, api) -> dict:
     require(bool(paths), "找不到 Git Repo；請指定正確工作區。")
     scope = args.scope or "auto"
     if scope == "auto":
-        scope = "group" if args.group_root or len(paths) > 1 else "repo"
-    if args.project or len(paths) == 1:
+        scope = "group" if args.group_root or api.is_group_workspace(root, workspace_file, paths) else "repo"
+    if scope == "group" and not args.target and args.quick and not args.base and not args.head:
+        target = "quick"
+    require(not args.include_working_tree or target == "quick", "use --target uncommitted for saved files")
+    if target != "branch":
+        require(not (args.base or args.head or (args.quick and target != "quick") or args.remote),
+                "staged/uncommitted compare local HEAD only; omit base/head/quick/remote")
+        require(args.mode == "merge", "--mode direct applies only to branch review")
+    delivery_seeds = getattr(args, "delivery_seeds", None)
+    if delivery_seeds:
+        seeds = [Path(item["repo_path"]).resolve() for item in delivery_seeds]
+        require(set(seeds) <= set(paths), "receipt seeds are outside declared Group/workspace")
+    elif args.project or len(paths) == 1:
         seed, _ = api.choose_repository(root, workspace_file, args.project)
         seeds = [seed]
     else:
@@ -251,9 +272,12 @@ def build(args, api) -> dict:
                 "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8],
                 "workspace": str(workspace_file.parent if workspace_file and not args.group_root else root),
                 "workspace_file": str(workspace_file) if workspace_file else None,
+                "workspace_file_sha256": hashlib.sha256(workspace_file.read_bytes()).hexdigest() if workspace_file else None,
                 "scope": scope, "target": target, "repositories": [], "seed_repos": [],
-                "searches": [], "context_gaps": [], "context_dir": str(context),
+                "searches": [], "changed_contracts": [], "context_gaps": [], "context_dir": str(context),
                 "context_cleanup_required": True}
+    if getattr(args, "mr_binding", None):
+        manifest["mr_binding"] = args.mr_binding
     for index, candidate in enumerate(paths):
         repo = {"id": f"repo-{index:03}", "name": candidate.name, "path": str(candidate),
                 "role": "seed" if candidate in seeds else "candidate", "sources": {},
@@ -267,7 +291,12 @@ def build(args, api) -> dict:
             repo["head_sha"] = api.verified_commit(path, "HEAD")
             safe_path(context, f"repos/{repo['id']}").mkdir(parents=True)
             if target == "branch" and repo["role"] == "seed":
-                branch_snapshot(context, repo, args, api)
+                branch_args = copy.copy(args)
+                if delivery_seeds:
+                    seed = next(s for s in delivery_seeds if Path(s["repo_path"]).resolve() == path)
+                    branch_args.base, branch_args.head = seed["base_commit"], seed["head_commit"]
+                    branch_args.quick, branch_args.no_fetch = False, True
+                branch_snapshot(context, repo, branch_args, api)
             elif target == "branch":
                 require(repo["head_sha"], "related Repo has no HEAD commit")
                 repo["review_source"] = "head"
@@ -291,6 +320,9 @@ def build(args, api) -> dict:
         for repo in manifest["repositories"]:
             repo["role"] = "seed" if repo["id"] in manifest["seed_repos"] else "candidate"
     manifest["required_coverage"] = required_coverage(manifest)
+    if getattr(args, "supporting_sources", None):
+        require(target == "quick", "supplemental committed sources apply only to Group quick")
+        capture_supplemental(context, manifest, args.supporting_sources, api)
     manifest["context_complete"] = not manifest["context_gaps"]
     save(context, manifest)
     return manifest
@@ -310,8 +342,116 @@ def required_coverage(manifest: dict) -> list[dict]:
     return required
 
 
-def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None, api, source_name=None) -> dict:
+def capture_supplemental(context, manifest, request_file, api):
+    """Keep historical committed evidence available without replacing live candidates."""
+    requests = json.loads(Path(request_file).read_text(encoding="utf-8"))
+    require(isinstance(requests, list), "supporting sources must be an array")
+    seen = set()
+    for item in requests:
+        require(isinstance(item, dict) and set(item) == {"repo", "commit", "paths"}, "invalid supporting source")
+        matches = [r for r in manifest["repositories"] if item["repo"] in (r["id"], r["name"], r["path"])]
+        require(len(matches) == 1, "supporting Repo must identify one captured candidate")
+        repo = matches[0]
+        commit = item["commit"]
+        require(isinstance(commit, str) and api.verified_commit(Path(repo["path"]), commit) == commit,
+                "supporting source needs an available full commit ID")
+        name = "supporting-" + commit
+        if name not in repo["sources"]:
+            add_source(context, repo, name, commit, api)
+        require(isinstance(item["paths"], list) and item["paths"], "supporting paths must not be empty")
+        for path in item["paths"]:
+            require((repo["id"], commit, path) not in seen, "duplicate supporting source")
+            seen.add((repo["id"], commit, path))
+            fixed_bytes(context, repo, name, path, api)
+
+
+def contract_rows(manifest):
+    values = manifest.get("changed_contracts", [])
+    require(isinstance(values, list), "changed contracts must be an array")
+    return {c["id"]: c for c in values}
+
+
+def validate_contract(context, manifest, item, api):
+    """Anchor reviewer-selected contracts before searching their names or aliases."""
+    require(manifest.get("schema") == CONTEXT, "contract registration needs context v2")
+    require(isinstance(item, dict), "contract must be an object")
+    contracts = contract_rows(manifest)
+    identifier = item.get("id")
+    require(isinstance(identifier, str) and identifier and identifier not in contracts, "duplicate/empty contract ID")
+    require(item.get("kind") in ("api", "event", "package", "data", "table", "config", "behavior"), "invalid contract kind")
+    require(isinstance(item.get("symbol"), str) and item["symbol"], "contract symbol is required")
+    root = item.get("root")
+    require(root in manifest["required_coverage"], "contract root must identify a selected change")
+    parents = item.get("parent_ids", [])
+    require(isinstance(parents, list) and len(set(parents)) == len(parents) and all(p in contracts for p in parents),
+            "parent contracts must already be registered")
+    require(all(contracts[p]["root"] == root for p in parents), "propagated contract root differs from its parents")
+    evidence = item.get("evidence")
+    require(isinstance(evidence, dict), "contract needs one frozen evidence anchor")
+    repo = repository(manifest, evidence.get("repo"))
+    source, path = evidence.get("source"), evidence.get("path")
+    require(source in repo["sources"] and evidence.get("ref") == repo["sources"][source]["ref"], "contract source identity differs")
+    raw = fixed_bytes(context, repo, source, path, api)
+    lines = raw.decode("utf-8", errors="strict").splitlines()
+    start, end = evidence.get("line_start"), evidence.get("line_end")
+    require(type(start) is int and type(end) is int and 1 <= start <= end <= len(lines), "invalid contract line interval")
+    text = "\n".join(lines[start-1:end])
+    require(item["symbol"] in text, "contract symbol must occur in its frozen anchor")
+    if not parents:
+        from workspace_report import allowed_sources, location
+        key = location(root)
+        require(evidence["repo"] == root["repo"] and path == root["path"] and
+                source in allowed_sources(repo, key), "initial contract anchor must cover its changed root")
+        comparison = repo["sources"][root["source"]]
+        baseline = repo["sources"]["head"]["ref"] if root["source"] == "merge-preview" else repo["diff_base"]
+        patch = str(api.run_git(Path(repo["path"]), ["diff", *api.DIFF_FLAGS, "--no-renames", "--unified=0",
+                            baseline, comparison["ref"], "--", path],
+                            env=source_environment(context, repo, comparison, api)))
+        hunks = re.findall(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", patch, re.MULTILINE)
+        if hunks:
+            side = 2 if source == root["source"] else 0
+            intervals = [(int(h[side]), int(h[side + 1] or "1")) for h in hunks]
+            require(any(count > 0 and first <= end and start <= first + count - 1 for first, count in intervals),
+                    "initial contract anchor must overlap the actual changed lines")
+    terms = item.get("search_terms")
+    require(isinstance(terms, list) and terms and all(isinstance(t, dict) and
+            isinstance(t.get("query"), str) and t["query"] and isinstance(t.get("reason"), str) and
+            t["reason"].strip() for t in terms), "contract search terms need query and relevance reason")
+    require(len({t["query"] for t in terms}) == len(terms) and item["symbol"] in {t["query"] for t in terms},
+            "search terms need the exact symbol and unique queries")
+    for term in terms:
+        if term["query"] in text:
+            continue
+        alias = term.get("evidence")
+        require(isinstance(alias, dict), "alternate query needs a frozen alias/wrapper evidence anchor")
+        alias_repo = repository(manifest, alias.get("repo"))
+        alias_source = alias.get("source")
+        require(alias_source in alias_repo["sources"] and alias.get("ref") == alias_repo["sources"][alias_source]["ref"],
+                "alias source identity differs")
+        alias_lines = fixed_bytes(context, alias_repo, alias_source, alias.get("path"), api).decode("utf-8").splitlines()
+        first, last = alias.get("line_start"), alias.get("line_end")
+        require(type(first) is int and type(last) is int and 1 <= first <= last <= len(alias_lines) and
+                term["query"] in "\n".join(alias_lines[first-1:last]), "alternate query must occur in frozen alias evidence")
+    value = {**item, "parent_ids": parents, "anchor_sha256": hashlib.sha256(raw).hexdigest()}
+    return value
+
+
+def register_contract(context, manifest, item, api):
+    value = validate_contract(context, manifest, item, api)
+    manifest["changed_contracts"].append(value)
+    save(context, manifest)
+    return value
+
+
+def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None, api, source_name=None,
+           contract_id=None) -> dict:
     require(bool(query), "search query must be nonempty")
+    if manifest.get("schema") == CONTEXT and manifest.get("scope") == "group":
+        require(contract_id in contract_rows(manifest), "Group searches require a registered --contract")
+    if contract_id is not None:
+        contract = contract_rows(manifest).get(contract_id)
+        require(contract and query in {t["query"] for t in contract["search_terms"]},
+                "search query is unrelated to the registered contract")
     selected = repo_ids or [r["id"] for r in manifest["repositories"]]
     require(len(selected) == len(set(selected)), "duplicate search Repo IDs")
     results = []
@@ -319,7 +459,7 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
         repo = repository(manifest, repo_id)
         name = source_name or repo.get("review_source")
         record = {"id": f"S-{len(manifest['searches']) + 1:04}", "repo": repo_id, "source": name,
-                  "query": query, "matches": [], "status": "complete"}
+                  "query": query, "contract_id": contract_id, "matches": [], "status": "complete"}
         try:
             source = repo["sources"][name]
             env = source_environment(context, repo, source, api)
@@ -343,12 +483,14 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("read", "search", "inventory"))
+    parser.add_argument("command", choices=("read", "search", "inventory", "register-contract"))
     parser.add_argument("--context-dir", type=Path, required=True)
     parser.add_argument("--repo", action="append")
     parser.add_argument("--source")
     parser.add_argument("--path")
     parser.add_argument("--query")
+    parser.add_argument("--contract", help="Previously registered changed/propagated contract ID")
+    parser.add_argument("--contract-file", type=Path, help="One fixed-anchor contract JSON object")
     parser.add_argument("--git-timeout", type=float, default=180.0)
     args = parser.parse_args(argv)
     import git_review_context as api
@@ -357,7 +499,10 @@ def main(argv=None):
     try:
         manifest = load(context)
         if args.command == "search":
-            value = search(context, manifest, args.query, args.repo, api, args.source)
+            value = search(context, manifest, args.query, args.repo, api, args.source, args.contract)
+        elif args.command == "register-contract":
+            require(args.contract_file, "register-contract needs --contract-file")
+            value = register_contract(context, manifest, json.loads(args.contract_file.read_text(encoding="utf-8")), api)
         elif args.command == "read":
             require(args.repo and len(args.repo) == 1 and args.path, "read needs one --repo and --path")
             repo = repository(manifest, args.repo[0])

@@ -1,61 +1,40 @@
 # Group quick review
 
-For quick review from a non-Git Group folder, resolve that Group explicitly and
-run `git_review_context.py --group-root <Group> --quick`. Do not substitute the
-installed Skill directory. This is distinct from legacy single-Repo quick
-review: no remote discovery, fetch, branch comparison or merge preview.
+Run `git_review_context.py --group-root <Group> --quick` from the declared Group.
+This uses workspace context/result v2 and the full impact workflow in
+[workspace-review.md](workspace-review.md), with internal target `quick`.
+It requires no remote or branch comparison.
+`--workspace <Group> --quick` and `--scope auto|group --quick` select the same
+dual-source workflow when the declared workspace is a Group and no target or
+base/head was supplied. An explicit `--target branch` retains branch quick
+comparison; a Git-root workspace keeps the single-Repo quick behavior.
 
-The helper scans only direct-child Git roots (including worktrees), compares
-each Repo's index and final working files separately to HEAD, and freezes
-patches and evidence outside the target Repos. An unborn Repo compares to an
-empty tree. Untracked non-ignored files and forced ignored staged files are
-included. Unsafe roots, conflicts and dirty submodules produce an explicit
-per-Repo error while other Repos continue.
+Each Repo has independent fixed `index` and `working-tree` sources compared
+against HEAD (empty tree for unborn Repos). Read both patches and cover every
+required `(repo, source, path)`. A working-file correction cannot hide a staged
+regression. Keep source-specific contract anchors, evidence and findings; combine
+duplicate findings only when their trigger and failure match, retaining all
+affected sources.
 
-Read manifest.json and both patches for every captured Repo. Read only frozen
-files listed by evidence_files while reasoning about versions; never replace
-index evidence with a newer working file. Compare context before reporting;
-changed live state makes the submission recommendation incomplete. Binary and
-submodule changes require explicit coverage limitations.
+Register changed contracts and follow upstream/downstream consumers across all
+declared Group Repos, including unchanged ones. Search every changed/propagated
+contract in each candidate's index and working-tree separately. Exclusions need
+two distinct relevant terms per contract/source and concrete reasons. Failed
+captures and unresolved links remain incomplete. Cycles are allowed and visited
+nodes are deduplicated. Applicable source/alias evidence must be fixed.
+For a related candidate, each source with a contract match needs its own reviewed
+impact node associated with that contract. A reviewed working-file node cannot
+stand in for the index; an omitted or unreviewed source keeps the result incomplete.
 
-Write this independent result contract inside the context directory:
+Optional `--supporting-sources <JSON>` retains `{repo, commit, paths}` requests.
+`repo` identifies one captured Repo by ID, unique name or canonical path; `commit`
+is a full available immutable SHA. Sources are named `supporting-<SHA>` and can
+supplement unchanged contract/consumer evidence. They do not replace candidate
+index/working searches or create changed-file coverage.
 
-```json
-{
-  "schema": "merge-reviewer-group-result/v1",
-  "summary": "白話摘要",
-  "coverage": [{
-    "repo": "service", "source": "index", "path": "app.py", "status": "reviewed",
-    "evidence": [{"repo": "service", "source": "index", "path": "app.py",
-      "ref": "<versions.index tree SHA>", "side": "result", "line_start": 1, "line_end": 3}]
-  }],
-  "findings": [],
-  "limitations": []
-}
-```
-
-Coverage includes every `(repo, source, path)` in changed_files, including old
-rename paths. Sources are index and working-tree. A deletion/old path may cite
-the matching base-side frozen record. metadata-only/not-reviewed requires a
-reason and prevents a complete result. Findings use priority, title, impact,
-trigger, expected, actual, recommendation and frozen evidence. Combine the same
-issue's evidence from both sources; the validator also merges exact duplicate
-behavior findings and retains all source citations. Never merge different
-version-specific failures.
-
-Run `review_report.py --context-dir <context> --result <draft>`; optional
-`--include-json` retains the structured report. The report command removes the
-owned system-temporary context after successful or failed publication. If a
-review ends before publication, run `review_session.py cleanup --context-dir
-<context>` first. The default output is
-`<Group>/review-reports/<run-id>/summary.md` and one report per Repo. Use
-submission recommendations, not merge recommendations. Show all Repo states,
-P0–P3 counts, findings, source/version citations and uncovered paths. A failed
-publication clears the current owned context; rebuild it when trying again.
-
-This review does not replace Megin's independent review/verification/acceptance
-gates and never stages, commits or fixes products.
-
-## Fixed supporting sources
-
-Optional `--supporting-sources <JSON file>` is Group-quick-only. The JSON array contains objects `{repo, commit, paths}` with a direct-child Repo name, full immutable commit SHA and regular relative file paths. Freeze unchanged consumers/contracts from Git into the owned context with SHA-256 and blob identity. Cite them with source `supporting`, repo/path, full commit ref, side `result`, and valid lines. Supplemental citations do not create fake changed-file coverage. Every finding must still include an index or working-tree citation on a reviewed changed path. Drift/tamper of frozen supplemental bytes invalidates evidence. The Group validator rejects lexical/canonical parent escapes, symlinks and Windows junction/reparse candidates and continues valid direct-child worktrees.
+Publish with `review_report.py`, optional `--include-json`. Output goes to
+`<Group>/review-reports/merge-review-<run-id>/summary.md` plus involved Repo details.
+Source drift and missing coverage prevent complete submission recommendations.
+Publication always clears the owned context; interrupted reviews use
+`review_session.py cleanup --context-dir <context>`. Historical Group v1 contexts
+remain readable with their historical validator and cannot establish v2 coverage.

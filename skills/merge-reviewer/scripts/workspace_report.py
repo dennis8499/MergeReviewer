@@ -9,8 +9,9 @@ from pathlib import Path
 import re
 import tempfile
 
-from review_workspace import (CONTEXT, RESULT, fixed_bytes, repository, required_coverage,
-                              require, safe_path, source_environment)
+from review_workspace import (CONTEXT, RESULT, LEGACY_CONTEXT, LEGACY_RESULT, fixed_bytes,
+                              repository, required_coverage, require, safe_path, source_environment,
+                              validate_contract)
 
 PRIORITIES = ("P0", "P1", "P2", "P3")
 OWNERS = {"開發", "維運設定", "QA"}
@@ -46,10 +47,19 @@ def validate(draft: dict, manifest: dict, context: Path, *, timeout=180.0) -> di
 
 
 def _validate(draft, manifest, context, api):
-    require(isinstance(draft, dict) and draft.get("schema") == RESULT, "workspace result schema is invalid")
-    require(isinstance(manifest, dict) and manifest.get("schema") == CONTEXT, "workspace context schema is invalid")
-    require(manifest.get("scope") in ("repo", "group") and manifest.get("target") in ("branch", "staged", "uncommitted"),
+    version2 = manifest.get("schema") == CONTEXT
+    require(isinstance(draft, dict) and draft.get("schema") == (RESULT if version2 else LEGACY_RESULT), "workspace result schema is invalid")
+    require(isinstance(manifest, dict) and manifest.get("schema") in (CONTEXT, LEGACY_CONTEXT), "workspace context schema is invalid")
+    require(manifest.get("scope") in ("repo", "group") and manifest.get("target") in ("branch", "staged", "uncommitted", "quick"),
             "invalid review scope/target")
+    if manifest.get("megin_binding"):
+        from delivery_binding import verify_manifest_binding
+        verify_manifest_binding(manifest)
+    extension = api._workspace_extension()
+    if manifest.get("mr_binding"):
+        require(extension is not None and callable(getattr(extension, "verify_manifest_binding", None)),
+                "MR binding requires its verification adapter")
+        extension.verify_manifest_binding(manifest)
     require(isinstance(draft.get("summary"), str) and draft["summary"].strip(), "summary is required")
     for field in ("coverage", "impact_coverage", "repository_coverage", "findings", "limitations",
                   "next_steps", "tests_executed", "tests_not_executed"):
@@ -66,6 +76,14 @@ def _validate(draft, manifest, context, api):
     require(set(manifest["seed_repos"]) <= set(repos), "unknown seed Repo")
     require(manifest.get("required_coverage") == required_coverage(manifest), "changed-path contract differs from captured changes")
     expected = {location(c) for c in manifest["required_coverage"]}
+    contracts = {}
+    if version2:
+        contract_manifest = {**manifest, "changed_contracts": []}
+        for contract in manifest.get("changed_contracts", []):
+            validated = validate_contract(context, contract_manifest, contract, api)
+            require(contract == validated, "registered contract anchor bytes changed")
+            contracts[contract["id"]] = contract
+            contract_manifest["changed_contracts"].append(contract)
     verified = set()
     content_cache = {}
 
@@ -102,6 +120,18 @@ def _validate(draft, manifest, context, api):
     nodes = {}
     incomplete = bool(manifest["context_gaps"] or draft["limitations"])
     gaps = list(manifest["context_gaps"]) + draft["limitations"][:]
+    if version2 and manifest["scope"] == "group":
+        workspace_file = Path(manifest["workspace_file"]) if manifest.get("workspace_file") else None
+        try:
+            if workspace_file is not None:
+                require(hashlib.sha256(workspace_file.read_bytes()).hexdigest() == manifest.get("workspace_file_sha256"),
+                        "declared workspace folders changed after capture")
+            current = set(api.discover_repositories(Path(manifest["workspace"]), workspace_file))
+            captured = {Path(repo["path"]).resolve() for repo in repos.values()}
+            require(current == captured, "Group repository inventory changed after capture; review again")
+        except (OSError, ValueError, api.ReviewContextError) as exc:
+            incomplete = True
+            gaps.append(str(exc))
     for node in draft["impact_coverage"]:
         require(isinstance(node, dict), "impact node must be an object")
         identifier = node.get("id")
@@ -113,6 +143,11 @@ def _validate(draft, manifest, context, api):
         require(isinstance(node.get("related_to"), list) and all(isinstance(s, str) for s in node["related_to"])
                 and len(set(node["related_to"])) == len(node["related_to"]), "related_to must contain unique impact IDs")
         safe_path(context, node.get("path"))
+        if version2:
+            ids = node.get("contract_ids", [])
+            require(isinstance(ids, list) and all(i in contracts for i in ids), "impact contracts must be registered")
+            if manifest["scope"] == "group":
+                require(ids, "Group impact nodes must identify their changed/propagated contracts")
         keys = evidence_list(node, node["status"] == "reviewed")
         if node["status"] == "reviewed":
             require(location(node) in keys, "impact evidence must cover its own fixed path/source")
@@ -148,6 +183,11 @@ def _validate(draft, manifest, context, api):
             require(all(location(nodes[i]) in matches for i in ids), "change's impact roots must cover its own frozen evidence")
             root_nodes.update(ids)
             reviewed_anchors.update(matches)
+            if version2 and manifest["scope"] == "group":
+                applicable = {c["id"] for c in contracts.values() if location(c["root"]) == key}
+                require(applicable, "each reviewed Group change needs an anchored changed contract")
+                require(applicable <= {c for i in ids for c in nodes[i].get("contract_ids", [])},
+                        "change impact roots must cover their registered contracts")
         else:
             require(isinstance(row.get("reason"), str) and row["reason"].strip(), "unreviewed change needs a reason")
             incomplete = True
@@ -161,6 +201,11 @@ def _validate(draft, manifest, context, api):
             visited.add(current)
             queue.extend(graph[current] - visited)
     require(set(nodes) == visited, "impact graph includes nodes disconnected from the selected changes")
+    if version2 and manifest["scope"] == "group":
+        for contract in contracts.values():
+            anchor = location(contract["evidence"])
+            require(any(location(n) == anchor and contract["id"] in n.get("contract_ids", []) for n in nodes.values()),
+                    "every changed/propagated contract needs its own connected impact anchor")
 
     searches = {s["id"]: s for s in manifest["searches"]}
     require(len(searches) == len(manifest["searches"]), "duplicate search IDs")
@@ -169,6 +214,17 @@ def _validate(draft, manifest, context, api):
         if record["status"] == "complete":
             source = repos[record["repo"]]["sources"].get(record.get("source"))
             require(source and record.get("ref") == source["ref"], "search version differs from the selected snapshot")
+            if version2:
+                identifier = record.get("contract_id")
+                if manifest["scope"] == "group" or identifier is not None:
+                    require(identifier in contracts and record.get("query") in {t["query"] for t in contracts[identifier]["search_terms"]},
+                            "search is not bound to a relevant changed contract")
+                repo = repos[record["repo"]]
+                env = source_environment(context, repo, source, api)
+                code, output, error = api.run_git_capture(Path(repo["path"]),
+                    ["grep", "-n", "-I", "--no-textconv", "-F", "-e", record["query"], source["ref"], "--"], env=env)
+                require(code in (0, 1) and output == record.get("output") and output.splitlines() == record.get("matches"),
+                        "fixed search ledger differs from captured objects: " + error)
     dispositions = {}
     involved = {n["repo"] for n in nodes.values()} | set(manifest["seed_repos"])
     for row in draft["repository_coverage"]:
@@ -193,6 +249,27 @@ def _validate(draft, manifest, context, api):
             require(ids and any(searches[s]["status"] == "complete" and
                                 searches[s]["source"] == repo["review_source"] for s in ids),
                     "candidate Repo needs completed searches against its selected fixed version")
+        if expected and version2 and manifest["scope"] == "group" and state != "unresolved":
+            source_names = ("index", "working-tree") if manifest["target"] == "quick" else (repo["review_source"],)
+            for contract_id, contract in contracts.items():
+                if contract["evidence"]["repo"] == repo_id:
+                    continue
+                for source_name in source_names:
+                    bound = [searches[s] for s in ids if searches[s]["status"] == "complete" and
+                             searches[s]["source"] == source_name and searches[s].get("contract_id") == contract_id]
+                    require(bound, "candidate must search every changed/propagated contract in each review source")
+                    if state == "not-related":
+                        require(len({s["query"] for s in bound}) >= 2,
+                                "exclusion needs alternate names or contract terms; one negative search is insufficient")
+                    if manifest["target"] == "quick" and state == "related" and any(s.get("matches") for s in bound):
+                        inspected = any(n["repo"] == repo_id and n["source"] == source_name and
+                                        contract_id in n.get("contract_ids", []) and n["status"] == "reviewed"
+                                        for n in nodes.values())
+                        if not inspected:
+                            incomplete = True
+                            gaps.append(f"{repo_id}/{source_name}/{contract_id}: 已找到相關來源但尚未完成此版本的影響審查。")
+            if state == "related":
+                require(any(searches[s].get("matches") for s in ids), "related Repo needs a fixed contract search match")
         if state == "unresolved":
             incomplete = True
             gaps.append(f"{repo_id}: {row['reason']}")
@@ -240,6 +317,10 @@ def _validate(draft, manifest, context, api):
             "involved_repos": sorted(involved), "versions": [{"repo": r["id"], "path": r["path"],
                  "sources": {k: v["ref"] for k, v in r["sources"].items()}} for r in repos.values()],
             "searches": manifest["searches"],
+            "changed_contracts": manifest.get("changed_contracts", []),
+            "coverage_schema": "group-v2" if version2 and manifest["scope"] == "group" else "historical" if not version2 else "repo-v2",
+            **({"megin_binding": manifest["megin_binding"]} if manifest.get("megin_binding") else {}),
+            **({"mr_binding": manifest["mr_binding"]} if manifest.get("mr_binding") else {}),
             "context_sha256": hashlib.sha256((context / "manifest.json").read_bytes()).hexdigest()}
 
 
@@ -268,6 +349,10 @@ def render(result, manifest, repo_id=None):
                       f"**技術證據**（{f['scenario_source']}）："])
         for e in f["evidence"]:
             lines.append(f"- `{e['repo']}`／`{e['source']}`／`{e['ref']}`／`{e['path']}`：{e.get('line_start', '—')}–{e.get('line_end', '—')}")
+        if f.get("evidence_summary"):
+            lines.append(f"- 證據說明：{f['evidence_summary']}")
+        if f.get("engineering_fix"):
+            lines.append(f"- 工程修正建議：{f['engineering_fix']}")
         lines.append("")
     lines.extend(["## 功能鏈與 Repo 覆蓋", "", "| Repo | 判定 | 原因 |", "| --- | --- | --- |"])
     for row in result["repository_coverage"]:
@@ -300,12 +385,24 @@ def render(result, manifest, repo_id=None):
     lines.extend(["", "### 固定版本搜尋紀錄", ""])
     for record in result["searches"]:
         if repo_id is None or record["repo"] == repo_id:
-            lines.append(f"- `{record['id']}` `{record['repo']}/{record['source']}` `{record.get('ref', 'unavailable')}`：{record['query']!r}；{record['status']}；{len(record['matches'])} 筆")
+            lines.append(f"- `{record['id']}` `{record['repo']}/{record['source']}` `{record.get('ref', 'unavailable')}`：契約 `{record.get('contract_id', 'historical')}`；{record['query']!r}；{record['status']}；{len(record['matches'])} 筆")
+    lines.extend(["", "### 變更與延伸契約", ""])
+    for contract in result.get("changed_contracts", []):
+        lines.append(f"- `{contract['id']}` `{contract['kind']}` `{contract['symbol']}`；變更起點 `{contract['root']['repo']}/{contract['root']['source']}/{contract['root']['path']}`；上游 {', '.join(contract['parent_ids']) or '直接變更'}")
+        lines.extend(f"  - 搜尋 {term['query']!r}：{term['reason']}" for term in contract["search_terms"])
+    if result.get("megin_binding"):
+        binding = result["megin_binding"]
+        receipt = binding["receipt"]
+        lines.extend(["", "### Megin 交付來源", "",
+                      f"- 工作：`{receipt['work_id']}`；計畫：`{receipt['plan_version']}`；收據：`{receipt['receipt_sha256']}`",
+                      "- 此收據固定交付來源；本次跨 Repo 審查仍由以上變更、契約與逐 Repo 覆蓋決定。"])
     return "\n".join(lines) + "\n"
 
 
 def publish(context, draft, manifest, report_dir, include_json, *, timeout=180.0):
     result = validate(draft, manifest, context, timeout=timeout)
+    import git_review_context as api
+    extension = api._workspace_extension()
     seed = repository(manifest, manifest["seed_repos"][0]) if manifest["seed_repos"] else None
     if report_dir is None:
         root = Path(seed["path"]) if manifest["scope"] == "repo" else Path(manifest["workspace"])
@@ -322,11 +419,20 @@ def publish(context, draft, manifest, report_dir, include_json, *, timeout=180.0
         with tempfile.TemporaryDirectory(prefix=".merge-review-", dir=report_dir) as temporary:
             stage = Path(temporary) / "report"
             stage.mkdir()
-            (stage / "summary.md").write_text(render(result, manifest), encoding="utf-8")
+            markdown = render(result, manifest)
+            if extension and callable(getattr(extension, "adapt_report", None)):
+                markdown = extension.adapt_report(markdown, manifest, result)
+            (stage / "summary.md").write_text(markdown, encoding="utf-8")
             for repo_id in result["involved_repos"]:
                 (stage / f"{repo_id}.md").write_text(render(result, manifest, repo_id), encoding="utf-8")
             if include_json:
                 (stage / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            # Recheck receipt/MR bindings after rendering, immediately before publication.
+            if manifest.get("megin_binding"):
+                from delivery_binding import verify_manifest_binding
+                verify_manifest_binding(manifest)
+            if manifest.get("mr_binding"):
+                extension.verify_manifest_binding(manifest)
             try:
                 os.rename(stage, output)
             except FileExistsError:

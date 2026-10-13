@@ -343,6 +343,16 @@ def discover_repositories(workspace: Path, workspace_file: Path | None) -> list[
     return sorted(repositories, key=lambda item: str(item).casefold())
 
 
+def is_group_workspace(workspace: Path, workspace_file: Path | None, repositories: list[Path]) -> bool:
+    """A declared container remains a Group even when it currently has one Repo."""
+    if len(repositories) > 1:
+        return True
+    return any(
+        not has_git_marker(root) and any(repo.is_relative_to(root) and repo != root for repo in repositories)
+        for root in workspace_roots(workspace, workspace_file)
+    )
+
+
 def choose_repository(
     workspace: Path,
     workspace_file: Path | None,
@@ -1580,26 +1590,77 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         extension = _workspace_extension()
         result = extension.prepare_manifest(args, sys.modules[__name__]) if extension else None
         if result is None:
+            if getattr(args, "megin_receipt", None):
+                receipt = json.loads(Path(args.megin_receipt).read_text(encoding="utf-8"))
+                args.receipt_document = receipt
+                if receipt.get("schema") in ("megin-repo-delivery-receipt/v2", "megin-delivery-receipt/v2"):
+                    from delivery_binding_v2 import receipt_seeds
+                    root = Path(receipt["workspace_root"]).resolve()
+                    args.delivery_seeds = [{**seed, "repo_path": str(root if seed["repo_path"] == "." else root / seed["repo_path"])}
+                                           for seed in receipt_seeds(receipt, root)]
+                    if receipt["schema"] == "megin-delivery-receipt/v2":
+                        if args.group_root and normalize_path(args.group_root) != root:
+                            raise ReviewContextError("receipt Group root differs from declared Group")
+                        if getattr(args, "workspace_explicit", False) and normalize_path(args.workspace) != root:
+                            raise ReviewContextError("receipt Group root differs from declared workspace")
+                        args.group_root = str(root)
+                        args.scope = args.scope or "group"
+                        if args.scope == "repo":
+                            if args.project:
+                                chosen, _ = choose_repository(root, normalize_path(args.workspace_file) if args.workspace_file else None,
+                                                              args.project)
+                                args.delivery_seeds = [seed for seed in args.delivery_seeds
+                                                       if normalize_path(seed["repo_path"]) == chosen]
+                                if not args.delivery_seeds:
+                                    raise ReviewContextError("selected Repo is not part of this Megin delivery")
+                            if len(args.delivery_seeds) != 1:
+                                raise ReviewContextError("--scope repo requires --project selecting one delivered Repo")
+                            args.project = args.delivery_seeds[0]["repo_path"]
+                    else:
+                        boundary = normalize_path(args.group_root or args.workspace)
+                        workspace_file = normalize_path(args.workspace_file) if args.workspace_file else None
+                        if root not in discover_repositories(boundary, workspace_file):
+                            if args.group_root or args.workspace_file or getattr(args, "workspace_explicit", False):
+                                raise ReviewContextError("receipt Repo is outside the declared Group/workspace")
+                            args.workspace = str(root)
+                        args.project = str(root)
+                        args.scope = args.scope or "auto"
+                    if args.target and args.target != "branch":
+                        raise ReviewContextError("Megin receipt requires branch target")
+                    args.target = "branch"
+            if args.group_root and args.quick and not args.target and not args.base and not args.head:
+                args.scope = args.scope or "group"
+                args.target = "quick"
+            if not getattr(args, "scope", None) and not getattr(args, "target", None):
+                root = normalize_path(args.group_root or args.workspace)
+                workspace_file = normalize_path(args.workspace_file) if args.workspace_file else None
+                paths = discover_repositories(root, workspace_file)
+                if args.group_root or is_group_workspace(root, workspace_file, paths):
+                    args.scope = "group"
+                    # Historical Group quick reviews both the actual index and saved files.
+                    args.target = "quick" if args.quick and not args.base and not args.head else "branch"
             if getattr(args, "scope", None) or getattr(args, "target", None):
                 from review_workspace import build
                 result = build(args, sys.modules[__name__])
-            elif getattr(args, "group_root", None):
-                from legacy_group_review import build
-                result = build(args, sys.modules[__name__])
             else:
                 result = _build_manifest(args)
+        if result.get("mr_binding"):
+            verifier = getattr(extension, "verify_manifest_binding", None)
+            if not callable(verifier):
+                raise ReviewContextError("MR binding requires its verification adapter")
+            verifier(result)
         if getattr(args, "megin_receipt", None) and not getattr(args, "megin_binding", None):
             from delivery_binding import bind_delivery
             if getattr(args, "include_working_tree", False):
                 raise ReviewContextError("--megin-receipt requires committed refs without working-tree changes")
             try:
-                receipt = json.loads(Path(args.megin_receipt).read_text(encoding="utf-8"))
+                receipt = getattr(args, "receipt_document", None) or json.loads(Path(args.megin_receipt).read_text(encoding="utf-8"))
                 result["megin_binding"] = bind_delivery(receipt, result)
             except (ValueError, OSError, KeyError, TypeError) as exc:
                 raise ReviewContextError(f"Megin receipt is invalid: {exc}") from exc
         elif getattr(args, "megin_binding", None):
             result["megin_binding"] = args.megin_binding
-        if result.get("megin_binding"):
+        if result.get("megin_binding") or result.get("mr_binding"):
             Path(args.context_dir, "manifest.json").write_text(
                 json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         succeeded = True
@@ -1616,9 +1677,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect immutable Git context for Merge Reviewer.")
     parser.add_argument("--workspace", default=os.getcwd(), help="Workspace root to search for repositories.")
-    parser.add_argument("--scope", choices=("auto", "repo", "group"), help="Review boundary; new workflow defaults to auto. Omit both scope/target for legacy behavior.")
+    parser.add_argument("--scope", choices=("auto", "repo", "group"), help="Review boundary; declared Group containers and multiple visible Repos default to Group. Use repo to narrow explicitly.")
     parser.add_argument("--target", choices=("branch", "staged", "uncommitted"), help="Fixed branch versions, index only, or final saved local files.")
-    parser.add_argument("--group-root", help="Explicit local Group root. With only --quick, preserve legacy dual-source Group review.")
+    parser.add_argument("--group-root", help="Explicit local Group root. With only --quick, review index and saved working files separately.")
     parser.add_argument("--supporting-sources", help="Legacy Group quick supplemental committed evidence JSON.")
     extension = _workspace_extension()
     if extension:
@@ -1647,7 +1708,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=DEFAULT_GIT_TIMEOUT_SECONDS,
         help="Maximum seconds to wait for each Git command (default: 180).",
     )
-    return parser.parse_args(argv)
+    arguments = parser.parse_args(argv)
+    arguments.workspace_explicit = any(value == "--workspace" or value.startswith("--workspace=")
+                                       for value in (argv if argv is not None else sys.argv[1:]))
+    return arguments
 
 
 def _workspace_extension():

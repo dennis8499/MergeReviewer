@@ -4,6 +4,7 @@ import copy
 import json
 from pathlib import Path
 import sys
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -64,8 +65,21 @@ class WorkspaceReviewTests(unittest.TestCase):
             if raw.splitlines():
                 evidence.update(line_start=1, line_end=1)
             identifier = f"I-{len(nodes) + 1:03}"
+            contract_ids = []
+            if manifest["scope"] == "group":
+                symbol = re.findall(r"[A-Za-z_][A-Za-z_0-9]*", raw.decode("utf-8"))[0]
+                contract_id = f"C-{len(nodes) + 1:03}"
+                exact_line = raw.decode("utf-8").splitlines()[0]
+                terms = list(dict.fromkeys([symbol, exact_line]))
+                if len(terms) < 2:
+                    terms.append("alias_" + symbol)
+                workspace.register_contract(context, manifest, {
+                    "id": contract_id, "root": row, "kind": "behavior", "symbol": symbol,
+                    "evidence": evidence, "search_terms": [{"query": term, "reason": "Contract name or contextual alias."} for term in terms]
+                }, self.api)
+                contract_ids = [contract_id]
             nodes.append({"id": identifier, **row, "source": name, "status": "reviewed", "evidence": [evidence],
-                          "related_to": [], "reason": "Reviewed changed contract and its local behavior."})
+                          "related_to": [], "contract_ids": contract_ids, "reason": "Reviewed changed contract and its local behavior."})
             coverage.append({**row, "status": "reviewed", "evidence": [evidence], "impact_ids": [identifier]})
         dispositions = []
         for repo in manifest["repositories"]:
@@ -73,8 +87,12 @@ class WorkspaceReviewTests(unittest.TestCase):
                       "reason": "Selected change." if repo["id"] in manifest["seed_repos"] else "Searched contract; no matching consumers.",
                       "search_ids": []}
             if record["status"] == "not-related" and manifest["required_coverage"]:
-                found = workspace.search(context, manifest, "unique_api_contract", [repo["id"]], self.api)
-                record["search_ids"] = [s["id"] for s in found["searches"]]
+                for contract in manifest["changed_contracts"]:
+                    for source in (("index", "working-tree") if manifest["target"] == "quick" else (repo["review_source"],)):
+                        for term in contract["search_terms"]:
+                            found = workspace.search(context, manifest, term["query"], [repo["id"]], self.api,
+                                                     source, contract["id"])
+                            record["search_ids"] += [s["id"] for s in found["searches"]]
             dispositions.append(record)
         return {"schema": workspace.RESULT, "summary": "已檢查選定變更及功能鏈。", "coverage": coverage,
                 "impact_coverage": nodes, "repository_coverage": dispositions, "findings": [], "limitations": [],
@@ -88,6 +106,7 @@ class WorkspaceReviewTests(unittest.TestCase):
                     "path": "app.py", "line_start": 1, "line_end": 1}
         node = {"id": "I-consumer", "repo": captured["id"], "source": name, "path": "app.py", "status": "reviewed",
                 "evidence": [evidence], "related_to": [draft["impact_coverage"][0]["id"]] if link else [],
+                "contract_ids": draft["impact_coverage"][0]["contract_ids"],
                 "reason": "Consumer reads the changed API contract."}
         draft["impact_coverage"].append(node)
         next(r for r in draft["repository_coverage"] if r["repo"] == captured["id"])["status"] = "related"
@@ -315,6 +334,181 @@ class WorkspaceReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "completed searches"):
             workspace_report.validate(draft, manifest, context)
 
+    def test_group_search_rejects_unrelated_queries_and_unproven_aliases(self):
+        self.make_repo("consumer")
+        self.change()
+        context, manifest = self.capture()
+        self.draft(context, manifest)
+        contract = manifest["changed_contracts"][0]
+        with self.assertRaisesRegex(ValueError, "unrelated"):
+            workspace.search(context, manifest, "unrelated_admin", None, self.api, contract_id=contract["id"])
+        invalid = copy.deepcopy(contract)
+        invalid["id"] = "C-unproven"
+        invalid["search_terms"].append({"query": "unrelated_admin", "reason": "Claimed alias without code evidence"})
+        with self.assertRaisesRegex(ValueError, "alias/wrapper evidence"):
+            workspace.register_contract(context, manifest, invalid, self.api)
+
+    def test_single_negative_name_search_cannot_exclude_a_candidate(self):
+        self.make_repo("consumer")
+        self.change()
+        context, manifest = self.capture()
+        draft = self.draft(context, manifest)
+        candidate = next(r for r in draft["repository_coverage"] if r["status"] == "not-related")
+        candidate["search_ids"] = candidate["search_ids"][:1]
+        with self.assertRaisesRegex(ValueError, "one negative search"):
+            workspace_report.validate(draft, manifest, context)
+
+    def test_search_ledger_and_contract_anchor_tampering_are_rejected(self):
+        self.make_repo("consumer")
+        self.change()
+        context, manifest = self.capture()
+        draft = self.draft(context, manifest)
+        invalid = copy.deepcopy(manifest)
+        invalid["searches"][0]["output"] = "fabricated match"
+        with self.assertRaisesRegex(ValueError, "search ledger"):
+            workspace_report.validate(draft, invalid, context)
+        invalid = copy.deepcopy(manifest)
+        invalid["changed_contracts"][0]["anchor_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "anchor bytes changed"):
+            workspace_report.validate(draft, invalid, context)
+
+    def test_registered_downstream_contract_requires_transitive_repo_searches(self):
+        consumer = self.make_repo("consumer")
+        downstream = self.make_repo("downstream")
+        self.change()
+        context, manifest = self.capture()
+        draft = self.draft(context, manifest)
+        first = self.related(draft, manifest, consumer)
+        first["id"] = "I-consumer-B"
+        root = manifest["changed_contracts"][0]
+        propagated = workspace.register_contract(context, manifest, {
+            "id": "C-propagated", "root": root["root"], "parent_ids": [root["id"]],
+            "kind": "event", "symbol": "contract", "evidence": first["evidence"][0],
+            "search_terms": [{"query": "contract", "reason": "Downstream event key."},
+                             {"query": "contract =", "reason": "Event wrapper declaration."}]
+        }, self.api)
+        first["contract_ids"].append(propagated["id"])
+        second = self.related(draft, manifest, downstream)
+        second["id"], second["related_to"] = "I-consumer-C", [first["id"]]
+        second["contract_ids"] = [propagated["id"]]
+        # Root -> B -> C -> root is an allowed cycle.
+        draft["impact_coverage"][0]["related_to"] = [second["id"]]
+        with self.assertRaisesRegex(ValueError, "every changed/propagated contract"):
+            workspace_report.validate(draft, manifest, context)
+        for repo in manifest["repositories"]:
+            if repo["id"] == first["repo"]:
+                continue
+            row = next(r for r in draft["repository_coverage"] if r["repo"] == repo["id"])
+            for term in propagated["search_terms"]:
+                found = workspace.search(context, manifest, term["query"], [repo["id"]], self.api,
+                                         contract_id=propagated["id"])
+                row["search_ids"] += [s["id"] for s in found["searches"]]
+        self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
+
+    def test_group_quick_coverage_cannot_hide_staged_failure_with_working_fix(self):
+        self.change()
+        write_text(self.repo / "app.py", "contract = 'old'\n")
+        args = self.api.parse_args(["--group-root", str(self.root), "--quick"])
+        manifest = self.api.build_manifest(args)
+        context = Path(args.context_dir)
+        self.addCleanup(review_session.cleanup_session, context)
+        self.assertEqual({"index"}, {c["source"] for c in manifest["required_coverage"]})
+        repo = manifest["repositories"][0]
+        self.assertEqual(b"contract = 'new'\n", workspace.fixed_bytes(context, repo, "index", "app.py", self.api))
+        self.assertEqual(b"contract = 'old'\n", workspace.fixed_bytes(context, repo, "working-tree", "app.py", self.api))
+        draft = self.draft(context, manifest)
+        self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
+        draft["coverage"] = []
+        with self.assertRaisesRegex(ValueError, "every changed"):
+            workspace_report.validate(draft, manifest, context)
+
+    def test_group_quick_related_consumer_requires_both_matching_source_reviews(self):
+        consumer = self.make_repo("consumer")
+        self.change()
+        write_text(consumer / "app.py", "contract = 'old'\nconsumer = 'staged failure'\n")
+        git(consumer, "add", "app.py")
+        write_text(consumer / "app.py", "contract = 'old'\nconsumer = 'saved correction'\n")
+        args = self.api.parse_args(["--group-root", str(self.root), "--project", str(self.repo), "--quick"])
+        manifest = self.api.build_manifest(args)
+        context = Path(args.context_dir)
+        self.addCleanup(review_session.cleanup_session, context)
+        draft = self.draft(context, manifest)
+        node = self.related(draft, manifest, consumer)
+        node["contract_ids"] = [contract["id"] for contract in manifest["changed_contracts"]]
+        node["related_to"] = [identifier for row in draft["coverage"] for identifier in row["impact_ids"]]
+        self.assertFalse(workspace_report.validate(draft, manifest, context)["review_complete"])
+        captured = workspace.repository(manifest, node["repo"])
+        staged = copy.deepcopy(node)
+        staged.update(id="I-consumer-index", source="index", reason="Reviewed the separate staged consumer behavior.")
+        for evidence in staged["evidence"]:
+            evidence.update(source="index", ref=captured["sources"]["index"]["ref"])
+        draft["impact_coverage"].append(staged)
+        self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
+        staged["status"] = "not-reviewed"
+        self.assertFalse(workspace_report.validate(draft, manifest, context)["review_complete"])
+
+    def test_group_implicit_branch_entry_uses_v2_unless_repo_scope_is_explicit(self):
+        self.make_repo("consumer")
+        git(self.repo, "switch", "-c", "feature")
+        self.change()
+        git(self.repo, "commit", "-m", "change")
+        args = self.api.parse_args(["--workspace", str(self.root), "--project", str(self.repo),
+                                    "--base", "main", "--head", "feature", "--no-fetch"])
+        manifest = self.api.build_manifest(args)
+        self.addCleanup(review_session.cleanup_session, Path(manifest["context_dir"]))
+        self.assertEqual((workspace.CONTEXT, "group", 2),
+                         (manifest["schema"], manifest["scope"], len(manifest["repositories"])))
+
+    def test_one_repo_group_keeps_group_scope_and_detects_later_candidates(self):
+        self.change()
+        context, manifest = self.capture()
+        self.assertEqual((workspace.CONTEXT, "group", 1),
+                         (manifest["schema"], manifest["scope"], len(manifest["repositories"])))
+        draft = self.draft(context, manifest)
+        self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
+        self.make_repo("new-consumer")
+        self.assertFalse(workspace_report.validate(draft, manifest, context)["review_complete"])
+        _, narrowed = self.capture(scope="repo")
+        self.assertEqual(("repo", 1), (narrowed["scope"], len(narrowed["repositories"])))
+
+    def test_one_repo_group_implicit_branch_entry_uses_group_v2(self):
+        git(self.repo, "switch", "-c", "feature")
+        self.change()
+        git(self.repo, "commit", "-m", "change")
+        args = self.api.parse_args(["--workspace", str(self.root), "--project", str(self.repo),
+                                    "--base", "main", "--head", "feature", "--no-fetch"])
+        manifest = self.api.build_manifest(args)
+        self.addCleanup(review_session.cleanup_session, Path(manifest["context_dir"]))
+        self.assertEqual((workspace.CONTEXT, "group", 1),
+                         (manifest["schema"], manifest["scope"], len(manifest["repositories"])))
+
+    def test_declared_group_quick_aliases_keep_both_local_sources(self):
+        self.change()
+        write_text(self.repo / "app.py", "contract = 'old'\n")
+        for scope in (None, "auto", "group"):
+            with self.subTest(scope=scope):
+                args = ["--workspace", str(self.root), "--quick"]
+                if scope:
+                    args += ["--scope", scope]
+                manifest = self.api.build_manifest(self.api.parse_args(args))
+                context = Path(manifest["context_dir"])
+                self.addCleanup(review_session.cleanup_session, context)
+                self.assertEqual(("group", "quick"), (manifest["scope"], manifest["target"]))
+                repo = manifest["repositories"][0]
+                self.assertEqual(b"contract = 'new'\n", workspace.fixed_bytes(context, repo, "index", "app.py", self.api))
+                self.assertEqual(b"contract = 'old'\n", workspace.fixed_bytes(context, repo, "working-tree", "app.py", self.api))
+                self.assertEqual({"index"}, {row["source"] for row in manifest["required_coverage"]})
+
+    def test_git_root_and_single_repo_workspace_file_keep_auto_repo_scope(self):
+        self.change()
+        workspace_file = self.root / "single.code-workspace"
+        workspace_file.write_text(json.dumps({"folders": [{"path": "api"}]}), encoding="utf-8")
+        for extra in ([], ["--workspace-file", str(workspace_file)]):
+            args = self.api.parse_args(["--workspace", str(self.repo), "--scope", "auto", "--target", "staged", *extra])
+            manifest = self.api.build_manifest(args)
+            self.addCleanup(review_session.cleanup_session, Path(manifest["context_dir"]))
+            self.assertEqual(("repo", 1), (manifest["scope"], len(manifest["repositories"])))
+
     def test_actual_vscode_roots_include_external_worktree_without_scanning_other_siblings(self):
         other = self.make_repo("nested/consumer")
         invisible = self.make_repo("not-visible")
@@ -324,6 +518,31 @@ class WorkspaceReviewTests(unittest.TestCase):
         _, manifest = self.capture("staged", "auto", True, "--workspace-file", str(workspace_file))
         self.assertEqual({str(self.repo), str(other)}, {r["path"] for r in manifest["repositories"]})
         self.assertNotIn(str(invisible), {r["path"] for r in manifest["repositories"]})
+
+    def test_explicit_group_root_cannot_be_narrowed_by_workspace_file(self):
+        self.make_repo("consumer")
+        self.change()
+        workspace_file = self.root / "partial.code-workspace"
+        workspace_file.write_text(json.dumps({"folders": [{"path": "api"}]}), encoding="utf-8")
+        args = self.api.parse_args(["--group-root", str(self.root), "--target", "staged", "--project", str(self.repo),
+                                    "--workspace-file", str(workspace_file)])
+        with self.assertRaisesRegex(ValueError, "cannot be narrowed"):
+            self.api.build_manifest(args)
+        self.assertFalse(Path(args.context_dir).exists())
+
+    def test_new_candidate_or_changed_workspace_boundary_keeps_group_incomplete(self):
+        self.change()
+        context, manifest = self.capture("staged", "group")
+        draft = self.draft(context, manifest)
+        self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
+        self.make_repo("new-consumer")
+        self.assertFalse(workspace_report.validate(draft, manifest, context)["review_complete"])
+        workspace_file = self.root / "visible.code-workspace"
+        workspace_file.write_text(json.dumps({"folders": [{"path": "api"}]}), encoding="utf-8")
+        context, manifest = self.capture("staged", "group", True, "--workspace-file", str(workspace_file))
+        draft = self.draft(context, manifest)
+        workspace_file.write_text(json.dumps({"folders": [{"path": "api"}, {"path": "new-consumer"}]}), encoding="utf-8")
+        self.assertFalse(workspace_report.validate(draft, manifest, context)["review_complete"])
 
     def test_rename_old_path_and_deletion_have_base_evidence_and_separate_coverage(self):
         write_text(self.repo / "deleted.py", "old = True\n")
@@ -409,8 +628,18 @@ class WorkspaceReviewTests(unittest.TestCase):
         manifest = self.api.build_manifest(args)
         context = Path(args.context_dir)
         self.addCleanup(review_session.cleanup_session, context)
-        self.assertEqual("merge-reviewer-group-context/v1", manifest["schema"])
-        self.assertEqual({"index", "working-tree"}, set(manifest["repositories"][0]["versions"]))
+        self.assertEqual(workspace.CONTEXT, manifest["schema"])
+        self.assertEqual({"base", "index", "working-tree"}, set(manifest["repositories"][0]["sources"]))
+
+    def test_explicit_repo_search_without_contract_keeps_fixed_source_validation(self):
+        self.change()
+        context, manifest = self.capture(scope="repo")
+        workspace.search(context, manifest, "contract", None, self.api)
+        draft = self.draft(context, manifest)
+        self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
+        manifest["searches"][0]["output"] += "forged match\n"
+        with self.assertRaisesRegex(ValueError, "search ledger"):
+            workspace_report.validate(draft, manifest, context)
 
     def test_release_archive_runs_new_modes_without_workspace_overlay(self):
         self.change()

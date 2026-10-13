@@ -550,7 +550,11 @@ class QuickReviewTests(unittest.TestCase):
         )
         self.assertEqual(selected.returncode, 0, selected.stderr)
         assert payload is not None
-        self.assertEqual(Path(payload["repo"]), repositories[1].resolve())
+        self.assertEqual("merge-reviewer-workspace-context/v2", payload["schema"])
+        self.assertEqual("group", payload["scope"])
+        self.assertEqual({repo.resolve() for repo in repositories}, {Path(repo["path"]) for repo in payload["repositories"]})
+        seeds = [repo for repo in payload["repositories"] if repo["id"] in payload["seed_repos"]]
+        self.assertEqual([repositories[1].resolve()], [Path(repo["path"]) for repo in seeds])
 
     def test_invalid_non_object_workspace_json_stops_with_a_diagnostic(self) -> None:
         workspace_file = self.root / "invalid.code-workspace"

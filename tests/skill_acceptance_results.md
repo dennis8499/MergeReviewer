@@ -1,4 +1,62 @@
-# Codex skill acceptance — 2026-10-12
+# Independent Group v2 Skill acceptance — 2026-10-13
+
+An independent agent read the revised Skill and executed two isolated Group
+reviews without being supplied the intended verdict. Each review registered four
+fixed-source contracts, performed 84 recorded searches, reviewed eight connected
+impact nodes and published Markdown/JSON through `review_report.py` (exit 0).
+
+| Input | Observed review |
+| --- | --- |
+| Replace the existing amount field | One P1 covering the web display failure, shared validation rejection and missing downstream settlement event. |
+| Preserve the existing field and add an equivalent alias | No findings; existing consumers retain compatible values. |
+
+Both reviews traced `orders-api → invoice-worker → shared-contracts →
+settlements.ready → settlement-worker`, checked the unchanged web caller, and
+excluded unrelated-admin after contract-related searches and source inspection.
+Both reports were complete and their owned contexts were cleared. The agent did
+not change product files, refs or index, access the network, or execute application
+tests; all finding scenarios are code-derived. This demonstrates the workflow on
+these fixtures, not general model accuracy.
+
+Local ignored evidence: [field replacement](../test-artifacts/group-v2-acceptance/A/summary.md)
+and [compatible alias](../test-artifacts/group-v2-acceptance/B/summary.md), each with
+its adjacent `result.json` and Repo detail reports. Subsequent independent code
+review added regressions for Repo-only search compatibility, partial receipt
+selection, dual-source consumer coverage, Group boundary drift, propagated
+wrapper aliases, binary consumer drift and crash-safe upgrade recovery.
+
+The same two Groups were then reviewed through the final GitlabWorkSpace 0.22.0
+offline installation using `MergeReviewTask/v2`, explicit `groupRoot` and the
+original fixed source/target SHAs. The installed reviewer reread ten fixed-source
+files/previews per case, registered four contracts, recorded 84 searches and
+reviewed eight impact nodes. Each case completed 99 commands without failure,
+published `MergeReviewReport/v2` and passed the installed MR binding verifier.
+The field replacement still produced one P1; the compatible alias produced no
+findings. Both reports retained Group scope and complete coverage. Product files,
+HEAD, branches, refs, index and status stayed unchanged, and owned contexts were
+cleared. Local evidence: [installed MR field replacement](../test-artifacts/group-v2-acceptance/Workspace-MR-A/merge-review-20261013T065008Z-222829ed/summary.md)
+and [installed MR compatible alias](../test-artifacts/group-v2-acceptance/Workspace-MR-B/merge-review-20261013T065010Z-5795a4ff/summary.md).
+
+The final installation also validated the independently explored Megin
+`orders-api → checkout-ui → receipt-worker` architecture against the same fixed
+sources (exit 0). All 58 files in the 13 bundled Megin Skills matched the final
+native package; product state and architecture records remained unchanged. This
+was architecture-only acceptance, with proposed compatibility checks retained as
+unexecuted drafts.
+
+Current Windows validation for Megin 0.8.0, MergeReviewer 0.11.0 and
+GitlabWorkSpace 0.22.0:
+
+| Check | Result |
+| --- | --- |
+| Megin quality gates | 98 passed. |
+| MergeReviewer full regression | 141 cases: 140 passed, one symbolic-link case skipped because the Windows account lacks permission. |
+| Final Group quick entry regressions | Four passed, including the additional declared-Group quick alias case. |
+| Automated BDD | 24 scenarios / 99 steps passed; real GitHub publishing remains a separate manual scenario. |
+| Workspace integration and maintenance | 156 passed across installer, profiles, transactions, installed Group, MR adapter, TypeScript, AutoHook, ReleaseReviewer and historical receipts. |
+| Release artifacts | Native source pins, installed bytes, VSIX/ZIP payloads, SHA-256 and archive reproducibility passed. |
+
+# Earlier portable v1 acceptance — 2026-10-12
 
 The implementing Codex session executed the portable Group workflow against two isolated Git workspaces prepared by `skill_acceptance.py`. Codex read the frozen changes, baseline/merge-preview, callers, event consumer, package identities and shared contract; searched the captured sources; decided the findings; authored drafts; and published them through `review_report.py`. The fixture helper prepares source only and never generates review decisions.
 
