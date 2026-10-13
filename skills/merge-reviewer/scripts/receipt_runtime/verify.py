@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sys
 
 sys.dont_write_bytecode = True
@@ -17,6 +17,12 @@ def main():
             raise ValueError("invalid bundled receipt runtime manifest")
         if hashlib.sha256((runtime / name).read_bytes()).hexdigest() != digest:
             raise ValueError("bundled receipt runtime changed: " + name)
+    for name, digest in provenance.get("vendor_files", {}).items():
+        path = PurePosixPath(name)
+        if path.is_absolute() or len(path.parts) != 2 or path.parts[0] != "tomli" or ".." in path.parts or "\\" in name:
+            raise ValueError("invalid bundled TOML parser manifest")
+        if hashlib.sha256((runtime / name).read_bytes()).hexdigest() != digest:
+            raise ValueError("bundled TOML parser changed: " + name)
     sys.path.insert(0, str(runtime))
     import unified_workflow
     root, work, mode = sys.argv[1:]

@@ -1,4 +1,4 @@
-"""Vendor exact native read-only policy dependencies for standalone v2 receipts.
+"""Vendor native read-only policy with an explicit Python 3.10 parser fallback.
 
 Use --check in integration checks; a source update is an explicit maintenance
 operation. Project code and live remote operations are never invoked here.
@@ -15,6 +15,15 @@ MODULES = ("behavior_trace.py", "functional_inventory.py", "git_snapshot.py", "g
            "impact_policy.py", "project_scanner.py", "quality_gate.py", "quality_policy.py", "repo_workspace.py",
            "source_baseline.py", "unified_workflow.py", "verification_inputs.py", "workspace_context.py",
            "workspace_extension.py", "workspace_lock.py")
+
+TOMLI_SHA256 = {
+    "__init__.py": "9eb042d7c0db5d14c2168ec4946e410de5a91c9cce86892f5e4db5e4633c6762",
+    "_parser.py": "a412234c86bf710b361e0943276961f0e25fa6d7c36ba7a0e7eec87a3e018c7b",
+    "_re.py": "a12359fe294523a72112e434d58452a14c9d050affa2417f9927474e4166bfdd",
+    "_types.py": "f864c6d9552a929c7032ace654ee05ef26ca75d21b027b801d77e65907138b74",
+    "py.typed": "f0f8f2675695a10a5156fb7bd66bafbaae6a13e8d315990af862c792175e6e67",
+    "LICENSE": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe",
+}
 
 
 def test_fixture(source: Path) -> bytes:
@@ -78,8 +87,22 @@ def sync(source: Path, check=False):
     source = source.resolve()
     scripts = source / ".agents/skills/megin/scripts"
     files = {name: (scripts / name).read_bytes() for name in MODULES}
+    upstream_scanner = hashlib.sha256(files["project_scanner.py"]).hexdigest()
+    files["project_scanner.py"] = files["project_scanner.py"].replace(
+        b"import tomllib\n",
+        b"try:\n    import tomllib\nexcept ModuleNotFoundError:  # Python 3.10 standalone compatibility.\n    import tomli as tomllib\n",
+        1,
+    )
+    vendor_files = {"tomli/" + name: digest for name, digest in TOMLI_SHA256.items()}
+    for name, digest in vendor_files.items():
+        if hashlib.sha256((target / name).read_bytes()).hexdigest() != digest:
+            raise ValueError("vendored Tomli 2.4.1 differs from its pinned source: " + name)
     manifest = {"source": "Megin/.agents/skills/megin/scripts", "version": (source / "VERSION").read_text().strip(),
-                "files": {name: hashlib.sha256(raw).hexdigest() for name, raw in files.items()}}
+                "files": {name: hashlib.sha256(raw).hexdigest() for name, raw in files.items()},
+                "vendor_files": vendor_files,
+                "compatibility": {"tomli_version": "2.4.1", "tomli_license": "MIT",
+                                  "project_scanner_upstream_sha256": upstream_scanner,
+                                  "patch": "Use bundled Tomli only when Python has no standard-library tomllib."}}
     files["source-manifest.json"] = (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
     for name, raw in files.items():
         if check:

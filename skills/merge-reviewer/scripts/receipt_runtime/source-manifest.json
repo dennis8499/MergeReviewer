@@ -1,11 +1,17 @@
 {
+  "compatibility": {
+    "patch": "Use bundled Tomli only when Python has no standard-library tomllib.",
+    "project_scanner_upstream_sha256": "be392beb5585811481f68a1ab4e3106013cb9f5ea1df09fda46c443c8602a444",
+    "tomli_license": "MIT",
+    "tomli_version": "2.4.1"
+  },
   "files": {
     "behavior_trace.py": "11f77eccb4620530e9027e76c192d276b80e7dd530eacb0a4d8fe5deafa0e35c",
     "functional_inventory.py": "3d5774ce9a0031377ea7d8454f743d803bc42b895cfd7e2fb08d270703dbcb5b",
     "git_snapshot.py": "c733001854f03615276af0174560ef136301b1877d968872747b7b798a0b982f",
     "group_quality_gate.py": "fa3c95f10983c0e92601e2732d2a22b21f6147346ccf422b5a61fc37964f5b94",
     "impact_policy.py": "e4207a767933ba1ad436fc24539ba0e51740eee5ad421edc24a029e6e7041aaa",
-    "project_scanner.py": "be392beb5585811481f68a1ab4e3106013cb9f5ea1df09fda46c443c8602a444",
+    "project_scanner.py": "c2429d3a677e2395d3b0b1da759541de90f94b65fb9f6692b85072c4942e63a7",
     "quality_gate.py": "78c4fe46944ff3fdd0ea32825dcb931ee6c3502fe09cf7a8cdf7fba27af64474",
     "quality_policy.py": "d244ee4d491347c4c14a4b21425fe2018da7d07d56bd9deea13c70970b509fde",
     "repo_workspace.py": "71ad27cd324e8c96cfc9bfc5cec1a8f201933cc1aacf503c49e8dafaf2b08c4c",
@@ -17,5 +23,13 @@
     "workspace_lock.py": "2925147cd68e6d47b85c19c607db8a51b01cdde3fee20a3719f1d1b420266333"
   },
   "source": "Megin/.agents/skills/megin/scripts",
+  "vendor_files": {
+    "tomli/LICENSE": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe",
+    "tomli/__init__.py": "9eb042d7c0db5d14c2168ec4946e410de5a91c9cce86892f5e4db5e4633c6762",
+    "tomli/_parser.py": "a412234c86bf710b361e0943276961f0e25fa6d7c36ba7a0e7eec87a3e018c7b",
+    "tomli/_re.py": "a12359fe294523a72112e434d58452a14c9d050affa2417f9927474e4166bfdd",
+    "tomli/_types.py": "f864c6d9552a929c7032ace654ee05ef26ca75d21b027b801d77e65907138b74",
+    "tomli/py.typed": "f0f8f2675695a10a5156fb7bd66bafbaae6a13e8d315990af862c792175e6e67"
+  },
   "version": "0.8.0"
 }

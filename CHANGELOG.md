@@ -7,6 +7,7 @@
 - Keep separate index and saved-file quick coverage, source freshness, graph cycles and unresolved consumer gaps.
 - Revalidate MR/receipt bindings before publication, including portable reports; independently validate native Repo/Group receipt v2 without installing Megin.
 - Retain historical context/receipt verification without promoting old evidence to new cross-Repo completion.
+- Bundle the MIT-licensed Tomli parser for Python 3.10 receipt/scanner compatibility and verify its source hashes before isolated receipt validation.
 
 ## 0.10.0 - 2026-10-12
 

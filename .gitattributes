@@ -4,3 +4,4 @@ skills/merge-reviewer/VERSION text eol=lf
 *.py text eol=lf
 *.yaml text eol=lf
 *.zip binary
+skills/merge-reviewer/scripts/receipt_runtime/** text eol=lf
