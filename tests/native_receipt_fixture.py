@@ -381,7 +381,7 @@ class WorkFixture:
         self.set_phase('delivery')
 
 if __name__ == "__main__":
-    temp = Path(sys.argv[1])
+    temp = Path(sys.argv[1]).resolve()
     ROOT = temp / "installation-source"
     scripts = ROOT / ".agents/skills/megin/scripts"
     shutil.copytree(RUNTIME, scripts)

@@ -24,7 +24,7 @@ class WorkspaceReviewTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="workspace-review-tests-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.api = load_module("workspace_test_context", SCRIPTS / "git_review_context.py")
         self.repo = self.make_repo("api")
 
