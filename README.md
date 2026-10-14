@@ -1,304 +1,65 @@
 # Merge Reviewer
 
-0.11.0 統一所有 Group 入口為 v2 跨 Repo 審查，保留 quick 的 index／working 雙來源，並將搜尋與排除判定綁定至實際變更契約；可獨立驗證 Megin Repo／Group v2 交付收據。Codex 直接執行語意 Code Review，工具驗證固定來源、逐檔與功能鏈覆蓋。參考[新審查流程與結果契約](skills/merge-reviewer/references/workspace-review.md)。
+`0.12.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
-`Merge Reviewer` 是一個審查 Git 分支／commit、Stage 與未提交內容的 Codex skill。它以固定 Git object 或獨立快照檢查本次變更及相關功能鏈，涵蓋驗證、授權、錯誤處理、設定、資料轉換與契約相容性，並產生繁體中文 Markdown 報告。
+## 安裝與第一次使用
 
-## 功能
+需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-- **合併前審查**：以 `merge-base(基礎版本, 比較版本)` 到比較版本的範圍，檢查即將帶入的變更。
-- **實際合併預覽**：在 repository 外產生基礎與比較版本的預覽合併樹，檢查兩邊變更整合後的相容性。
-- **直接比較**：直接比較指定的基礎版本與比較版本。
-- **Merge commit 檢查**：逐一對照 merge commit 的各個 parent 與合併結果，確認任一側的必要邏輯沒有在解衝突時遺失。
-- **證據導向 finding**：依 P0、P1、P2、P3 排序，記錄觸發條件、程式證據、影響與聚焦的修正方向。
-- **多 repository 工作區支援**：可指定 repository 名稱或路徑，也能處理 VS Code `.code-workspace`。
-- **Group 功能鏈**：以指定 Repo 為起點，追蹤相關但沒有變更的消費端、事件、套件與共用契約；無關 Repo 保留排除原因。
-- **獨立本機審查**：Stage 只看 index；未提交模式看已儲存的最終檔案，兩者都不需要 remote。
-- **快速本地分支審查**：一行自動辨識單一 Repo 的目前分支、遠端預設分支與最新 base；可選擇納入已儲存但尚未提交的檔案。
-- **可查證的審查報告**：記錄逐檔覆蓋與固定版本證據，驗證一致性後預設產生 Markdown；可選 JSON。
+從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.12.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
-## 需求環境
+在 Codex 對話輸入：
 
-- Git；分支模式的基礎／比較版本需可解析，Stage 與未提交模式不要求 remote。
-- Python 3.10 以上，用於執行內附的 Git context helper。
-- 可載入 Codex skill 的環境。
-
-## 安裝
-
-將 `skills/merge-reviewer` 複製或 symlink 到 Codex 的 skill 目錄：
-
-```text
-$CODEX_HOME/skills/merge-reviewer
-```
-
-若沒有設定 `CODEX_HOME`，使用預設位置：
-
-```text
-~/.codex/skills/merge-reviewer
-```
-
-PowerShell 複製範例：
-
-```powershell
-# CODEX_HOME 已設定時
-Copy-Item -Recurse .\skills\merge-reviewer "$env:CODEX_HOME\skills\merge-reviewer"
-
-# CODEX_HOME 未設定時
-Copy-Item -Recurse .\skills\merge-reviewer "$HOME\.codex\skills\merge-reviewer"
-```
-
-安裝後可使用 `$merge-reviewer` 呼叫此 skill。
-
-## 版本與 GitHub Release
-
-目前版本記錄在 `skills/merge-reviewer/VERSION`，採用 `X.Y.Z` 的 SemVer 格式。GitHub Release 的 tag 必須與版本檔一致，例如：
-
-```text
-VERSION: 0.11.0
-tag: v0.11.0
-```
-
-完成版本變更並推送到 `main` 後，建立並推送 tag 即可觸發 Release workflow：
-
-```powershell
-$releaseVersion = (Get-Content skills\merge-reviewer\VERSION -Raw).Trim()
-git tag -a "v$releaseVersion" -m "Release v$releaseVersion"
-git push origin "v$releaseVersion"
-```
-
-將版本更新寫入 `skills/merge-reviewer/VERSION` 後，以該值建立對應的 tag。Release workflow 通過跨平台 CI 後，會在 [Releases 頁面](https://github.com/dennis8499/MergeReviewer/releases) 提供 `merge-reviewer-<版本>.zip`；套件只含可複製到 Codex skill 目錄的 `merge-reviewer` 資料夾，不含 repository 測試或開發檔案。
-
-若 workflow 建立 Release 時收到權限錯誤，請在 GitHub repository 的 **Settings → Actions → General → Workflow permissions** 啟用 **Read and write permissions**；組織層級政策可能限制此設定。
-
-## 快速開始
-
-新審查預設自動辨識單 Repo／Group；在 Group 中會延伸所選變更的功能鏈。關聯 Repo 使用工作區目前版本，不自動套用相同分支名稱：
-
-```text
+~~~text
 $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature/payment
-$merge-reviewer 專案名稱=OrderService 審查目標=Stage
-$merge-reviewer 專案名稱=OrderService 審查目標=未提交
-$merge-reviewer 專案名稱=OrderService 審查範圍=單Repo 審查目標=Stage
-```
+~~~
 
-Helper 的新介面為 `--scope auto|repo|group` 與 `--target branch|staged|uncommitted`。用 `--workspace-file` 提供 VS Code 的實際工作區，或以 `--group-root` 指定 Group。包含 Repo 的非 Git 容器預設維持 Group，即使目前只有一個 Repo；只有明確 `--scope repo` 才縮小該 Group。直接指定 Git 根目錄則維持單 Repo。分支模式仍支援 base/head、SHA、merge/direct；本機模式獨立於分支比較。多 Repo 分支審查需要明確起點；Group 本機審查未指定起點時，從有修改的 Repo 開始。
+三個參數必填。名稱重複時用完整路徑；遠端分支明確寫 `origin/main`。本機功能分支不用先 push。
 
-```powershell
-python skills/merge-reviewer/scripts/git_review_context.py --workspace <root> --scope auto --target staged --project <Repo>
-python skills/merge-reviewer/scripts/git_review_context.py --workspace <root> --scope auto --target uncommitted --project <Repo>
-python skills/merge-reviewer/scripts/git_review_context.py --workspace <root> --scope auto --target branch --project <Repo> --base main --head feature/payment
-```
+完整操作、PowerShell 安裝、工作區範例、報告及錯誤排除：[詳細使用指南](skills/merge-reviewer/references/usage.md)。
 
-新模式使用獨立的 workspace context/result schema，報告由同一個 `review_report.py` 發佈至 `review-reports/merge-review-<run-id>/summary.md`，並附各相關 Repo 明細。每個變更需連結固定證據與受審功能鏈節點；必要上下游有缺口時維持「審查未完成」。Git helper 不會自行判定語意正確；Codex 會反覆搜尋、閱讀與追查，搜尋與覆蓋紀錄留在報告中。
+## 審查行為
 
-### 相容用法
+- 核心準則及 P0–P3 採 Codex 原生 Code Review，套用適用的 `AGENTS.md` 背景；工具只準備固定證據及驗證覆蓋。
+- 固定比較 `merge-base(基礎分支, 比較分支) → 比較分支`，另提供 preview 及 merge-parent 證據；不納入未提交內容。
+- 一個 Git 根目錄或只有一個 Repo 的容器停用跨 Repo 檢核；至少兩個宣告範圍內的不同根目錄才啟用。
+- 永遠只有一個受審 Repo；其他 Repo 使用擷取時的 HEAD，不套用同名分支或本機修改。
+- 不修改原始檔案、index 或目前分支；只同步指定遠端、建立系統暫存證據及寫報告。
+- 必要來源、預覽或影響鏈缺失時保持未完成，保留已有證據的問題。
 
-以下既有 CLI 與 quick 用法維持原語意；MR 與選填的 [Megin 收據](skills/merge-reviewer/references/megin-receipt.md)也維持原契約。獨立套件現在同時包含[舊 Group 雙來源 quick](skills/merge-reviewer/references/group-quick.md)。
+## 報告
 
-指定專案、基礎分支與比較分支：
+~~~text
+<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit>-<比較分支commit>.md
+~~~
 
-```text
-$merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature/payment
-```
+標題為 `Merge Report: <Repo>`，採結論先行的繁體中文精簡風格，全數問題依原生優先程度排序；必要限制在正文，完整版本與搜尋紀錄在附錄。每次只產生一個 Markdown 檔案。時間戳為 UTC 發布時間，格式 `YYYYMMDDTHHMMSSffffffZ`（含微秒）；commit 使用擷取時兩個分支的完整 SHA，基礎分支取分支頂端而非共同祖先。同名時遞增時間戳，保留既有報告。
 
-一般分支或 commit 比較只審查指定版本的已提交內容。專案即使有已暫存、未暫存、已刪除或未追蹤的檔案，也能直接執行；這些本機內容不會納入比較，原始修改會保留，不必先 stage、commit 或 stash。
+狀態為「發現具體問題」「沒有差異」「未發現具體問題」「審查未完成」。未發現問題不保證完全正確；未執行的專案測試不會寫成通過。
 
-使用 commit，並改用直接比較：
+## 0.12.0 相容性
 
-```text
-$merge-reviewer 基礎分支=abc123 比較分支=def456 比較模式=直接比較
-```
+不支援 Stage、未提交、quick、直接比較、tag／commit／HEAD、多起點、MR task 或 Megin 收據。舊參數直接拒絕，不自動轉成其他審查。
 
-快速比較目前本地分支與遠端預設主分支：
+公開 context/result 為 v3，見[證據與結果契約](skills/merge-reviewer/references/workspace-review.md)。GitlabWorkSpace 固定的 0.11.0 套件不在本次升級範圍；其 MR、Group quick 及收據 adapter 需另行遷移，不能直接替換成 0.12.0。
 
-```text
-$merge-reviewer 快速審查
-$merge-reviewer 快速審查 包含未提交變更
-$merge-reviewer 快速審查 遠端=upstream
-```
+## 開發驗證與套件
 
-快速模式只需要一行即可使用目前本地分支的 `HEAD`，不要求開發分支已 push。預設只看已提交內容；`包含未提交變更` 會把 staged、unstaged、刪除與未忽略的未追蹤檔案建立成固定快照，也會包含強制暫存的 ignored 檔案。各模式都把 context bundle 放入系統暫存目錄；報告成功、驗證失敗或寫入失敗時都會清除本次受管理的資料。審查提前中止時，依 manifest 提示執行 `review_session.py cleanup --context-dir <context>`。編輯器尚未儲存的內容不在範圍內。
+~~~powershell
+python -m pip install -r requirements-dev.txt
+python -X utf8 -B -m unittest discover -s tests -v
+python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
+python scripts/package_release.py --tag v0.12.0
+~~~
 
-### 輸入參數
+CI 維持 Linux／Windows × Python 3.10／3.14 矩陣；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及五個必要 helper，不包含測試及舊收據 runtime。
 
-| 參數 | 必要性 | 說明 |
-| --- | --- | --- |
-| `專案名稱` | 多 Repo ref／快速模式時可選 | Repository 名稱或路徑。目標 workspace 只有一個 Repo 時可省略。 |
-| `基礎分支` | ref 比較必需；快速模式不需要 | 指定 ref 比較的 base；快速模式自動選遠端預設分支。 |
-| `比較分支` | ref 比較必需；快速模式不需要 | 指定 ref 比較的 head；快速模式使用本機 `HEAD`。 |
-| `比較模式` | 選填，僅 ref 比較 | `合併前審查`（預設）或 `直接比較`。 |
-| `快速審查` | 單一 Repo 快速模式選填 | 使用目前 Repo 的分支及遠端預設分支。 |
-| `遠端` | 單 Repo 快速模式選填 | 有多個 remote 時明確指定。 |
-| `包含未提交變更` | 單 Repo 快速模式選填 | 建立固定 tree snapshot，納入 staged、unstaged 與非 ignored 的 untracked files。 |
+自動測試驗證介面、證據、延伸、報告及清理；[語意品質案例](tests/review_quality_cases.md)與[實際技能紀錄](tests/skill_acceptance_results.md)另行驗收。Helper 通過不代表模型審查品質已通過。
 
-Repository 或 remote 選擇不明確時，skill 會列出候選項目並要求選擇。指定的 ref 找不到時會直接回傳錯誤，不會改查 upstream、同名本機／遠端分支或過期快取。
+## 文件
 
-`main`、`feature/login`、`refs/heads/main` 只查本機 branch；`origin/main`、`refs/remotes/origin/main` 只查指定 remote。Remote branch 會先連線確認並以 exact refspec 更新暫存 remote-tracking ref；因此 remote-qualified ref 不能搭配 `--no-fetch`。Tag 可使用 `refs/tags/<name>`（或沒有同名本機 branch 時使用短 tag 名稱），commit SHA 與 `HEAD` 仍可直接使用。
-
-## 比較模式
-
-| 模式 | 比較範圍 | 適用情境 |
-| --- | --- | --- |
-| `合併前審查` | `merge-base(基礎版本, 比較版本)` → 比較版本，並產生預覽合併樹 | 檢查功能分支變更及主分支更新後的整合行為。 |
-| `直接比較` | `基礎版本` → `比較版本` | 需要精確檢查兩個指定版本之間的完整差異。 |
-
-直接比較不要求共同祖先。Manifest 的 `merge_base` 在唯一共同祖先存在時記錄 SHA；沒有或有多個共同祖先時記錄 `null`。合併前審查仍要求唯一共同祖先。
-
-報告會記錄輸入 ref、解析後的完整 SHA、比較模式、merge base、fetch 結果，以及工作樹是否維持不變。
-
-快速模式透過 `git ls-remote --symref <remote> HEAD` 取得遠端宣告的預設分支，並連線確認實際 branch；遠端未提供 HEAD 時才使用本地候選，再以 fetch 驗證該 branch。多個 remote 或多個主分支候選都會停止並列出選項，不會猜測。
-
-## 審查安全行為
-
-審查過程使用 Git object 命令讀取版本內容，不會：
-
-- checkout、merge、reset、stage 或修改來源分支與 commit；
-- 一般指定版本比較只讀取指定的已提交版本，既存的 staged、unstaged、刪除或未追蹤變更不會混入差異，且不會要求先清理；快速模式明確使用 `包含未提交變更` 時，才會以 repository 外的 alternate index/object directory 建立固定快照。合併預覽也將新 Git objects 寫到 repository 外。唯讀 Git 查詢會停用選擇性 index 更新；
-- 自動修正程式碼、建立 commit、發布評論或推送變更。
-
-為了確認 remote 分支不是過期版本，helper 可能執行 `git fetch --no-tags --no-prune`。審查 context、結果草稿與執行時產生的 Git 證據都使用系統暫存目錄；審查報告是唯一會保留在 Repo 工作目錄的產物。
-
-## 報告輸出
-
-Markdown 報告預設寫入被審查 repository 的：
-
-```text
-<repo>/review-reports/merge-review-<UTC-timestamp>-<base-short>-<head-short>.md
-```
-
-要求 `輸出JSON` 時，另產生同名 `.json` 報告。
-
-報告包含：
-
-- **審查結論**：先給合併建議（`可以合併`、`修正後再合併`、`暫緩合併`、`需補做審查`）與白話一句話摘要，再列 P0–P3 數量、下一步（含處理角色）與會影響結論的檢查缺口；
-- **問題總覽**：用表格列出固定編號、行動導向的優先程度、問題、對使用者／資料／服務的影響，以及建議處理者（開發、維運設定、QA）；
-- **問題詳情**：依 P0 至 P3 排序，每項先用白話說明影響，再列操作情境、預期結果、實際結果、建議處理與技術證據（含工程修正建議）；
-- **JSON 審查結果（選用）**：使用 `輸出JSON` 要求時，保留逐檔檢查狀態、已驗證的證據版本與行號、P0–P3 數量及一致的結果狀態；
-- **範圍與限制**：用白話說明已檢查與未檢查的範圍、變更檔案摘要、binary／submodule 限制，以及本次靜態審查未執行的測試；
-- **技術審查紀錄（工程師參考）**：專案與 repository 路徑、輸入 ref 與解析後 SHA、比較模式與範圍、共同起點、同步遠端狀態、工作樹狀態及證據來源。
-
-問題總覽的數量和問題詳情的固定編號必須一致；結論、總覽與影響說明只用白話，程式名稱、檔名與 SHA 只出現在技術區段。詳細格式與示意請參閱
-[`skills/merge-reviewer/references/review-rules.md`](skills/merge-reviewer/references/review-rules.md)。
-
-### 問題等級
-
-| 等級 | 行動標籤 | 意義 |
-| --- | --- | --- |
-| P0 | 必須立即處理 | 普遍觸發，可能造成資料遺失、重大安全暴露、服務完全不可用或阻止部署。 |
-| P1 | 合併前必修 | 常見流程中的高影響問題。 |
-| P2 | 近期排程修正 | 限定情境或較低影響，但有明確證據。 |
-| P3 | 可後續改善 | 低風險的具體缺陷。 |
-
-### 結果狀態與合併建議
-
-| 狀態 | 意義 |
-| --- | --- |
-| `發現具體問題` | 審查範圍完整，至少有一個可由程式或 Git 證據支持的問題；問題總覽會列出所有問題。 |
-| `沒有差異` | 固定版本有效、審查範圍沒有差異，且合併預覽沒有額外變更。 |
-| `未發現具體問題` | 已檢查的範圍內沒有找到有證據的問題；不代表程式絕對正確。 |
-| `審查未完成` | 部分內容無法檢查（ref、同步遠端、共同起點、檔案讀取、合併預覽或逐檔覆蓋有缺口），結果不能視為通過；即使已找到部分問題，也必須列出缺口並保留已確認的問題。 |
-
-合併建議依狀態與最高等級判定：`審查未完成` 為 `需補做審查`；有 P0 為 `暫緩合併`；有 P1 為 `修正後再合併`；其他情況為 `可以合併`（P2／P3 排入後續修正）。
-
-聊天摘要會依序顯示合併建議與白話結論、P0–P3 數量、最多三項優先問題及各自的一句情境、下一步，最後提供完整報告連結。沒有具體問題時不會虛構情境；有更多問題時會提示讀者查看完整報告。
-
-## 限制與錯誤處理
-
-- 準備階段失敗時，helper 會先輸出 `merge-reviewer: error: <原因>`，多數情況再輸出 `merge-reviewer: 建議：<下一步>`，例如多個 remote 時提示使用 `--remote`、shallow clone 時提示 `git fetch --unshallow`。
-
-- Remote branch 的 fetch 失敗時會停止審查，不會靜默使用可能過期的 remote ref。
-- 本機 branch 不會因為設定 upstream 而觸發 fetch；指定不存在的本機 branch 會直接回報錯誤。
-- Remote-qualified ref 不能搭配 `--no-fetch`；`--no-fetch` 只適用於沒有 remote branch 輸入的比較。
-- 無效 ref 與 shallow history 會停止並回報原因；合併前審查要求唯一共同祖先。直接比較可以處理沒有或有多個共同祖先的版本組合，manifest 會以 `merge_base: null` 記錄。
-- 分支同時存在於多個 remote 時，請使用明確的 ref，例如 `origin/release`。
-- Binary、submodule、rename、copy 或 mode-only 變更會列為審查範圍限制，必要時需人工補充檢查。Submodule 變更會辨識 Git link 指標；內部程式碼不在 parent repository 的差異中。
-- Merge Reviewer 是靜態審查工具；除非使用者明確要求且實際執行，報告不會宣稱測試已通過。
-- `git merge-tree --write-tree` 不支援或產生衝突時，整合審查會標記為未完成。
-- 單一 Git 指令預設最多執行 180 秒；使用 `--git-timeout <秒>` 可調整。一般準備指令逾時會停止並附上重試建議；若合併預覽逾時，helper 會記錄 `merge_preview.status=unavailable` 和上下文缺口，報告仍須標為 `審查未完成`。
-- 對 squash、rebase 或手動複製的變更，可以審查最終行為，但不會將問題歸因於人工合併。
-
-## 手動執行 Git context helper
-
-需要檢查準備資料或整合其他工具時，可直接執行 helper：
-
-```powershell
-$contextDir = Join-Path $env:TEMP ("merge-reviewer-" + [Guid]::NewGuid().ToString("N"))
-python skills\merge-reviewer\scripts\git_review_context.py `
-  --workspace . `
-  --project OrderService `
-  --base main `
-  --head feature/payment `
-  --mode merge `
-  --context-dir $contextDir `
-  --git-timeout 180 `
-  --format json --pretty
-```
-
-常用選項：
-
-- `--workspace`：搜尋 repository 的工作區根目錄。
-- `--workspace-file`：指定 VS Code `.code-workspace` 檔案。
-- `--project`：指定 repository 名稱或路徑。
-- `--base`、`--head`：指定兩個比較輸入。
-- `--quick`：以目前本地分支 `HEAD` 對遠端預設分支執行快速審查。
-- `--remote`：快速模式指定 remote；多個 remote 時必要。
-- `--include-working-tree`：快速模式納入 staged、unstaged、刪除與未忽略的未追蹤檔案，也保留使用者以 `git add -f` 暫存的 ignored 檔案。
-- `--mode merge|direct`：選擇比較模式。
-- `--no-fetch`：只允許沒有 remote-qualified ref 的比較；指定 remote branch 時會直接回報參數衝突。
-- `--context-dir`：指定系統暫存目錄下的新路徑；完成報告後自動清除受管理的本次暫存資料。審查提前中止時，使用 `review_session.py cleanup --context-dir <context>` 清除。
-- `--include-json`：除了 Markdown，另外寫入同名的結構化 JSON 審查結果。
-- `--git-timeout`：每個 Git 指令的秒數上限，預設 180 秒。
-
-Helper 會輸出固定版本 SHA、比較範圍、變更檔案、merge commit、diff 統計、fetch 結果、遠端選擇、逐檔證據摘要與工作樹快照，供審查流程作為來源真相。Manifest schema version 為 4，新增 `context_complete`、`context_gaps` 與 `merge_preview`，並保留舊的 `review_complete` 欄位；兩者都只表示準備階段是否完成，不代表 Skill 已逐檔審查。工作區模式另外輸出固定 `review_tree_sha`、`review_scope=working-tree`、逐檔 Git blob SHA／SHA-256 摘要及 `snapshot_read_info`，也會納入使用者以 `git add -f` 暫存的 ignored 檔案。合併預覽會將 Git objects 保留在 context bundle，供報告驗證後清理。
-
-如果 submodule 內有未提交或未初始化內容，helper 會列在 `dirty_submodule_paths` 和 `review_limitations`，此結果不能被回報為完整審查。
-
-審查流程會先在受管理的系統暫存目錄建立 `review-result-draft.json`，再使用 `scripts/review_report.py` 驗證證據並預設只產生 Markdown 報告。MR 的 Markdown 內含可核對身分與 SHA 的中繼資料，維持工作台匯入能力。使用者要求 `輸出JSON` 時，再加上 `--include-json` 產生同名 JSON 報告。報告指令會自動清除本次暫存，包含驗證或寫入失敗；審查提前中止時，應使用受管理的 cleanup 指令清除 context bundle。
-
-## 專案結構
-
-```text
-.
-├── .github/
-│   └── workflows/
-│       └── release.yml
-├── scripts/
-│   └── package_release.py
-├── README.md
-└── skills/
-    └── merge-reviewer/
-        ├── SKILL.md
-        ├── VERSION
-        ├── agents/
-        │   └── openai.yaml
-        ├── references/
-        │   └── review-rules.md
-        └── scripts/
-            ├── git_review_context.py
-            └── review_report.py
-```
-
-## 相關文件
-
-- [Merge Reviewer 技能說明](skills/merge-reviewer/SKILL.md)
-- [審查規則與報告格式](skills/merge-reviewer/references/review-rules.md)
-- [Git context helper](skills/merge-reviewer/scripts/git_review_context.py)
-- [Review report validator](skills/merge-reviewer/scripts/review_report.py)
-- [Skill review acceptance cases](tests/review_quality_cases.md)
-
-## 開發驗證
-
-安裝 `requirements-dev.txt` 後，可執行快速審查情境與 Python 回歸測試：
-
-```powershell
-python -m behave tests/features --tags="not @human-acceptance"
-python -m unittest discover -s tests -v
-```
-
-GitHub Actions 會在 pull request、`main` 推送與 tag Release 執行 Linux／Windows × Python 3.10／3.14 測試矩陣。Release 必須先通過相同檢查。
-
-自動 CI 驗證 Git context、輸出證據與報告格式；Skill 的漏報與誤報仍依 [`tests/review_quality_cases.md`](tests/review_quality_cases.md) 人工驗收，避免把 deterministic Git 測試誤當成模型審查品質評估。
-
-0.11.0 的實際 Codex 跨 Repo 審查與安全反例執行紀錄見 [`tests/skill_acceptance_results.md`](tests/skill_acceptance_results.md)；這是本次工作階段的靜態技能驗收，不代表一般化的模型準確率。
-
-0.11.0 保留原生 Megin v2 收據驗證及舊版分支／quick 介面。新 Repo／Group 功能鏈審查不要求安裝 Megin 或 GitlabWorkSpace。
+- [技能流程](skills/merge-reviewer/SKILL.md)
+- [詳細使用指南](skills/merge-reviewer/references/usage.md)
+- [原生準則與證據](skills/merge-reviewer/references/review-rules.md)
+- [報告風格](skills/merge-reviewer/references/report-style.md)
+- [分支證據與 v3 契約](skills/merge-reviewer/references/workspace-review.md)

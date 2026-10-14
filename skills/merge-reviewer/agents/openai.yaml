@@ -1,7 +1,7 @@
 interface:
   display_name: "Merge Reviewer"
-  short_description: "Review Repo/Group changes and affected feature chains"
-  default_prompt: "Use $merge-reviewer to review branch/commit differences, staged changes, or saved uncommitted files in this Repo or workspace, following affected callers and contracts with fixed evidence."
+  short_description: "Review one Repo's branches and related impact"
+  default_prompt: "Use $merge-reviewer with one Repo, a base branch and a comparison branch; apply native Codex Code Review and publish a concise Traditional Chinese Merge Report."
 
 policy:
   allow_implicit_invocation: true

@@ -1,11 +1,11 @@
 # Merge Reviewer 品質驗收案例
 
-這些案例驗證 Skill 是否找對問題、避免誤報，也確認它不會把未檢查的路徑說成已完成。它們是人工 Skill 評估案例，不是 Git helper 的單元測試；CI 目前只驗證固定 Git context、證據引用和報告一致性。
+這些案例驗證 Skill 是否找對問題、避免誤報，也確認它不會把未檢查的路徑說成已完成。它們是人工 Skill 評估案例，不是 Git helper 的單元測試；CI 驗證公開分支介面、條件式延伸、固定 Git context、證據引用和報告一致性；不模擬模型決策。
 
 ## 執行方式
 
 1. 在系統暫存目錄建立一次性 Git repository，依案例建立共同起點、`main` 和 `feature` 分支。每個案例獨立執行，避免前一案例的物件或報告影響後一案例。
-2. 以 Merge Reviewer 執行 `main` 對 `feature` 的合併模式審查，保留 manifest 和 context bundle，讓 Skill 依規則逐檔檢查並產生 Markdown 報告；若要逐項檢查結構化 JSON 結果，明確加上 `輸出JSON`。
+2. 以 Merge Reviewer 執行 `main` 對 `feature` 的合併模式審查，讓 Codex 依原生準則完成逐檔審查，發布後保留單一 Markdown Merge Report 作為驗收紀錄，檔名需包含 UTC 時間戳及兩個分支的完整 commit SHA。
 3. 將 finding、來源 SHA、路徑、行號、覆蓋狀態、結果狀態與合併建議逐項對照標準答案。報告驗證器成功只代表結構與證據可查，不代表 Skill 找對了問題。
 4. 記錄漏報、誤報、嚴重度偏差和沒有證據的引用；案例全部符合標準答案才通過人工驗收。
 
@@ -67,7 +67,7 @@ export function charge(amount: number): Receipt { /* ... */ }
 
 ## 案例 7、8：跨 Repo 功能鏈與安全反例
 
-使用 `python -B tests/skill_acceptance.py --case regression` 或 `--case safe` 建立獨立的系統暫存 Group 與固定審查 context。以輸出的 request 執行實際 Codex 技能審查；這個程式只建立來源，不模擬模型的審查結論。依 workspace-review.md 搜尋、閱讀、追鏈並發佈 JSON／Markdown。
+使用 `python -B tests/skill_acceptance.py --case regression` 或 `--case safe` 建立獨立的系統暫存 Group 與固定審查 context。以輸出的 request 執行實際 Codex 技能審查；這個程式只建立來源，不模擬模型的審查結論。依 workspace-review.md 搜尋、閱讀、追鏈並發布單一 Markdown Merge Report。
 
 - 案例 7：只有 orders-api 修改金額欄位名稱。應確認未修改 web 的回應欄位讀取、invoice-worker 的事件處理及 shared-contracts 的驗證仍要求舊欄位；至少建立一項有固定證據的相容性問題，並涵蓋前端金額錯誤與背景結算停止。相同根因可合併成一項問題。unrelated-admin 保持排除。
 - 案例 8：orders-api 同時保留舊欄位並新增別名。應追查同一條功能鏈，但不回報改名相容性問題；在全部必要檢查完成後可輸出未發現具體問題。

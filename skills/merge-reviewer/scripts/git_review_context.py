@@ -303,7 +303,7 @@ def workspace_roots(workspace: Path, workspace_file: Path | None) -> list[Path]:
     roots: list[Path] = []
     for folder in folders:
         if not isinstance(folder, dict):
-            continue
+            raise ReviewContextError("VS Code workspace 的每個 folder 必須是物件。")
         value = folder.get("path")
         if not value and folder.get("uri"):
             parsed = urlparse(str(folder["uri"]))
@@ -312,12 +312,14 @@ def workspace_roots(workspace: Path, workspace_file: Path | None) -> list[Path]:
                 if os.name == "nt" and value.startswith("/") and len(value) > 2 and value[2] == ":":
                     value = value[1:]
         if not value:
-            continue
+            raise ReviewContextError("VS Code workspace 含無法在本機讀取的 folder；請提供本機 path 或 file URI。")
         candidate = Path(str(value))
         if not candidate.is_absolute():
             candidate = workspace_file.parent / candidate
         roots.append(normalize_path(candidate))
-    return roots or [workspace_file.parent]
+    if not roots:
+        raise ReviewContextError("VS Code workspace 必須宣告至少一個可在本機讀取的資料夾。")
+    return roots
 
 
 def has_git_marker(path: Path) -> bool:
@@ -328,13 +330,15 @@ def has_git_marker(path: Path) -> bool:
 def discover_repositories(workspace: Path, workspace_file: Path | None) -> list[Path]:
     roots = workspace_roots(workspace, workspace_file)
     repositories: set[Path] = set()
+    def discovery_error(error):
+        raise ReviewContextError(f"無法讀取宣告的工作區目錄：{error}")
     for root in roots:
         if not root.exists():
             continue
         if has_git_marker(root):
             repositories.add(root)
             continue
-        for current, directories, _files in os.walk(root, topdown=True, followlinks=False):
+        for current, directories, _files in os.walk(root, topdown=True, followlinks=False, onerror=discovery_error):
             current_path = Path(current)
             directories[:] = [name for name in directories if name not in SKIP_DIRECTORIES]
             if has_git_marker(current_path):
@@ -344,14 +348,8 @@ def discover_repositories(workspace: Path, workspace_file: Path | None) -> list[
 
 
 def is_group_workspace(workspace: Path, workspace_file: Path | None, repositories: list[Path]) -> bool:
-    """A declared container remains a Group even when it currently has one Repo."""
-    if len(repositories) > 1:
-        return True
-    return any(
-        not has_git_marker(root) and any(repo.is_relative_to(root) and repo != root for repo in repositories)
-        for root in workspace_roots(workspace, workspace_file)
-    )
-
+    """Only two or more distinct declared Git roots enable impact extension."""
+    return len(set(repositories)) > 1
 
 def choose_repository(
     workspace: Path,
@@ -363,7 +361,8 @@ def choose_repository(
         requested = Path(project).expanduser()
         candidates: list[Path] = []
         relative_target = workspace / requested
-        if requested.is_absolute() or relative_target.exists():
+        explicit_path = requested.is_absolute() or any(separator in project for separator in ("/", "\\"))
+        if explicit_path:
             target = normalize_path(requested if requested.is_absolute() else workspace / requested)
             candidates = [repo for repo in repositories if repo == target]
         if not candidates:
@@ -400,73 +399,6 @@ def is_shallow_repository(repo: Path) -> bool:
     ).strip().lower() == "true"
 
 
-def remote_tracking_branch_names(repo: Path, remote: str) -> list[str]:
-    """Return locally known branches for a remote, excluding its HEAD alias."""
-    output = str(
-        run_git(
-            repo,
-            [
-                "for-each-ref",
-                "--format=%(refname:strip=3)",
-                f"refs/remotes/{remote}",
-            ],
-            check=False,
-        )
-    )
-    return sorted(
-        {
-            line.strip()
-            for line in output.splitlines()
-            if line.strip() and line.strip() != "HEAD"
-        }
-    )
-
-
-def remote_default_branch(
-    repo: Path,
-    remote: str,
-    *,
-    allow_network: bool,
-) -> tuple[str, str]:
-    """Resolve a remote's advertised default branch or report candidates."""
-    if allow_network:
-        return_code, output, error = run_git_capture(
-            repo, ["ls-remote", "--symref", remote, "HEAD"]
-        )
-        if return_code != 0:
-            detail = error.strip() or "沒有診斷訊息。"
-            raise ReviewContextError(
-                f"無法讀取 remote「{remote}」的預設分支：{detail}",
-                hint="請確認網路連線與遠端存取權限；也可改用 --base <remote>/<branch> 明確指定基礎分支。",
-            )
-        for line in output.splitlines():
-            if line.startswith("ref: ") and line.endswith("\tHEAD"):
-                advertised = line[len("ref: ") : -len("\tHEAD")]
-                if advertised.startswith("refs/heads/"):
-                    return advertised[len("refs/heads/") :], "remote-head"
-
-    symbolic = str(
-        run_git(
-            repo,
-            ["symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"],
-            check=False,
-        )
-    ).strip()
-    prefix = f"{remote}/"
-    if symbolic.startswith(prefix):
-        return symbolic[len(prefix) :], "local-remote-head"
-
-    candidates = remote_tracking_branch_names(repo, remote)
-    if len(candidates) == 1:
-        return candidates[0], "single-local-branch"
-    formatted = ", ".join(f"{remote}/{branch}" for branch in candidates) or "（沒有本地 remote-tracking branch）"
-    raise ReviewContextError(
-        f"無法判定 remote「{remote}」的預設主分支；候選：{formatted}。"
-        " 請使用 --base <remote>/<branch> 或先設定 remote HEAD。",
-        hint="請從候選分支擇一，改用 --base <remote>/<branch> 明確指定要比較的主分支。",
-    )
-
-
 def verified_commit(repo: Path, ref: str) -> str | None:
     value = str(
         run_git(
@@ -479,39 +411,17 @@ def verified_commit(repo: Path, ref: str) -> str | None:
 
 
 def resolve_commit_ref(repo: Path, ref: str) -> tuple[str | None, str]:
-    """Resolve a ref while keeping local and remote branch namespaces separate."""
+    """Resolve branches only; never substitute tags, revisions, or cached remotes."""
     target = remote_target_for_ref(repo, ref)
     if target:
         remote_ref = f"refs/remotes/{target.remote}/{target.branch}"
-        remote_commit = verified_commit(repo, remote_ref)
-        if remote_commit:
-            return remote_commit, remote_ref
-
-    if ref.startswith("refs/heads/"):
-        local_commit = verified_commit(repo, ref)
-        return (local_commit, ref)
-
-    local_branch_ref = f"refs/heads/{ref}"
-    if local_branch_exists(repo, ref):
-        local_commit = verified_commit(repo, local_branch_ref)
-        return (local_commit, local_branch_ref)
-
-    if ref.startswith("refs/tags/"):
-        tag_commit = verified_commit(repo, ref)
-        return (tag_commit, ref)
-
-    # Keep short tag names available, but never use an arbitrary Git revision
-    # lookup here: that could silently resolve a stale remote-tracking ref.
-    tag_commit = verified_commit(repo, f"refs/tags/{ref}")
-    if tag_commit:
-        return tag_commit, f"refs/tags/{ref}"
-
-    if ref == "HEAD" or re.fullmatch(r"[0-9a-fA-F]{4,40}", ref):
-        object_commit = verified_commit(repo, ref)
-        if object_commit:
-            return object_commit, ref
-    return None, ref
-
+        return verified_commit(repo, remote_ref), remote_ref
+    local_ref = ref if ref.startswith("refs/heads/") else f"refs/heads/{ref}"
+    if ref == "HEAD" or (ref.startswith("refs/") and not ref.startswith("refs/heads/")):
+        return None, ref
+    if not git_ok(repo, ["check-ref-format", local_ref]):
+        return None, ref
+    return verified_commit(repo, local_ref), local_ref
 
 def local_branch_exists(repo: Path, branch: str) -> bool:
     return git_ok(repo, ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"])
@@ -559,7 +469,7 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
         if not enabled:
             raise ReviewContextError(
                 f"遠端 ref「{target.input_ref}」需要連線確認，不能搭配 --no-fetch。",
-                hint="請移除 --no-fetch；若要離線審查，請改用本機分支、tag 或 commit。",
+                hint="請移除 --no-fetch；若要離線審查，請改用本機分支。",
             )
         if (target.remote, target.branch) in seen:
             continue
@@ -590,20 +500,7 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
 
 def ref_source_description(repo: Path, ref: str) -> str:
     target = remote_target_for_ref(repo, ref)
-    if target:
-        return f"指定遠端分支 {target.remote}/{target.branch}"
-    if ref.startswith("refs/heads/"):
-        return "本機分支"
-    if ref.startswith("refs/tags/"):
-        return "指定 tag"
-    if local_branch_exists(repo, ref):
-        return "本機分支"
-    if ref == "HEAD":
-        return "HEAD"
-    if re.fullmatch(r"[0-9a-fA-F]{4,40}", ref):
-        return "commit SHA"
-    return "本機分支或短 tag"
-
+    return f"指定遠端分支 {target.remote}/{target.branch}" if target else "指定本機分支"
 
 def parse_name_status(raw: str) -> list[dict[str, str | None]]:
     parts = raw.split("\0")
@@ -976,89 +873,6 @@ def snapshot_environment(repo: Path, temporary_dir: Path) -> dict[str, str]:
     }
 
 
-def create_worktree_snapshot(repo: Path) -> tuple[Path, dict[str, str], str]:
-    """Create a tree from the final working files without touching user state."""
-    conflicts = str(run_git(repo, ["ls-files", "-u", "--full-name", "-z"], check=False))
-    if conflicts:
-        raise ReviewContextError(
-            "工作區有未解決的 merge conflict，無法建立穩定快照。",
-            hint="請先解決或中止目前的 merge，再重新審查；或不加「包含未提交變更」，只審查已提交內容。",
-        )
-    temporary_dir = Path(tempfile.mkdtemp(prefix="merge-reviewer-"))
-    env = snapshot_environment(repo, temporary_dir)
-    try:
-        working_report_paths = [
-            item
-            for item in str(
-                run_git(
-                    repo,
-                    ["ls-files", "-co", "--exclude-standard", "-z", "--", "review-reports"],
-                    check=False,
-                )
-            ).split("\0")
-            if item
-        ]
-        committed_report_paths = {
-            item
-            for item in str(
-                run_git(
-                    repo,
-                    ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", "review-reports"],
-                    check=False,
-                )
-            ).split("\0")
-            if item
-        }
-        excluded_report_paths = [
-            item for item in working_report_paths if item not in committed_report_paths
-        ]
-        run_git(repo, ["read-tree", "HEAD"], env=env)
-        run_git(repo, ["add", "--all", "--", "."], env=env)
-        staged_paths = str(
-            run_git(
-                repo,
-                [
-                    "diff",
-                    "--cached",
-                    "--no-renames",
-                    "--name-only",
-                    "--diff-filter=ACMRTUXB",
-                    "-z",
-                    "--",
-                ],
-            )
-        )
-        existing_staged_paths = [
-            item
-            for item in staged_paths.split("\0")
-            if item
-            and os.path.lexists(repo.joinpath(*item.split("/")))
-        ]
-        if existing_staged_paths:
-            run_git(
-                repo,
-                [
-                    "--literal-pathspecs",
-                    "add",
-                    "--all",
-                    "--force",
-                    "--pathspec-from-file=-",
-                    "--pathspec-file-nul",
-                ],
-                env=env,
-                input_bytes=b"\0".join(os.fsencode(item) for item in existing_staged_paths) + b"\0",
-            )
-        if excluded_report_paths:
-            run_git(repo, ["reset", "--quiet", "--", *excluded_report_paths], env=env)
-        tree_sha = str(run_git(repo, ["write-tree"], env=env)).strip()
-        if not tree_sha:
-            raise ReviewContextError("無法建立工作區 tree 快照。")
-        return temporary_dir, env, tree_sha
-    except Exception:
-        remove_tree(temporary_dir)
-        raise
-
-
 def write_context_bundle(
     context_dir: Path,
     manifest: dict[str, Any],
@@ -1073,46 +887,6 @@ def write_context_bundle(
     context_dir.mkdir(parents=True, exist_ok=True)
     try:
         (context_dir / "diff.patch").write_bytes(patch)
-        if manifest.get("review_scope") == "working-tree":
-            (context_dir / "working-tree.patch").write_bytes(patch)
-            snapshot_dir = context_dir / "working-tree-files"
-            for change in manifest.get("changed_files", []):
-                path_value = str(change.get("path") or "")
-                if not safe_relative_git_path(path_value):
-                    continue
-                if (
-                    path_value in manifest.get("submodule_paths", [])
-                    or change.get("old_mode") == "160000"
-                    or change.get("new_mode") == "160000"
-                ):
-                    continue
-                status = str(change.get("status") or "")
-                if status.startswith("D"):
-                    continue
-                try:
-                    content = run_git(
-                        repo,
-                        ["cat-file", "blob", f"{diff_right}:{path_value}"],
-                        binary=True,
-                        env=env,
-                    )
-                except GitCommandError as exc:
-                    raise ReviewContextError(
-                        f"無法匯出審查檔案「{path_value}」：{exc.stderr}",
-                        hint="請確認該 Git object 可讀取，修復 repository 後重新產生審查內容。",
-                    ) from exc
-                destination = snapshot_dir / Path(path_value)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                encoded_content = content if isinstance(content, bytes) else content.encode()
-                destination.write_bytes(encoded_content)
-                manifest.setdefault("evidence_files", []).append(
-                    {
-                        "source": "working-tree",
-                        "path": path_value,
-                        "blob_sha": change.get("new_blob"),
-                        "sha256": hashlib.sha256(encoded_content).hexdigest(),
-                    }
-                )
         for merge in manifest["merge_commits"]:
             for parent_view in merge["parent_views"]:
                 parent = parent_view["sha"]
@@ -1196,94 +970,11 @@ def write_context_bundle(
         raise
 
 
-def resolve_quick_inputs(
-    repo: Path,
-    args: argparse.Namespace,
-) -> tuple[str, str, str | None, str | None, str]:
-    """Return base ref, current head ref and remote selection metadata."""
-    branch = str(
-        run_git(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"], check=False)
-    ).strip()
-    if not branch:
-        raise ReviewContextError(
-            "快速審查需要目前位於本地分支；detached HEAD 請改用 --base/--head。",
-            hint="請先切換到要審查的本地分支，或改用一般模式明確指定基礎與比較版本。",
-        )
-    if not verified_commit(repo, "HEAD"):
-        raise ReviewContextError(
-            "目前分支尚無 commit，無法建立快速審查版本。",
-            hint="請先建立至少一個 commit，再重新執行快速審查。",
-        )
-    if args.head:
-        raise ReviewContextError("快速模式會使用目前本地分支 HEAD，不可同時指定 --head。")
-    if args.include_working_tree and args.mode == "direct":
-        raise ReviewContextError("--include-working-tree 目前只支援快速模式的合併前審查。")
-    if args.base and args.remote:
-        raise ReviewContextError("快速模式的 --base 與 --remote 不能同時使用。")
-    remotes = remote_names(repo)
-    if not remotes:
-        raise ReviewContextError(
-            "快速審查找不到 remote；請先設定 remote，或使用一般的 --base/--head 模式。",
-            hint="請用 git remote add 設定遠端，或改用一般模式明確指定兩個版本。",
-        )
-
-    selection_source: str
-    selected_remote: str | None = args.remote
-    selected_branch: str | None = None
-    if args.base:
-        target = remote_target_for_ref(repo, args.base)
-        if target:
-            if args.no_fetch:
-                raise ReviewContextError(
-                    f"遠端 ref「{args.base}」需要連線確認，不能搭配 --no-fetch。",
-                    hint="請移除 --no-fetch；若要離線審查，請改用本機分支、tag 或 commit。",
-                )
-            selected_remote = target.remote
-            selected_branch = target.branch
-        selection_source = "explicit-base"
-        return args.base, "HEAD", selected_remote, selected_branch, selection_source
-
-    if args.no_fetch:
-        raise ReviewContextError(
-            "快速審查使用遠端 base，不能搭配 --no-fetch；請移除 --no-fetch。",
-            hint="請移除 --no-fetch，讓工具連線確認遠端最新版本。",
-        )
-
-    if selected_remote:
-        if selected_remote not in remotes:
-            choices = ", ".join(remotes)
-            raise ReviewContextError(
-                f"remote「{selected_remote}」不存在；候選：{choices}。",
-                hint="請從候選清單擇一，以 --remote <name> 重新指定。",
-            )
-        selection_source = "explicit-remote"
-    elif len(remotes) == 1:
-        selected_remote = remotes[0]
-        selection_source = "single-remote"
-    else:
-        choices = ", ".join(remotes)
-        raise ReviewContextError(
-            f"快速審查無法在多個 remote 中自動選擇；候選：{choices}。請使用 --remote <name>。",
-            hint="請從候選清單擇一，加上 --remote <name>（或「遠端=<name>」）後重新執行。",
-        )
-
-    selected_branch, branch_source = remote_default_branch(
-        repo, selected_remote, allow_network=True
-    )
-    selection_source = f"{selection_source}+{branch_source}"
-    return f"{selected_remote}/{selected_branch}", "HEAD", selected_remote, selected_branch, selection_source
-
-
 def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
-    if args.quick:
-        if not args.base and args.head:
-            raise ReviewContextError("快速模式需要自動選擇或明確指定 --base；--head 不可單獨使用。")
-        if args.mode == "direct" and args.include_working_tree:
-            raise ReviewContextError("--include-working-tree 不支援 direct 模式。")
-    elif args.remote or args.include_working_tree:
-        raise ReviewContextError("--remote 與 --include-working-tree 只能搭配 --quick 使用。")
-    elif not args.base or not args.head:
-        raise ReviewContextError("一般模式需要同時指定 --base 與 --head；快速模式請加 --quick。")
+    if not args.project or not args.base or not args.head:
+        raise ReviewContextError("請同時指定 --project、--base 與 --head。")
+    if args.mode != "merge":
+        raise ReviewContextError("只支援兩個分支的合併前審查。")
 
     workspace = normalize_path(args.workspace)
     workspace_file = normalize_path(args.workspace_file) if args.workspace_file else None
@@ -1297,15 +988,19 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     before = snapshot(repo)
-    remote_selection_source: str | None = None
-    selected_remote: str | None = None
-    selected_remote_branch: str | None = None
-    if args.quick:
-        base_input, head_input, selected_remote, selected_remote_branch, remote_selection_source = resolve_quick_inputs(repo, args)
-    else:
-        base_input, head_input = args.base, args.head
-
-    fetch_refs = [base_input] if args.quick else [base_input, head_input]
+    base_input, head_input = args.base, args.head
+    # Verify local branch namespaces before any remote synchronization.
+    for value in (base_input, head_input):
+        target = remote_target_for_ref(repo, value)
+        if target:
+            if not git_ok(repo, ["check-ref-format", f"refs/heads/{target.branch}"]):
+                raise ReviewContextError(f"無效的遠端分支名稱：{value}")
+        elif resolve_commit_ref(repo, value)[0] is None:
+            raise ReviewContextError(
+                f"找不到本機分支：{value}；僅支援分支，不接受 tag、commit SHA 或 HEAD。",
+                hint="請確認本機分支名稱；遠端分支需加上 remote 前綴，例如 origin/main。",
+            )
+    fetch_refs = [base_input, head_input]
     fetches = fetch_inputs(repo, fetch_refs, not args.no_fetch)
     base_sha, base_resolved_ref = resolve_commit_ref(repo, base_input)
     if not base_sha:
@@ -1313,11 +1008,7 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             f"找不到基礎 ref 的 commit：{base_input}（查找來源：{ref_source_description(repo, base_input)}）",
             hint="請確認分支名稱拼字；遠端分支需加上 remote 前綴（例如 origin/main），本機分支不需要。",
         )
-    if args.quick:
-        head_sha = verified_commit(repo, "HEAD")
-        head_resolved_ref = "HEAD"
-    else:
-        head_sha, head_resolved_ref = resolve_commit_ref(repo, head_input)
+    head_sha, head_resolved_ref = resolve_commit_ref(repo, head_input)
     if not head_sha:
         raise ReviewContextError(
             f"找不到比較 ref 的 commit：{head_input}（查找來源：{ref_source_description(repo, head_input)}）",
@@ -1332,28 +1023,24 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     if args.mode == "merge" and not merge_bases:
         raise ReviewContextError(
             "兩個版本沒有共同祖先，無法建立可靠的比較範圍。",
-            hint="請確認兩個版本屬於同一個專案；若確定要直接比較，可改用「直接比較」模式。",
+            hint="請確認兩個分支屬於同一個 Repo 且具有共同歷史。",
         )
     if args.mode == "merge" and len(merge_bases) > 1:
         raise ReviewContextError(
             "兩個版本存在多個共同祖先（criss-cross history），請先指定可接受的歷史或整理分支。",
-            hint="請改用「直接比較」模式，或先整理分支歷史後再審查。",
+            hint="請先整理分支歷史，使兩個分支具有唯一共同起點後再審查。",
         )
     merge_base = merge_bases[0] if len(merge_bases) == 1 else None
     diff_left = merge_base if args.mode == "merge" else base_sha
     if diff_left is None:
         raise ReviewContextError("合併前審查需要唯一共同祖先。")
 
-    temporary_dir: Path | None = None
     integration_temporary_dir: Path | None = None
     context_bundle_written = False
     snapshot_env: dict[str, str] | None = None
     review_right = head_sha
     review_scope = "committed"
     try:
-        if args.quick and args.include_working_tree:
-            temporary_dir, snapshot_env, review_right = create_worktree_snapshot(repo)
-            review_scope = "working-tree"
         integration: dict[str, Any] | None = None
         integration_env: dict[str, str] | None = None
         if args.mode == "merge":
@@ -1395,7 +1082,7 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         ).strip()
         after = snapshot(repo)
         working_tree_unchanged = before == after
-        if args.quick and not working_tree_unchanged:
+        if not working_tree_unchanged:
             raise ReviewContextError(
                 "審查期間工作區、index 或 HEAD 發生變更，已捨棄本次審查結果；請重新執行。",
                 hint="請在審查進行中避免編輯、切換分支或提交，完成後重新執行。",
@@ -1441,7 +1128,6 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
 
         manifest: dict[str, Any] = {
             "schema_version": 4,
-            **({"mr_context": args.mr_task} if getattr(args, "mr_task", None) else {}),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "workspace": str(workspace),
             "workspace_file": str(workspace_file) if workspace_file else None,
@@ -1449,10 +1135,6 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "project_input": args.project,
             "project": repo.name,
             "repo": str(repo),
-            "quick": bool(args.quick),
-            "remote": selected_remote,
-            "remote_branch": selected_remote_branch,
-            "remote_selection_source": remote_selection_source,
             "base_input": base_input,
             "head_input": head_input,
             "base_resolved_ref": base_resolved_ref,
@@ -1464,8 +1146,6 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "diff_base": diff_left,
             "review_scope": review_scope,
             "review_right": review_right,
-            "review_tree_sha": review_right if review_scope == "working-tree" else None,
-            "snapshot_read_info": None,
             "fetches": fetches,
             "fetch_status": "completed" if fetches else ("disabled" if args.no_fetch else "not-needed"),
             "working_tree_unchanged": working_tree_unchanged,
@@ -1511,18 +1191,6 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
                 "changed_files": integration["changed_files"],
                 "manifest_info": integration["manifest_info"],
             }
-        if temporary_dir:
-            manifest["snapshot_read_info"] = {
-                "index": "repository-external temporary index",
-                "object_directory": "repository-external temporary object directory",
-                "alternate_objects": "repository object directory, read-only reference",
-                "temporary_cleanup": "after-generation",
-            }
-            manifest["working_tree_snapshot"] = {
-                "tree_sha": review_right,
-                "temporary": True,
-                "cleaned_up_after_generation": True,
-            }
         context_dir = normalize_path(args.context_dir)
         try:
             context_dir.relative_to(repo)
@@ -1557,8 +1225,6 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         )
         return manifest
     finally:
-        if temporary_dir:
-            remove_tree(temporary_dir)
         if integration_temporary_dir:
             remove_tree(integration_temporary_dir)
 
@@ -1575,159 +1241,39 @@ def positive_timeout(value: str) -> float:
 
 def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     import review_session
+    from review_workspace import build
 
-    timeout = getattr(args, "git_timeout", DEFAULT_GIT_TIMEOUT_SECONDS)
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ReviewContextError("--git-timeout 必須大於零。")
-    try:
-        session_dir = review_session.create_session(getattr(args, "context_dir", None))
-    except (OSError, ValueError) as exc:
-        raise ReviewContextError(str(exc)) from exc
+    timeout = positive_timeout(str(args.git_timeout))
+    session_dir = review_session.create_session(args.context_dir)
     args.context_dir = str(session_dir)
     token = GIT_TIMEOUT_SECONDS.set(timeout)
     succeeded = False
     try:
-        extension = _workspace_extension()
-        result = extension.prepare_manifest(args, sys.modules[__name__]) if extension else None
-        if result is None:
-            if getattr(args, "megin_receipt", None):
-                receipt = json.loads(Path(args.megin_receipt).read_text(encoding="utf-8"))
-                args.receipt_document = receipt
-                if receipt.get("schema") in ("megin-repo-delivery-receipt/v2", "megin-delivery-receipt/v2"):
-                    from delivery_binding_v2 import receipt_seeds
-                    root = Path(receipt["workspace_root"]).resolve()
-                    args.delivery_seeds = [{**seed, "repo_path": str(root if seed["repo_path"] == "." else root / seed["repo_path"])}
-                                           for seed in receipt_seeds(receipt, root)]
-                    if receipt["schema"] == "megin-delivery-receipt/v2":
-                        if args.group_root and normalize_path(args.group_root) != root:
-                            raise ReviewContextError("receipt Group root differs from declared Group")
-                        if getattr(args, "workspace_explicit", False) and normalize_path(args.workspace) != root:
-                            raise ReviewContextError("receipt Group root differs from declared workspace")
-                        args.group_root = str(root)
-                        args.scope = args.scope or "group"
-                        if args.scope == "repo":
-                            if args.project:
-                                chosen, _ = choose_repository(root, normalize_path(args.workspace_file) if args.workspace_file else None,
-                                                              args.project)
-                                args.delivery_seeds = [seed for seed in args.delivery_seeds
-                                                       if normalize_path(seed["repo_path"]) == chosen]
-                                if not args.delivery_seeds:
-                                    raise ReviewContextError("selected Repo is not part of this Megin delivery")
-                            if len(args.delivery_seeds) != 1:
-                                raise ReviewContextError("--scope repo requires --project selecting one delivered Repo")
-                            args.project = args.delivery_seeds[0]["repo_path"]
-                    else:
-                        boundary = normalize_path(args.group_root or args.workspace)
-                        workspace_file = normalize_path(args.workspace_file) if args.workspace_file else None
-                        if root not in discover_repositories(boundary, workspace_file):
-                            if args.group_root or args.workspace_file or getattr(args, "workspace_explicit", False):
-                                raise ReviewContextError("receipt Repo is outside the declared Group/workspace")
-                            args.workspace = str(root)
-                        args.project = str(root)
-                        args.scope = args.scope or "auto"
-                    if args.target and args.target != "branch":
-                        raise ReviewContextError("Megin receipt requires branch target")
-                    args.target = "branch"
-            if args.group_root and args.quick and not args.target and not args.base and not args.head:
-                args.scope = args.scope or "group"
-                args.target = "quick"
-            if not getattr(args, "scope", None) and not getattr(args, "target", None):
-                root = normalize_path(args.group_root or args.workspace)
-                workspace_file = normalize_path(args.workspace_file) if args.workspace_file else None
-                paths = discover_repositories(root, workspace_file)
-                if args.group_root or is_group_workspace(root, workspace_file, paths):
-                    args.scope = "group"
-                    # Historical Group quick reviews both the actual index and saved files.
-                    args.target = "quick" if args.quick and not args.base and not args.head else "branch"
-            if getattr(args, "scope", None) or getattr(args, "target", None):
-                from review_workspace import build
-                result = build(args, sys.modules[__name__])
-            else:
-                result = _build_manifest(args)
-        if result.get("mr_binding"):
-            verifier = getattr(extension, "verify_manifest_binding", None)
-            if not callable(verifier):
-                raise ReviewContextError("MR binding requires its verification adapter")
-            verifier(result)
-        if getattr(args, "megin_receipt", None) and not getattr(args, "megin_binding", None):
-            from delivery_binding import bind_delivery
-            if getattr(args, "include_working_tree", False):
-                raise ReviewContextError("--megin-receipt requires committed refs without working-tree changes")
-            try:
-                receipt = getattr(args, "receipt_document", None) or json.loads(Path(args.megin_receipt).read_text(encoding="utf-8"))
-                result["megin_binding"] = bind_delivery(receipt, result)
-            except (ValueError, OSError, KeyError, TypeError) as exc:
-                raise ReviewContextError(f"Megin receipt is invalid: {exc}") from exc
-        elif getattr(args, "megin_binding", None):
-            result["megin_binding"] = args.megin_binding
-        if result.get("megin_binding") or result.get("mr_binding"):
-            Path(args.context_dir, "manifest.json").write_text(
-                json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        result = build(args, sys.modules[__name__])
         succeeded = True
         return result
     finally:
         GIT_TIMEOUT_SECONDS.reset(token)
         if not succeeded:
-            try:
-                review_session.cleanup_session(session_dir)
-            except (OSError, ValueError) as cleanup_error:
-                print(f"merge-reviewer: temporary cleanup failed: {cleanup_error}", file=sys.stderr)
-
+            review_session.cleanup_session(session_dir)
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Collect immutable Git context for Merge Reviewer.")
-    parser.add_argument("--workspace", default=os.getcwd(), help="Workspace root to search for repositories.")
-    parser.add_argument("--scope", choices=("auto", "repo", "group"), help="Review boundary; declared Group containers and multiple visible Repos default to Group. Use repo to narrow explicitly.")
-    parser.add_argument("--target", choices=("branch", "staged", "uncommitted"), help="Fixed branch versions, index only, or final saved local files.")
-    parser.add_argument("--group-root", help="Explicit local Group root. With only --quick, review index and saved working files separately.")
-    parser.add_argument("--supporting-sources", help="Legacy Group quick supplemental committed evidence JSON.")
-    extension = _workspace_extension()
-    if extension:
-        extension.extend_parser(parser)
-    if "--megin-receipt" not in parser._option_string_actions:
-        parser.add_argument("--megin-receipt", help="Optional immutable single-Repo Megin delivery receipt.")
-    parser.add_argument("--workspace-file", help="Optional VS Code .code-workspace file.")
-    parser.add_argument("--project", help="Repository folder name or path.")
-    parser.add_argument("--quick", action="store_true", help="Compare the current local branch with a remote default branch.")
-    parser.add_argument("--remote", help="Remote name to use in quick mode when more than one remote exists.")
-    parser.add_argument("--include-working-tree", action="store_true", help="Include staged, unstaged, and non-ignored untracked files in quick mode.")
-    parser.add_argument("--base", help="Base branch, remote ref, tag, or commit.")
-    parser.add_argument("--head", help="Comparison branch or commit.")
-    parser.add_argument("--mode", choices=("merge", "direct"), default="merge")
-    parser.add_argument(
-        "--no-fetch",
-        action="store_true",
-        help="Skip fetch only for comparisons without remote-qualified refs.",
+    parser = argparse.ArgumentParser(
+        description="Prepare one Repo's base/head branch evidence; Codex performs the review."
     )
+    parser.add_argument("--project", required=True, help="The single Repo name or exact path.")
+    parser.add_argument("--base", required=True, help="Base local or explicitly remote-qualified branch.")
+    parser.add_argument("--head", required=True, help="Comparison local or explicitly remote-qualified branch.")
+    parser.add_argument("--workspace", default=os.getcwd(), help="Declared root used for Repo discovery.")
+    parser.add_argument("--workspace-file", help="Actual VS Code .code-workspace boundary.")
+    parser.add_argument("--no-fetch", action="store_true", help="Offline preparation; local branches only.")
     parser.add_argument("--format", choices=("json",), default="json")
     parser.add_argument("--pretty", action="store_true")
-    parser.add_argument("--context-dir", help="Create the owned evidence directory at this new path inside the system temp directory.")
-    parser.add_argument(
-        "--git-timeout",
-        type=positive_timeout,
-        default=DEFAULT_GIT_TIMEOUT_SECONDS,
-        help="Maximum seconds to wait for each Git command (default: 180).",
-    )
+    parser.add_argument("--context-dir", help="Fresh evidence directory inside system temporary storage.")
+    parser.add_argument("--git-timeout", type=positive_timeout, default=180.0, help="Seconds per Git command (default: 180).")
     arguments = parser.parse_args(argv)
-    arguments.workspace_explicit = any(value == "--workspace" or value.startswith("--workspace=")
-                                       for value in (argv if argv is not None else sys.argv[1:]))
+    arguments.mode = "merge"
     return arguments
-
-
-def _workspace_extension():
-    """Load an optional host-specific adapter supplied alongside the installed Skill."""
-    import importlib.util
-
-    path = Path(__file__).with_name("workspace_extension.py")
-    if not path.is_file():
-        return None
-    spec = importlib.util.spec_from_file_location("merge_reviewer_workspace_extension", path)
-    if spec is None or spec.loader is None:
-        raise ReviewContextError("無法載入本機 Merge Reviewer extension。")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
 
 def main(argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):

@@ -65,7 +65,7 @@ def prepare(case):
         (seed / "server.ts").write_text(server(fields), encoding="utf-8")
         git(seed, "add", "server.ts")
         git(seed, "commit", "-m", "expose amount field")
-        args = api.parse_args(["--workspace", str(root), "--scope", "auto", "--target", "branch",
+        args = api.parse_args(["--workspace", str(root),
                                "--project", str(seed), "--base", "main", "--head", "feature/amount", "--no-fetch"])
         manifest = api.build_manifest(args)
         context = manifest["context_dir"]

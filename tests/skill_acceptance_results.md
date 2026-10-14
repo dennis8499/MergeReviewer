@@ -1,3 +1,60 @@
+# 0.12.0 驗收 — 2026-10-14
+
+本次在 Windows／Python 3.14.7 完成新版分支介面、條件式延伸及精簡報告驗證。以下為實際執行紀錄，未宣稱已執行 Linux 或 Python 3.10 的 CI 矩陣。
+
+| 檢查 | 結果 |
+| --- | --- |
+| Python 回歸（所有六個測試模組） | 61 項：60 通過、1 項因 Windows 符號連結權限不足略過。 |
+| 自動 BDD | 15 情境／55 步驟通過；GitHub 發布的人工情境未執行。 |
+| Skill creator validator | 通過。 |
+| Python 3.10 語法相容檢查 | 通過；不是 Python 3.10 runtime 測試。 |
+| Markdown 本機連結、套件解壓與獨立 helper 操作 | 通過。 |
+| Git diff whitespace check | 通過。 |
+| 安裝 ZIP 與 source bytes | 12 個檔案逐一一致，不含停用的入口及 receipt runtime。 |
+
+## 實際 Codex 靜態技能案例
+
+實作的 Codex 工作階段閱讀固定差異、基礎版本、呼叫端、事件消費端、套件身分及共用契約，執行契約搜尋、撰寫語意結果，再由發布器驗證並產生 Markdown／JSON。此工作階段知道案例預期，因此不是盲測或一般化模型準確率評估；TypeScript 專案測試未執行。
+
+| 變更 | 審查結果 |
+| --- | --- |
+| 移除舊金額欄位，只輸出新名稱 | 一項 P1，涵蓋頁面金額失效、背景驗證拒絕及後續結算中斷。 |
+| 保留舊欄位並新增等值別名 | 未建立具體問題，已查的消費端仍相容。 |
+
+兩例都有唯一受審 Repo、5 個固定契約、66 筆固定版本搜尋及 7 個相連功能節點。相關但未修改的 Repo 使用自身 HEAD，無關使用者管理 Repo 有搜尋及排除理由；`extension_status=complete`。報告只發布到所選 Repo，owned context 和一次性 fixture 均已清理。
+
+這輪實際使用修正了「把下游延伸契約也強制綁回源根節點」的覆蓋錯誤：源根涵蓋直接變更契約，下游契約在自己的來源節點提供證據並連回變更。回歸已保護此行為。
+
+本機忽略於 Git 的證據：
+
+- [欄位改名報告](../test-artifacts/0.12.0/regression/summary.md)及[驗證結果](../test-artifacts/0.12.0/regression/result.json)。
+- [安全別名報告](../test-artifacts/0.12.0/safe/summary.md)及[驗證結果](../test-artifacts/0.12.0/safe/result.json)。
+- [最終單元測試紀錄](../test-artifacts/0.12.0/unit-tests.log)及[BDD 紀錄](../test-artifacts/0.12.0/bdd.log)。
+
+可由 `python -X utf8 -B tests/skill_acceptance.py --case regression`／`--case safe` 重新準備隔離來源，再依新版 Skill 執行實際審查。此 helper 只準備來源，不模擬模型結論。
+
+## 報告命名修正
+
+報告名稱已統一為 **Merge Report**，Markdown 標題及 JSON 的 `merge-report-concise/v1` 已由 6 項報告／文件測試、1 項發布 BDD 情境與 Skill validator 再次驗證。上述靜態技能案例的本機證據保留名稱修正前的原始輸出；命名修正另記於 [驗證紀錄](../test-artifacts/0.12.0/report-naming.log)。
+
+## 單一 Markdown 檔名及移除 JSON — 2026-10-14
+
+每次成功發布只留下 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit>-<比較分支commit>.md`。時間戳為 UTC 發布時間並含微秒；兩個 commit 使用擷取時完整分支頂端 SHA。同名及競態不覆寫既有報告，寫入失敗不留下部分報告。發布器只回傳 Markdown 完整路徑；JSON 匯出選項已移除。
+
+本次調整的報告測試 18 項、文件／安裝套件測試 2 項全部通過；包括固定分支 commit、共同祖先與目前 checkout 的區分、P0–P3 問題完整保留、移除 JSON 選項、碰撞／競態及失敗清理。自動 BDD 15 情境／56 步驟通過，1 項 GitHub 發布人工情境未執行。Skill validator 與 Python 3.10 語法相容檢查通過。
+
+上方 61 項完整回歸及實際靜態案例屬輸出調整前的執行紀錄，本次未重跑語意案例。最新檢查保留於 [Markdown 輸出驗證紀錄](../test-artifacts/0.12.0/markdown-output.log)；安裝 ZIP 12 個檔案已與目前 source 逐一比對。
+
+## 套件
+
+本機產物：`dist/merge-reviewer-0.12.0.zip`，141,616 bytes。
+
+SHA-256：`edfe9a1888fc07a1599f24a3418b18373af3909879e3909dcd47f7efc86d8933`。
+
+此紀錄不代表已推送、建立 tag 或發布 GitHub Release；GitlabWorkSpace 的既有 0.11.0 固定未更新。
+
+---
+
 # Independent Group v2 Skill acceptance — 2026-10-13
 
 An independent agent read the revised Skill and executed two isolated Group
