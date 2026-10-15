@@ -1,13 +1,13 @@
 # Change log
 
-## 0.12.0 — 2026-10-14
+## 0.12.0 — 2026-10-15
 
 - Use native Codex Code Review criteria; separate evidence rules and concise Merge Report style.
 - Require one Repo plus explicit base/head branches. Remove quick, local-change, tag/SHA, direct, multi-seed, MR and receipt entry points.
 - Publish workspace context/result v3. Enable impact extension only for at least two declared Git roots; retain one selected Repo and captured candidate HEADs.
 - Publish one Markdown Merge Report named `merge-review-{UTC timestamp}-{base commit}-{head commit}.md` directly in the selected Repo report directory; remove JSON report export while preserving supported findings and evidence gaps.
 - Ship the Traditional Chinese usage guide, examples, troubleshooting and breaking-change migration instructions.
-- Keep existing GitlabWorkSpace 0.11.0 pins unchanged; adapters need a separate migration.
+- Integrate with GitlabWorkSpace 0.24.0 through the native branch-review interface. Older Workspace packages pinned to MergeReviewer 0.11.0 require a full VSIX/workflow-kit upgrade rather than replacing the Skill in place.
 
 ## 0.11.0 - 2026-10-13
 
