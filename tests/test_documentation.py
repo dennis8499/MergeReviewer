@@ -27,7 +27,7 @@ class DocumentationPackageTests(unittest.TestCase):
         release = load_module("documentation_release", ROOT / "scripts/package_release.py")
         with tempfile.TemporaryDirectory(prefix="guide-package-test-") as name:
             root = Path(name).resolve()
-            archive = release.build_release(tag="v0.12.0", version_file=SKILL / "VERSION",
+            archive = release.build_release(tag="v0.12.1", version_file=SKILL / "VERSION",
                                              skill_dir=SKILL, output_dir=root / "dist")
             with zipfile.ZipFile(archive) as zipped:
                 names = set(zipped.namelist())
@@ -78,7 +78,13 @@ class DocumentationPackageTests(unittest.TestCase):
                 self.assertTrue(markdown.is_file())
                 self.assertEqual(repo / "review-reports", markdown.parent)
                 self.assertEqual([markdown], list(markdown.parent.iterdir()))
-                self.assertRegex(markdown.name, rf"^merge-review-\d{{8}}T\d{{12}}Z-{seed['sources']['base']['ref']}-{seed['sources']['head']['ref']}\.md$")
+                base, head = seed["sources"]["base"]["ref"], seed["sources"]["head"]["ref"]
+                self.assertRegex(markdown.name, rf"^merge-review-\d{{8}}T\d{{12}}Z-{base[:8]}-{head[:8]}\.md$")
+                text = markdown.read_text(encoding="utf-8")
+                self.assertIn(f"| 基礎分支 | `main` | `refs/heads/main` | `{base[:8]}` |", text)
+                self.assertIn(f"| 比較分支 | `feature/payment` | `refs/heads/feature/payment` | `{head[:8]}` |", text)
+                self.assertIn(f"`{base}`", text.split("## 技術附錄\n", 1)[1])
+                self.assertIn(f"`{head}`", text.split("## 技術附錄\n", 1)[1])
             finally:
                 if owned.exists():
                     cleaned = run_python(scripts / "review_session.py", "cleanup", "--context-dir", str(owned))

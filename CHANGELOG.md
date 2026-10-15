@@ -1,5 +1,11 @@
 # Change log
 
+## 0.12.1 — 2026-10-15
+
+- Use the first 8 characters of the captured base/head branch tip commits in report filenames; retain UTC microsecond timestamps and collision protection.
+- Show the selected Repo/path, input branches, resolved refs, short commits, merge direction and merge-base-to-head diff range after the conclusion; retain full SHAs in the technical appendix.
+- Update report examples and verify the format through local/remote branch, divergent checkout, installed-package and BDD coverage.
+
 ## 0.12.0 — 2026-10-15
 
 - Use native Codex Code Review criteria; separate evidence rules and concise Merge Report style.

@@ -331,10 +331,25 @@ def render(result, manifest):
     def mark(value):
         return chr(96) + str(value) + chr(96)
 
+    def cell(value):
+        return str(value).replace("|", "\\|").replace("\n", " ")
+
     seed = repository(manifest, manifest["selected_repo"])
+    native = seed["native"]
     lines = [f"# Merge Report: {seed['name']}", "",
              f"**{result['recommendation']}**｜{result['review_status']}。{result['summary']}", "",
              "問題數量：" + "／".join(f"{p} {result['priority_counts'][p]}" for p in PRIORITIES), ""]
+    lines.extend(["## 比較資訊", "",
+                  f"- Repo：{mark(seed['name'])}",
+                  f"- 本機路徑：{mark(seed['path'])}", "",
+                  "| 角色 | 輸入分支 | 實際 ref | Commit（前 8 碼） |",
+                  "| --- | --- | --- | --- |"])
+    for role, label in (("base", "基礎分支"), ("head", "比較分支")):
+        lines.append(f"| {label} | {cell(mark(native[f'{role}_input']))} | "
+                     f"{cell(mark(native[f'{role}_resolved_ref']))} | {mark(seed['sources'][role]['ref'][:8])} |")
+    lines.extend(["", f"- 合併方向：{mark(native['head_input'])} → {mark(native['base_input'])}",
+                  f"- 主要差異範圍（共同祖先 → 比較分支）：{mark(native['diff_base'][:8])} → "
+                  f"{mark(native['review_right'][:8])}", ""])
     if result["findings"]:
         lines.extend(["## 問題", ""])
         for finding in result["findings"]:
@@ -391,8 +406,6 @@ def render(result, manifest):
                              f"{evidence.get('line_start', '—')}–{evidence.get('line_end', '—')}")
     if manifest["extension_enabled"]:
         lines.extend(["", "### 功能鏈與 Repo 判定", "", "| Repo | 判定 | 原因 |", "| --- | --- | --- |"])
-        def cell(value):
-            return str(value).replace("|", "\\|").replace("\n", " ")
         for row in result["repository_coverage"]:
             record = repository(manifest, row["repo"])
             lines.append(f"| {cell(record['name'])} ({record['id']}) | {row['status']} | {cell(row['reason'])} |")
@@ -433,7 +446,7 @@ def publish(context, draft, manifest, report_dir, *, timeout=180.0):
         stage.write_text(render(result, manifest), encoding="utf-8")
         for offset in range(1000):
             timestamp = (published_at + timedelta(microseconds=offset)).strftime("%Y%m%dT%H%M%S%fZ")
-            output = report_dir / f"merge-review-{timestamp}-{base}-{head}.md"
+            output = report_dir / f"merge-review-{timestamp}-{base[:8]}-{head[:8]}.md"
             try:
                 # Link the complete file atomically; an existing destination is never replaced.
                 os.link(stage, output)

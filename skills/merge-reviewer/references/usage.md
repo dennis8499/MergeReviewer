@@ -60,10 +60,10 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 4. 點開聊天中的 Markdown 連結，或前往：
 
 ~~~text
-C:\Work\OrderService\review-reports\merge-review-<時間戳>-<基礎分支commit>-<比較分支commit>.md
+C:\Work\OrderService\review-reports\merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md
 ~~~
 
-每次只產生一個 Markdown 檔案。時間戳使用 UTC 發布時間，格式為 `YYYYMMDDTHHMMSSffffffZ`，例如 `20261014T091530123456Z`；兩個提交是本次擷取的完整分支 SHA，依序為基礎分支頂端及比較分支頂端。基礎分支提交不使用共同祖先。同名時時間戳遞增一微秒，保留先前報告。
+每次只產生一個 Markdown 檔案。時間戳使用 UTC 發布時間，格式為 `YYYYMMDDTHHMMSSffffffZ`，例如 `20261014T091530123456Z`；檔名兩個提交取本次擷取分支 SHA 的固定前 8 碼，依序為基礎分支頂端及比較分支頂端。基礎分支提交不使用共同祖先；完整 SHA 保留在報告技術附錄。同名時時間戳遞增一微秒，保留先前報告。
 
 5. 按問題及下一步處理。必要來源缺失時補齊後重新審查；程式修正需先提交到比較分支，下一次分支審查才涵蓋修正。
 
@@ -189,6 +189,19 @@ $merge-reviewer VSCode工作區="C:\Work\Shop.code-workspace" 專案名稱=Order
 
 問題數量：P0 0／P1 0／P2 0／P3 0
 
+## 比較資訊
+
+- Repo：`OrderService`
+- 本機路徑：`C:\Work\OrderService`
+
+| 角色 | 輸入分支 | 實際 ref | Commit（前 8 碼） |
+| --- | --- | --- | --- |
+| 基礎分支 | `main` | `refs/heads/main` | `1234abcd` |
+| 比較分支 | `feature/payment` | `refs/heads/feature/payment` | `5678efab` |
+
+- 合併方向：`feature/payment` → `main`
+- 主要差異範圍（共同祖先 → 比較分支）：`a1b2c3d4` → `5678efab`
+
 ## 範圍與限制
 
 - 跨 Repo 延伸：disabled；宣告工作區只有一個 Git 根目錄。
@@ -199,6 +212,8 @@ $merge-reviewer VSCode工作區="C:\Work\Shop.code-workspace" 專案名稱=Order
 
 固定版本、逐檔覆蓋與必要技術紀錄。
 ~~~
+
+「比較資訊」取自本次擷取的固定證據：輸入分支保留原始名稱，實際 ref 顯示使用的是本機或指定遠端分支。摘要的 commit 為固定前 8 碼，完整 SHA 可在技術附錄核對。合併方向為比較分支到基礎分支；主要差異範圍則是共同祖先到比較分支。
 
 有問題時依原生 P0–P3 全數列出影響、觸發、預期／實際結果、建議及證據位置。P0 為最高優先程度，P3 較低；本技能不增加定級門檻。
 

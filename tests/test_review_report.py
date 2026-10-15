@@ -21,13 +21,43 @@ class ReviewReportTests(ReviewFixture):
         (context / "draft.json").write_text(json.dumps(draft), encoding="utf-8")
         markdown = review_report.publish_report(context, context / "draft.json")
         self.assertEqual(self.repo / "review-reports", markdown.parent)
-        self.assertRegex(markdown.name, rf"^merge-review-\d{{8}}T\d{{12}}Z-{seed['sources']['base']['ref']}-{seed['sources']['head']['ref']}\.md$")
+        base, head = seed["sources"]["base"]["ref"], seed["sources"]["head"]["ref"]
+        self.assertRegex(markdown.name, rf"^merge-review-\d{{8}}T\d{{12}}Z-{base[:8]}-{head[:8]}\.md$")
         self.assertEqual([markdown], list(markdown.parent.iterdir()))
         self.assertFalse(context.exists())
         text = markdown.read_text(encoding="utf-8")
         self.assertIn("# Merge Report: api", text)
+        comparison = text.split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("- Repo：`api`", comparison)
+        self.assertIn(f"- 本機路徑：`{self.repo}`", comparison)
+        self.assertIn(f"| 基礎分支 | `main` | `refs/heads/main` | `{base[:8]}` |", comparison)
+        self.assertIn(f"| 比較分支 | `feature` | `refs/heads/feature` | `{head[:8]}` |", comparison)
+        self.assertIn("- 合併方向：`feature` → `main`", comparison)
+        self.assertIn(f"- 主要差異範圍（共同祖先 → 比較分支）：`{base[:8]}` → `{head[:8]}`", comparison)
+        self.assertNotIn(base, comparison)
+        self.assertNotIn(head, comparison)
+        appendix = text.split("## 技術附錄\n", 1)[1]
+        self.assertIn(f"`{base}`", appendix)
+        self.assertIn(f"`{head}`", appendix)
+        self.assertLess(text.index("問題數量："), text.index("## 比較資訊"))
         self.assertNotIn("## 問題\n", text)
         self.assertNotIn("## 下一步\n", text)
+
+    def test_report_shows_remote_branch_inputs_and_resolved_refs(self):
+        remote = self.root / "origin.git"
+        git(self.root, "init", "--bare", str(remote))
+        git(self.repo, "remote", "add", "origin", str(remote))
+        git(self.repo, "push", "origin", "main", "feature")
+        context, manifest = self.capture(base="origin/main", head="origin/feature")
+        seed = workspace.repository(manifest, manifest["selected_repo"])
+        base, head = seed["sources"]["base"]["ref"], seed["sources"]["head"]["ref"]
+        (context / "draft.json").write_text(json.dumps(self.draft(context, manifest)), encoding="utf-8")
+        markdown = review_report.publish_report(context, context / "draft.json")
+        comparison = markdown.read_text(encoding="utf-8").split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(f"| 基礎分支 | `origin/main` | `refs/remotes/origin/main` | `{base[:8]}` |", comparison)
+        self.assertIn(f"| 比較分支 | `origin/feature` | `refs/remotes/origin/feature` | `{head[:8]}` |", comparison)
+        self.assertIn("- 合併方向：`origin/feature` → `origin/main`", comparison)
+        self.assertRegex(markdown.name, rf"^merge-review-\d{{8}}T\d{{12}}Z-{base[:8]}-{head[:8]}\.md$")
 
     def test_group_report_still_belongs_to_only_the_selected_repo(self):
         consumer = self.make_repo("consumer")
@@ -39,6 +69,9 @@ class ReviewReportTests(ReviewFixture):
         self.assertFalse((self.root / "review-reports").exists())
         self.assertFalse((consumer / "review-reports").exists())
         self.assertEqual([markdown], list(markdown.parent.iterdir()))
+        comparison = markdown.read_text(encoding="utf-8").split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(f"- 本機路徑：`{self.repo}`", comparison)
+        self.assertNotIn(str(consumer), comparison)
 
     def test_markdown_preserves_all_findings_and_native_priorities(self):
         context, manifest = self.capture()
@@ -52,6 +85,7 @@ class ReviewReportTests(ReviewFixture):
         text = markdown.read_text(encoding="utf-8")
         self.assertIn("問題數量：P0 1／P1 1／P2 1／P3 1", text)
         self.assertIn("merge-report-concise/v1", text)
+        self.assertLess(text.index("## 比較資訊"), text.index("## 問題\n"))
         for item in draft["findings"]:
             self.assertIn(f"{item['id']}｜[{item['priority']}] {item['title']}", text)
             self.assertIn(item["evidence"][0]["ref"], text)
@@ -123,11 +157,21 @@ class ReviewReportTests(ReviewFixture):
         self.assertEqual("審查未完成", result["review_status"])
         self.assertEqual("需補做審查", result["recommendation"])
         self.assertEqual(1, result["priority_counts"]["P1"])
+        seed = workspace.repository(manifest, manifest["selected_repo"])
+        text = workspace_report.render(result, manifest)
+        self.assertIn(f"| 比較分支 | `feature` | `refs/heads/feature` | `{seed['sources']['head']['ref'][:8]}` |", text)
+        self.assertIn("**需補做審查**｜審查未完成", text)
 
     def test_no_difference_and_no_findings_are_distinct(self):
         context, manifest = self.capture(head="main")
         result = workspace_report.validate(self.draft(context, manifest), manifest, context)
         self.assertEqual("沒有差異", result["review_status"])
+        seed = workspace.repository(manifest, manifest["selected_repo"])
+        tip = seed["sources"]["base"]["ref"][:8]
+        text = workspace_report.render(result, manifest)
+        self.assertIn(f"| 基礎分支 | `main` | `refs/heads/main` | `{tip}` |", text)
+        self.assertIn(f"| 比較分支 | `main` | `refs/heads/main` | `{tip}` |", text)
+        self.assertIn(f"- 主要差異範圍（共同祖先 → 比較分支）：`{tip}` → `{tip}`", text)
         context, manifest = self.capture()
         result = workspace_report.validate(self.draft(context, manifest), manifest, context)
         self.assertEqual("未發現具體問題", result["review_status"])
@@ -179,13 +223,13 @@ class ReviewReportTests(ReviewFixture):
         report_dir = self.repo / "review-reports"
         report_dir.mkdir()
         base, head = seed["sources"]["base"]["ref"], seed["sources"]["head"]["ref"]
-        previous = report_dir / f"merge-review-20261014T091530123456Z-{base}-{head}.md"
+        previous = report_dir / f"merge-review-20261014T091530123456Z-{base[:8]}-{head[:8]}.md"
         previous.write_text("keep", encoding="utf-8")
         (context / "draft.json").write_text(json.dumps(self.draft(context, manifest)), encoding="utf-8")
         with mock.patch.object(workspace_report, "datetime") as clock:
             clock.now.return_value = datetime(2026, 10, 14, 9, 15, 30, 123456, tzinfo=timezone.utc)
             markdown = review_report.publish_report(context, context / "draft.json")
-        self.assertEqual(f"merge-review-20261014T091530123457Z-{base}-{head}.md", markdown.name)
+        self.assertEqual(f"merge-review-20261014T091530123457Z-{base[:8]}-{head[:8]}.md", markdown.name)
         self.assertEqual("keep", previous.read_text(encoding="utf-8"))
         self.assertEqual({previous, markdown}, set(report_dir.iterdir()))
 
@@ -213,16 +257,25 @@ class ReviewReportTests(ReviewFixture):
     def test_filename_uses_captured_branch_tips_not_merge_base_or_current_head(self):
         git(self.repo, "switch", "main")
         self.commit("base_ready = True\n", "base.py")
+        git(self.repo, "switch", "-c", "working")
+        self.commit("checkout_only = True\n", "checkout.py")
         context, manifest = self.capture()
         seed = workspace.repository(manifest, manifest["selected_repo"])
         base, head = seed["sources"]["base"]["ref"], seed["sources"]["head"]["ref"]
-        self.assertNotEqual(base, seed["native"]["merge_base"])
-        self.assertNotEqual(head, git(self.repo, "rev-parse", "HEAD"))
+        merge_base = seed["native"]["merge_base"]
+        checkout = git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(4, len({base, head, merge_base, checkout}))
         (context / "draft.json").write_text(json.dumps(self.draft(context, manifest)), encoding="utf-8")
         with mock.patch.object(workspace_report, "datetime") as clock:
             clock.now.return_value = datetime(2026, 10, 14, 9, 15, 30, 123456, tzinfo=timezone.utc)
             markdown = review_report.publish_report(context, context / "draft.json")
-        self.assertEqual(f"merge-review-20261014T091530123456Z-{base}-{head}.md", markdown.name)
+        self.assertEqual(f"merge-review-20261014T091530123456Z-{base[:8]}-{head[:8]}.md", markdown.name)
+        text = markdown.read_text(encoding="utf-8")
+        comparison = text.split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(f"| 基礎分支 | `main` | `refs/heads/main` | `{base[:8]}` |", comparison)
+        self.assertIn(f"- 主要差異範圍（共同祖先 → 比較分支）：`{merge_base[:8]}` → `{head[:8]}`", comparison)
+        self.assertNotIn(checkout[:8], comparison)
+        self.assertIn(f"`{merge_base}`", text.split("## 技術附錄\n", 1)[1])
 
     def test_publication_race_preserves_other_writer_report(self):
         context, manifest = self.capture()

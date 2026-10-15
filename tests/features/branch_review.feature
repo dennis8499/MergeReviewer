@@ -41,11 +41,12 @@ Feature: One Repo branch review with conditional impact extension
       | HEAD |
       | refs/tags/v1 |
 
-  Scenario: Publish one Markdown report named for the branch commits
+  Scenario: Publish one Markdown report with short branch commits and comparison details
     Given a branch fixture with 1 visible Repos
     When I prepare the explicit base and comparison branches
     And I publish the completed evidence fixture
     Then the report is in the selected Repo
-    And the filename contains the timestamp and branch commits
+    And the filename contains the timestamp and 8 character branch commits
+    And the report identifies the captured branch comparison
     And the report is the only published file
     And the owned context has been removed

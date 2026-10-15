@@ -94,11 +94,27 @@ def selected_output(context):
     assert context.markdown.read_text(encoding="utf-8").startswith("# Merge Report: api")
 
 
-@then("the filename contains the timestamp and branch commits")
+@then("the filename contains the timestamp and 8 character branch commits")
 def named_commits(context):
     seed = workspace.repository(context.manifest, context.manifest["selected_repo"])
     base, head = seed["sources"]["base"]["ref"], seed["sources"]["head"]["ref"]
-    assert re.fullmatch(rf"merge-review-\d{{8}}T\d{{12}}Z-{base}-{head}\.md", context.markdown.name)
+    assert re.fullmatch(rf"merge-review-\d{{8}}T\d{{12}}Z-{base[:8]}-{head[:8]}\.md", context.markdown.name)
+
+
+@then("the report identifies the captured branch comparison")
+def comparison_details(context):
+    seed = workspace.repository(context.manifest, context.manifest["selected_repo"])
+    native = seed["native"]
+    text = context.markdown.read_text(encoding="utf-8")
+    comparison = text.split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
+    assert f"- Repo：`{seed['name']}`" in comparison
+    assert f"- 本機路徑：`{seed['path']}`" in comparison
+    for role, label in (("base", "基礎分支"), ("head", "比較分支")):
+        commit = seed["sources"][role]["ref"]
+        assert f"| {label} | `{native[role + '_input']}` | `{native[role + '_resolved_ref']}` | `{commit[:8]}` |" in comparison
+        assert f"`{commit}`" in text.split("## 技術附錄\n", 1)[1]
+    assert f"- 合併方向：`{native['head_input']}` → `{native['base_input']}`" in comparison
+    assert f"- 主要差異範圍（共同祖先 → 比較分支）：`{native['diff_base'][:8]}` → `{native['review_right'][:8]}`" in comparison
 
 
 @then("the report is the only published file")

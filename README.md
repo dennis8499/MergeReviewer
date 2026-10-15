@@ -1,12 +1,12 @@
 # Merge Reviewer
 
-`0.12.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
+`0.12.1` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
 ## 安裝與第一次使用
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.12.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
+從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.12.1.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
 在 Codex 對話輸入：
 
@@ -30,10 +30,12 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 ## 報告
 
 ~~~text
-<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit>-<比較分支commit>.md
+<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md
 ~~~
 
-標題為 `Merge Report: <Repo>`，採結論先行的繁體中文精簡風格，全數問題依原生優先程度排序；必要限制在正文，完整版本與搜尋紀錄在附錄。每次只產生一個 Markdown 檔案。時間戳為 UTC 發布時間，格式 `YYYYMMDDTHHMMSSffffffZ`（含微秒）；commit 使用擷取時兩個分支的完整 SHA，基礎分支取分支頂端而非共同祖先。同名時遞增時間戳，保留既有報告。
+標題為 `Merge Report: <Repo>`，採結論先行的繁體中文精簡風格，全數問題依原生優先程度排序。結論與問題數量後的「比較資訊」列出 Repo／本機路徑、輸入分支、實際 ref、8 碼 commit、合併方向及共同祖先到比較分支的主要差異範圍；完整 SHA 與搜尋紀錄保留在技術附錄。
+
+每次只產生一個 Markdown 檔案。時間戳為 UTC 發布時間，格式 `YYYYMMDDTHHMMSSffffffZ`（含微秒）；檔名依序使用擷取時基礎分支頂端與比較分支頂端 SHA 的固定前 8 碼，基礎分支取分支頂端而非共同祖先。同名時遞增時間戳，保留既有報告。
 
 狀態為「發現具體問題」「沒有差異」「未發現具體問題」「審查未完成」。未發現問題不保證完全正確；未執行的專案測試不會寫成通過。
 
@@ -49,7 +51,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 python -m pip install -r requirements-dev.txt
 python -X utf8 -B -m unittest discover -s tests -v
 python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
-python scripts/package_release.py --tag v0.12.0
+python scripts/package_release.py --tag v0.12.1
 ~~~
 
 CI 維持 Linux／Windows × Python 3.10／3.14 矩陣；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及五個必要 helper，不包含測試及舊收據 runtime。

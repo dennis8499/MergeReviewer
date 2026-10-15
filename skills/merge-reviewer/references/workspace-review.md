@@ -76,6 +76,6 @@ python "<skill-dir>/scripts/review_workspace.py" read --context-dir "<context>" 
 python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result "<context>/draft.json"
 ~~~
 
-只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit>-<比較分支commit>.md`。時間戳採 UTC 發布時間及微秒；提交使用固定的 `base`／`head` 分支頂端完整 SHA。多儲存庫延伸證據整合於同一份報告。內部驗證結果的 `extension_status=disabled|complete|incomplete`、`review_status`、`priority_counts`、固定版本及技術紀錄呈現在 Markdown，發布器標準輸出只回傳完整報告路徑。
+只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。結論與問題數量後的「比較資訊」列出所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）；完整 SHA 留在技術附錄。多儲存庫延伸證據整合於同一份報告。內部驗證結果的 `extension_status=disabled|complete|incomplete`、`review_status`、`priority_counts`、固定版本及技術紀錄呈現在 Markdown，發布器標準輸出只回傳完整報告路徑。
 
 發布前核對工作區宣告、儲存庫清單、所選分支參照、相關 HEAD 與固定搜尋；漂移使結果未完成。完整 Markdown 先寫入暫存，再原子發布到報告檔案；同名時遞增時間戳，不覆寫既有內容。成功、驗證失敗及寫入失敗均清理本次工作階段建立並由工具識別的證據目錄；提前中止用 `review_session.py cleanup`。

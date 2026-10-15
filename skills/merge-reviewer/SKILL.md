@@ -49,7 +49,9 @@ python "<skill-dir>/scripts/git_review_context.py" --workspace "<declared-root>"
 python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result "<context>/draft.json"
 ~~~
 
-發布器驗證證據與覆蓋情形、計算完成程度及問題數量，並只寫入一份 `<selected-Repo>/review-reports/merge-review-<timestamp>-<base-commit>-<head-commit>.md`，標題為 `Merge Report: <Repo>`。使用含微秒的 UTC 發布時間戳（`YYYYMMDDTHHMMSSffffffZ`），以及擷取時兩個分支頂端的完整 SHA，不使用共同祖先或目前取出的版本。僅發布 Markdown，並透過標準輸出回傳報告路徑。同名時保留既有報告。相關儲存庫的證據整合於同一份報告。
+發布器驗證證據與覆蓋情形、計算完成程度及問題數量，並只寫入一份 `<selected-Repo>/review-reports/merge-review-<timestamp>-<base-commit前8碼>-<head-commit前8碼>.md`，標題為 `Merge Report: <Repo>`。使用含微秒的 UTC 發布時間戳（`YYYYMMDDTHHMMSSffffffZ`），以及擷取時兩個分支頂端 SHA 的固定前 8 碼，不使用共同祖先或目前取出的版本。僅發布 Markdown，並透過標準輸出回傳報告路徑。同名時保留既有報告。相關儲存庫的證據整合於同一份報告。
+
+結論與問題數量後顯示「比較資訊」：Repo／本機路徑、基礎與比較分支的輸入名稱、實際 ref、8 碼 commit、比較分支到基礎分支的合併方向，以及共同祖先到比較分支的主要差異範圍。資訊來自已擷取的固定證據；完整 SHA 保留在技術附錄。
 
 回覆精簡的繁體中文結果，包含有證據支持的問題、重要缺口與下一步，以及可點擊的報告連結。沒有找到有證據支持的問題時，明確說明；審查未完成不能當作通過。只有實際執行過專案測試，才能聲稱已執行。
 

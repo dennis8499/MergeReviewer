@@ -5,7 +5,7 @@
 ## 執行方式
 
 1. 在系統暫存目錄建立一次性 Git repository，依案例建立共同起點、`main` 和 `feature` 分支。每個案例獨立執行，避免前一案例的物件或報告影響後一案例。
-2. 以 Merge Reviewer 執行 `main` 對 `feature` 的合併模式審查，讓 Codex 依原生準則完成逐檔審查，發布後保留單一 Markdown Merge Report 作為驗收紀錄，檔名需包含 UTC 時間戳及兩個分支的完整 commit SHA。
+2. 以 Merge Reviewer 執行 `main` 對 `feature` 的合併模式審查，讓 Codex 依原生準則完成逐檔審查，發布後保留單一 Markdown Merge Report 作為驗收紀錄。檔名需包含 UTC 時間戳及兩個分支頂端 commit 的前 8 碼；結論後的比較資訊須列出 Repo／路徑、輸入分支與實際 ref、8 碼 commit、合併方向及共同祖先到比較分支的主要差異範圍，完整 SHA 保留在附錄。
 3. 將 finding、來源 SHA、路徑、行號、覆蓋狀態、結果狀態與合併建議逐項對照標準答案。報告驗證器成功只代表結構與證據可查，不代表 Skill 找對了問題。
 4. 記錄漏報、誤報、嚴重度偏差和沒有證據的引用；案例全部符合標準答案才通過人工驗收。
 
