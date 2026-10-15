@@ -1,8 +1,10 @@
 # Change log
 
-## Unreleased
+## 0.12.2 — 2026-10-15
 
 - Apply the shared Concise style from the start of each task to progress messages, answers and newly created or updated documents; preserve full evidence, errors and requested explanations.
+
+- Streamline the Skill entrypoint, load workflow references on demand and add a focused style reference; retain the v3 review/report contract.
 
 ## 0.12.1 — 2026-10-15
 

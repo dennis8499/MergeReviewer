@@ -27,7 +27,7 @@ class DocumentationPackageTests(unittest.TestCase):
         release = load_module("documentation_release", ROOT / "scripts/package_release.py")
         with tempfile.TemporaryDirectory(prefix="guide-package-test-") as name:
             root = Path(name).resolve()
-            archive = release.build_release(tag="v0.12.1", version_file=SKILL / "VERSION",
+            archive = release.build_release(tag="v0.12.2", version_file=SKILL / "VERSION",
                                              skill_dir=SKILL, output_dir=root / "dist")
             with zipfile.ZipFile(archive) as zipped:
                 names = set(zipped.namelist())
