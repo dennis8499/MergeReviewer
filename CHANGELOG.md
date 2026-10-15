@@ -1,5 +1,9 @@
 # Change log
 
+## Unreleased
+
+- Apply the shared Concise style from the start of each task to progress messages, answers and newly created or updated documents; preserve full evidence, errors and requested explanations.
+
 ## 0.12.1 — 2026-10-15
 
 - Use the first 8 characters of the captured base/head branch tip commits in report filenames; retain UTC microsecond timestamps and collision protection.

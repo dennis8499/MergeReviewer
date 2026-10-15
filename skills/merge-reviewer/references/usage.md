@@ -178,7 +178,7 @@ $merge-reviewer VSCode工作區="C:\Work\Shop.code-workspace" 專案名稱=Order
 
 ## 6. Merge Report 解讀
 
-報告與聊天結果使用繁體中文（zh-TW），採結論先行的精簡風格。若在 Claude Code 中套用這份輸出規範，請依 [Claude Code 使用 Concise](report-style.md#claude-code-使用-concise) 指引啟用並確認內建 `Concise`，查看選單、設定檔及版本需求。此設定會影響整個 Claude Code 工作階段；MergeReviewer 的核心審查仍由 Codex 執行。
+進度、問答及新增或更新文件使用繁體中文（zh-TW），從開始即套用[共用 Concise 規則](report-style.md#共用-concise-規則)。簡單問答一至三句，正式報告保留全部必要內容；要求詳解時完整說明。若在 Claude Code 中套用這份輸出規範，請依 [Claude Code 使用 Concise](report-style.md#claude-code-使用-concise) 指引啟用並確認內建 `Concise`，查看選單、設定檔及版本需求。此設定會影響整個 Claude Code 工作階段；MergeReviewer 的核心審查仍由 Codex 執行。
 
 以下是**格式示意，不是本次工作的實際審查結果**：
 

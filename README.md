@@ -2,6 +2,8 @@
 
 `0.12.1` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
+進度、問答及新增或更新文件共用 [Concise 寫作規則](skills/merge-reviewer/references/report-style.md#共用-concise-規則)：首句給結果，簡單問答一至三句，完整保留必要證據、缺口及錯誤資訊；要求詳解時完整說明。
+
 ## 安裝與第一次使用
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。

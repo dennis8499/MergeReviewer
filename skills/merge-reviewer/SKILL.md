@@ -9,6 +9,8 @@ metadata:
 
 核心審查使用 Codex 原生 Code Review 判斷。本技能提供不可變的 Git 證據、依條件啟用的跨儲存庫背景資訊與報告流程；缺陷準則及優先程度定義沿用原生標準。套用相關根目錄及巢狀 `AGENTS.md` 的審查指示。報告格式正確或輔助程式執行成功，不能證明語意審查正確。
 
+開始前讀取[輸出與報告寫作風格](references/report-style.md)，套用到進度、問答及新增或更新文件的措辭。
+
 ## 請求與邊界
 
 以下三個業務輸入皆為必要：
@@ -41,7 +43,7 @@ python "<skill-dir>/scripts/git_review_context.py" --workspace "<declared-root>"
 
 ## 發布
 
-讀取[報告寫作風格](references/report-style.md)，僅用於報告措辭。在本次工作階段建立並由工具識別的證據目錄內，由 Codex 依實際 v3 覆蓋情形撰寫 `draft.json`。輔助程式不能代替你產生語意審查結論。
+遵循已載入的[寫作風格](references/report-style.md)。在本次工作階段建立並由工具識別的證據目錄內，由 Codex 依實際 v3 覆蓋情形撰寫 `draft.json`。輔助程式不能代替你產生語意審查結論。
 
 報告與聊天結果使用繁體中文（zh-TW），採結論先行的精簡風格。若在 Claude Code 中套用相同輸出規範，請使用內建 `Concise`；啟用、確認及版本需求見 [Claude Code 使用 Concise](references/report-style.md#claude-code-使用-concise)。核心審查仍由 Codex 執行。
 
