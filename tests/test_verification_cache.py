@@ -58,9 +58,13 @@ class VerificationCacheTests(ReviewFixture):
 
     def test_same_path_is_isolated_by_repo_version_and_object_store(self):
         context, manifest = self.capture()
-        cache = workspace.FixedSourceCache(context, api)
         seed = workspace.repository(manifest, manifest["selected_repo"])
         consumer = next(r for r in manifest["repositories"] if r["path"] == str(self.consumer))
+        # This test covers the object-store switching contract of legacy v3.
+        seed.pop("snapshot")
+        for name, source in seed["sources"].items():
+            source["objects"] = f"repos/{seed['id']}/native/merge-preview-objects" if name == "merge-preview" else None
+        cache = workspace.FixedSourceCache(context, api)
         self.assertEqual(b"contract = 'new'\n", cache.read(seed, "head", "app.py"))
         self.assertEqual(b"contract = 'old'\n", cache.read(seed, "base", "app.py"))
         self.assertEqual(b"contract = 'consumer'\n", cache.read(consumer, "head", "app.py"))

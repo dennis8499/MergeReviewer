@@ -123,16 +123,16 @@ class WorkspaceReviewTests(ReviewFixture):
                 row["search_ids"] += [s["id"] for s in search["searches"]]
         self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
 
-    def test_consumer_head_or_workspace_file_drift_prevents_completion(self):
+    def test_consumer_head_and_workspace_file_changes_preserve_the_frozen_review(self):
         workspace_file = self.root / "visible.code-workspace"
         workspace_file.write_text(json.dumps({"folders": [{"path": "api"}, {"path": "consumer"}]}), encoding="utf-8")
         context, manifest = self.capture("--workspace-file", str(workspace_file))
         draft = self.draft(context, manifest)
         self.attach_consumer(draft, manifest, self.consumer)
         self.commit("contract = 'changed consumer'\n", repository=self.consumer)
-        self.assertFalse(workspace_report.validate(draft, manifest, context)["review_complete"])
+        self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
         workspace_file.write_text(json.dumps({"folders": [{"path": "api"}]}), encoding="utf-8")
-        self.assertFalse(workspace_report.validate(draft, manifest, context)["review_complete"])
+        self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
 
     def test_registered_contracts_require_a_connected_review_anchor(self):
         context, manifest = self.capture()

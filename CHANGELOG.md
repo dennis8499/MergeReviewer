@@ -1,5 +1,11 @@
 # Change log
 
+## 0.14.0 — 2026-10-16
+
+- Seal starting versions, merge previews and applicable instructions in independent evidence repositories; later ref changes and source garbage collection do not change the captured review.
+- Add optional, validated pending confirmations and editable human confirmation records while retaining confirmed findings and preventing an unconditional pass.
+- Prefer an installed Output Style Skill for presentation and retain the original standalone style when absent.
+
 ## 0.13.0 — 2026-10-16
 
 - Add compact capture summaries, ordered batch reads/searches and operation-scoped verification caches while retaining complete fixed evidence and v3 validation.

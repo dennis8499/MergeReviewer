@@ -187,13 +187,13 @@ class BranchReviewTests(ReviewFixture):
         with self.assertRaisesRegex(ValueError, "Repo count"):
             workspace_report.validate(draft, tampered, context)
 
-    def test_new_repo_or_workspace_boundary_drift_prevents_completion(self):
+    def test_new_repo_after_capture_does_not_change_the_frozen_boundary(self):
         self.commit()
         context, manifest = self.capture()
         draft = self.draft(context, manifest)
         self.make_repo("later")
         result = workspace_report.validate(draft, manifest, context)
-        self.assertFalse(result["review_complete"])
+        self.assertTrue(result["review_complete"])
         self.assertEqual("disabled", result["extension_status"])
 
     def test_unavailable_candidate_cannot_be_claimed_excluded(self):
@@ -210,12 +210,12 @@ class BranchReviewTests(ReviewFixture):
                 api.run_git(self.repo, ["status"])
         self.assertIn("--git-timeout", caught.exception.hint)
 
-    def test_comparison_branch_drift_is_detected_even_when_it_is_not_checked_out(self):
+    def test_comparison_branch_drift_does_not_invalidate_the_captured_snapshot(self):
         self.commit()
         git(self.repo, "switch", "main")
         context, manifest = self.capture()
         draft = self.draft(context, manifest)
         git(self.repo, "branch", "-f", "feature", "main")
         result = workspace_report.validate(draft, manifest, context)
-        self.assertFalse(result["review_complete"])
-        self.assertTrue(any("head 分支" in gap for gap in result["limitations"]))
+        self.assertTrue(result["review_complete"])
+        self.assertFalse(any("head 分支" in gap for gap in result["limitations"]))

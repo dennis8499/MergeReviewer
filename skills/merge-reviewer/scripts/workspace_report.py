@@ -10,6 +10,7 @@ import re
 import tempfile
 
 from review_workspace import (CONTEXT, RESULT, FixedSourceCache,
+                              SNAPSHOT_POLICY, evidence_repository, instructions,
                               repository, required_coverage, require, safe_path, source_environment,
                               validate_contract)
 
@@ -67,8 +68,9 @@ def _validate(draft, manifest, context, api):
                      {"repo": selected, "status": "seed", "reason": "使用者選定的唯一受審 Repo。", "search_ids": []}
                  ])}
     require(isinstance(draft.get("summary"), str) and draft["summary"].strip(), "summary is required")
+    draft = {**draft, "pending_confirmations": draft.get("pending_confirmations", [])}
     for field in ("coverage", "impact_coverage", "repository_coverage", "findings", "limitations",
-                  "next_steps", "tests_executed", "tests_not_executed"):
+                  "next_steps", "tests_executed", "tests_not_executed", "pending_confirmations"):
         require(isinstance(draft.get(field), list), f"{field} must be an array")
     for field in ("limitations", "tests_executed", "tests_not_executed"):
         require(all(isinstance(s, str) for s in draft[field]), f"{field} must contain text")
@@ -80,6 +82,15 @@ def _validate(draft, manifest, context, api):
     require(len(repos) == len(manifest["repositories"]), "duplicate Repo IDs")
     require(len({r["path"] for r in repos.values()}) == len(repos), "duplicate canonical Repo paths")
     require(set(manifest["seed_repos"]) <= set(repos), "unknown seed Repo")
+    frozen = manifest.get("snapshot_policy") is not None
+    if frozen:
+        require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
+        require(isinstance(manifest.get("capture_completed_at"), str), "snapshot completion time is required")
+        for repo in repos.values():
+            if repo["state"] != "error":
+                require(repo.get("snapshot") is not None, "frozen context needs an owned snapshot for every captured Repo")
+                evidence_repository(context, repo)
+                instructions(context, manifest, repo["id"], None, api)
     require(manifest.get("required_coverage") == required_coverage(manifest), "changed-path contract differs from captured changes")
     expected = {location(c) for c in manifest["required_coverage"]}
     contracts = {}
@@ -104,7 +115,7 @@ def _validate(draft, manifest, context, api):
         version_key = (repo["id"], name)
         if version_key not in verified:
             env = source_environment(context, repo, source, api)
-            actual = str(api.run_git(Path(repo["path"]), ["rev-parse", f"{source['ref']}^{{tree}}"], env=env)).strip()
+            actual = str(api.run_git(evidence_repository(context, repo), ["rev-parse", f"{source['ref']}^{{tree}}"], env=env)).strip()
             require(actual == source["tree_sha"], "fixed tree identity mismatch")
             verified.add(version_key)
         key = location(e)
@@ -125,11 +136,16 @@ def _validate(draft, manifest, context, api):
     gaps = list(manifest["context_gaps"]) + draft["limitations"][:]
     workspace_file = Path(manifest["workspace_file"]) if manifest.get("workspace_file") else None
     try:
-        if workspace_file is not None:
-            require(hashlib.sha256(workspace_file.read_bytes()).hexdigest() == manifest.get("workspace_file_sha256"),
-                    "declared workspace folders changed after capture")
-        current = set(api.discover_repositories(Path(manifest["workspace"]), workspace_file))
-        captured = {Path(repo["path"]).resolve() for repo in repos.values()}
+        # Legacy v3 contexts used the live inventory as their review boundary.
+        # Frozen sessions are bounded by their captured inventory and objects.
+        if frozen:
+            current = captured = set()
+        else:
+            if workspace_file is not None:
+                require(hashlib.sha256(workspace_file.read_bytes()).hexdigest() == manifest.get("workspace_file_sha256"),
+                        "declared workspace folders changed after capture")
+            current = set(api.discover_repositories(Path(manifest["workspace"]), workspace_file))
+            captured = {Path(repo["path"]).resolve() for repo in repos.values()}
         require(current == captured, "declared Repo inventory changed after capture; review again")
     except (OSError, ValueError, api.ReviewContextError) as exc:
         incomplete = True
@@ -223,7 +239,7 @@ def _validate(draft, manifest, context, api):
                         "search is not bound to a relevant changed contract")
             repo = repos[record["repo"]]
             env = source_environment(context, repo, source, api)
-            code, output, error = api.run_git_capture(Path(repo["path"]),
+            code, output, error = api.run_git_capture(evidence_repository(context, repo),
                 ["grep", "-n", "-I", "--no-textconv", "-F", "-e", record["query"], source["ref"], "--"], env=env)
             require(code in (0, 1) and output == record.get("output") and output.splitlines() == record.get("matches"),
                     "fixed search ledger differs from captured objects: " + error)
@@ -273,7 +289,7 @@ def _validate(draft, manifest, context, api):
             incomplete = incomplete or bool(repo["limitations"])
         # An excluded candidate can gain a consumer while review is running.
         # Its exclusion is version-specific, so freshness applies to every Repo.
-        if repo.get("before"):
+        if not frozen and repo.get("before"):
             now = api.snapshot(Path(repo["path"]))
             native = repo.get("native")
             if native:
@@ -288,6 +304,27 @@ def _validate(draft, manifest, context, api):
                 gaps.append(f"{repo_id}: 工作區版本於擷取後改變，請重做審查。")
         dispositions[repo_id] = row
     require(set(dispositions) == set(repos), "every candidate Repo needs an explicit disposition")
+
+    pending_fingerprints = set()
+    for index, item in enumerate(draft["pending_confirmations"], 1):
+        require(isinstance(item, dict) and item.get("id") == f"Q-{index:03}",
+                "pending confirmation IDs must be sequential Q-001")
+        require(set(item) <= {"id", "title", "reason", "missing_evidence", "verification", "owner", "related_changes", "evidence"},
+                "unknown pending confirmation field; human confirmation is recorded only in the report")
+        for field in ("title", "reason", "missing_evidence", "verification"):
+            require(isinstance(item.get(field), str) and item[field].strip(), f"pending confirmation needs {field}")
+        require(item.get("owner") in OWNERS, "pending confirmation needs a valid owner")
+        related = item.get("related_changes")
+        require(isinstance(related, list) and related and all(isinstance(row, dict) and set(row) == {"repo", "source", "path"}
+                    and all(isinstance(row[field], str) and row[field] for field in ("repo", "source", "path"))
+                    and location(row) in expected for row in related),
+                "pending confirmation must identify captured selected changes")
+        require(len({location(row) for row in related}) == len(related), "duplicate pending related change")
+        keys = evidence_list(item, required=False)
+        require(all(key[0] in involved for key in keys), "pending evidence cannot expand excluded Repos")
+        fingerprint = tuple(item[field].strip() for field in ("title", "reason", "missing_evidence"))
+        require(fingerprint not in pending_fingerprints, "duplicate pending confirmation")
+        pending_fingerprints.add(fingerprint)
 
     findings = []
     fingerprints, last_priority = set(), -1
@@ -319,11 +356,13 @@ def _validate(draft, manifest, context, api):
                              excerpt is not None and excerpt.encode("utf-8") != selected_lines})
         findings.append({**finding, "evidence": excerpts})
     counts = {p: sum(f["priority"] == p for f in draft["findings"]) for p in PRIORITIES}
-    state = "審查未完成" if incomplete else ("沒有差異" if not expected else
-            ("發現具體問題" if draft["findings"] else "未發現具體問題"))
+    pending = bool(draft["pending_confirmations"])
+    state = "審查未完成" if incomplete else ("待人工確認" if pending else ("沒有差異" if not expected else
+            ("發現具體問題" if draft["findings"] else "未發現具體問題")))
     recommendation = "需補做審查" if incomplete else ("暫緩合併" if counts["P0"] else
-                     ("修正後再合併" if counts["P1"] else "可以合併"))
-    return {**draft, "findings": findings, "review_status": state, "review_complete": not incomplete,
+                     ("修正後再合併" if counts["P1"] else ("需人工確認" if pending else "可以合併")))
+    return {**draft, "findings": findings, "review_status": state, "review_complete": not (incomplete or pending),
+            "pending_confirmation_count": len(draft["pending_confirmations"]),
             "recommendation": recommendation, "priority_counts": counts,
             "limitations": list(dict.fromkeys(gaps)), "scope": manifest["scope"], "target": manifest["target"],
             "involved_repos": sorted(involved), "versions": [{"repo": r["id"], "path": r["path"],
@@ -335,6 +374,7 @@ def _validate(draft, manifest, context, api):
              "extension_enabled": enabled,
              "extension_status": ("incomplete" if incomplete else "complete") if enabled else "disabled",
              "report_style": "merge-report-concise/v1",
+             "snapshot_policy": manifest.get("snapshot_policy"),
             "context_sha256": hashlib.sha256((context / "manifest.json").read_bytes()).hexdigest()}
 
 
@@ -361,6 +401,9 @@ def render(result, manifest):
     lines.extend(["", f"- 合併方向：{mark(native['head_input'])} → {mark(native['base_input'])}",
                   f"- 主要差異範圍（共同祖先 → 比較分支）：{mark(native['diff_base'][:8])} → "
                   f"{mark(native['review_right'][:8])}", ""])
+    if manifest.get("snapshot_policy") == SNAPSHOT_POLICY:
+        lines.extend([f"- 快照擷取：{manifest['generated_at']} → {manifest['capture_completed_at']}（UTC）。",
+                      "- 適用版本：本報告僅適用於上述固定 SHA 及本次擷取的相關 Repo；後續分支更新不改變本次結論。", ""])
     if result["findings"]:
         lines.extend(["## 問題", ""])
         for finding in result["findings"]:
@@ -391,6 +434,26 @@ def render(result, manifest):
                           f"{finding['recommendation']}（{finding['owner']}）", ""])
             if finding.get("engineering_fix"):
                 lines.extend([finding["engineering_fix"], ""])
+    if result.get("pending_confirmations"):
+        lines.extend(["## 待人工確認", "",
+                      f"共 {result['pending_confirmation_count']} 項，未列為已確認問題或計入 P0–P3；完成核對前不視為通過。", ""])
+        for item in result["pending_confirmations"]:
+            changes = "、".join(repository(manifest, row["repo"])["name"] + "/" + row["path"]
+                               for row in item["related_changes"])
+            lines.extend([f"### {item['id']}｜{item['title']}", "",
+                          f"- 關聯變更：{changes}", f"- 待確認原因：{item['reason']}",
+                          f"- 缺少證據：{item['missing_evidence']}",
+                          f"- 確認方式：{item['verification']}（{item['owner']}）"])
+            for entry in item.get("evidence", []):
+                name = repository(manifest, entry["repo"])["name"]
+                span = f":{entry['line_start']}–{entry['line_end']}" if entry.get("line_start") is not None else ""
+                lines.append(f"- 已有證據：{mark(name + '/' + entry['path'] + span)}；來源 {mark(entry['source'])}；固定版本 {mark(entry['ref'])}")
+            lines.append("")
+        lines.extend(["僅編輯下列人工核對紀錄；保留上方固定判斷、缺口與證據。勾選不會自動重算審查結論。", "",
+                      "<!-- merge-confirmations:start -->", ""])
+        for item in result["pending_confirmations"]:
+            lines.extend([f"- [ ] {item['id']} 已完成核對", "", "核對人：＿＿；日期：＿＿；確認結果與證據：＿＿", ""])
+        lines.extend(["<!-- merge-confirmations:end -->", ""])
     lines.extend(["## 範圍與限制", "",
                   f"- 跨 Repo 延伸：{result['extension_status']}；{manifest['extension_reason']}",
                   "- 已執行檢查：" + ("；".join(result["tests_executed"]) or "無"),

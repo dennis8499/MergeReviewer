@@ -24,6 +24,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 CONTEXT = "merge-reviewer-workspace-context/v3"
 RESULT = "merge-reviewer-workspace-result/v3"
+SNAPSHOT_POLICY = "frozen-start/v1"
 
 
 def require(condition, message):
@@ -70,16 +71,51 @@ def load(context: Path) -> dict:
     context = validate_session(context)
     manifest = json.loads(safe_path(context, "manifest.json").read_text(encoding="utf-8"))
     require(manifest.get("schema") == CONTEXT, "not a portable workspace context")
+    if manifest.get("snapshot_policy") is not None:
+        require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
+        require(all(repo.get("snapshot") is not None for repo in manifest["repositories"] if repo["state"] != "error"),
+                "frozen context needs an owned snapshot for every captured Repo")
     return manifest
 
 
 def repository(manifest: dict, repo_id: str) -> dict:
     matches = [r for r in manifest["repositories"] if r["id"] == repo_id]
     require(len(matches) == 1, f"unknown/ambiguous Repo ID: {repo_id}")
+    if manifest.get("snapshot_policy") is not None and matches[0]["state"] != "error":
+        require(matches[0].get("snapshot") is not None, "frozen Repo snapshot metadata is missing")
     return matches[0]
 
 
+def evidence_repository(context: Path, repo: dict) -> Path:
+    """New sessions never read evidence through the mutable source repository."""
+    snapshot = repo.get("snapshot")
+    if snapshot is None:
+        require(not any(isinstance(source.get("objects"), str) and "/snapshot.git/" in source["objects"]
+                        for source in repo.get("sources", {}).values()), "frozen Repo snapshot metadata is missing")
+        return Path(repo["path"])  # Legacy v3 contexts retain their original behavior.
+    require(isinstance(snapshot, dict) and snapshot.get("policy") == SNAPSHOT_POLICY,
+            "invalid frozen snapshot metadata")
+    expected = f"repos/{repo['id']}/snapshot.git"
+    require(snapshot.get("git_dir") == expected, "snapshot repository identity differs")
+    path = safe_path(context, expected)
+    objects = safe_path(context, expected + "/objects")
+    require(path.is_dir() and safe_path(context, expected + "/HEAD").is_file() and objects.is_dir(),
+            "frozen snapshot repository is missing")
+    safe_path(context, expected + "/config")
+    pack = safe_path(context, expected + "/objects/pack")
+    require(pack.is_dir() and all(not is_link(item) for item in pack.iterdir()), "linked frozen object storage")
+    require(not (path / "objects/info/alternates").exists(), "frozen snapshot cannot borrow alternate objects")
+    return path
+
+
 def source_environment(context: Path, repo: dict, source: dict, api) -> dict:
+    if repo.get("snapshot") is not None:
+        git_dir = evidence_repository(context, repo)
+        require(source.get("objects") == f"repos/{repo['id']}/snapshot.git/objects",
+                "source is outside its frozen snapshot object store")
+        return {"GIT_DIR": str(git_dir), "GIT_COMMON_DIR": str(git_dir),
+                "GIT_OBJECT_DIRECTORY": str(git_dir / "objects"),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": "", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_NO_LAZY_FETCH": "1"}
     storage = source.get("objects")
     if not storage:
         return {}
@@ -96,8 +132,9 @@ def fixed_bytes(context: Path, repo: dict, name: str, path: str, api) -> bytes:
     matches = [f for f in source["files"] if f["path"] == path]
     require(len(matches) == 1 and matches[0]["kind"] == "blob", "path is not a fixed blob")
     env = source_environment(context, repo, source, api)
-    data = api.run_git(Path(repo["path"]), ["cat-file", "blob", f"{source['ref']}:{path}"], binary=True, env=env)
-    digest = str(api.run_git(Path(repo["path"]), ["hash-object", "--stdin"], input_bytes=data)).strip()
+    git_repo = evidence_repository(context, repo)
+    data = api.run_git(git_repo, ["cat-file", "blob", f"{source['ref']}:{path}"], binary=True, env=env)
+    digest = str(api.run_git(git_repo, ["hash-object", "--stdin"], input_bytes=data, env=env)).strip()
     require(digest == matches[0]["blob_sha"], "fixed blob identity mismatch")
     return data
 
@@ -127,7 +164,7 @@ class FixedSourceCache:
         inherited_objects = tuple(os.environ.get(key) for key in (
             "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_DIR", "GIT_COMMON_DIR"))
         return (str(self.context), repo["id"], str(Path(repo["path"]).resolve()),
-                name, source["ref"], source["tree_sha"], storage, inherited_objects, path), source
+                name, source["ref"], source["tree_sha"], storage, repo.get("snapshot"), inherited_objects, path), source
 
     def read(self, repo: dict, source_name: str, path: str) -> bytes:
         key, source = self._source_key(repo, source_name, path)
@@ -150,7 +187,7 @@ class FixedSourceCache:
                          ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if key not in self._patches:
             self._patches[key] = str(self.api.run_git(
-                Path(repo["path"]), ["diff", *self.api.DIFF_FLAGS, "--no-renames", "--unified=0",
+                evidence_repository(self.context, repo), ["diff", *self.api.DIFF_FLAGS, "--no-renames", "--unified=0",
                                     baseline, source["ref"], "--", path],
                 env=source_environment(self.context, repo, source, self.api)))
         return self._patches[key]
@@ -173,6 +210,114 @@ def add_source(context: Path, repo: dict, name: str, reference: str, api, *, env
     storage = env.get("GIT_OBJECT_DIRECTORY")
     repo["sources"][name] = {"ref": reference, "tree_sha": tree, "files": files,
                              "objects": Path(storage).relative_to(context).as_posix() if storage else None}
+
+
+def seal_snapshot(context: Path, repo: dict, api):
+    """Pack complete captured trees, without copying unrelated commit history."""
+    source_repo = Path(repo["path"])
+    relative = f"repos/{repo['id']}/snapshot.git"
+    destination = safe_path(context, relative)
+    object_format = str(api.run_git(source_repo, ["rev-parse", "--show-object-format"])).strip()
+    require(object_format in ("sha1", "sha256"), "unsupported Git object format")
+    api.run_git(context, ["init", "--bare", f"--object-format={object_format}", str(destination)])
+    object_ids = set()
+    pack_environment = {}
+    for source in repo["sources"].values():
+        environment = source_environment(context, repo, source, api)
+        # Preview objects borrow the original store, and can read every source.
+        if source.get("objects"):
+            pack_environment = environment
+        object_ids.update((source["ref"], source["tree_sha"]))
+        listing = api.run_git(source_repo, ["ls-tree", "-r", "-t", "-z", source["tree_sha"]],
+                              binary=True, env=environment)
+        for entry in listing.split(b"\0"):
+            if entry:
+                metadata = entry.split(b"\t", 1)[0].decode("ascii").split()
+                if metadata[1] in ("tree", "blob"):
+                    object_ids.add(metadata[2])
+    # A normal pack includes its delta bases; no thin pack, alternates or hardlinks.
+    api.run_git(source_repo, ["pack-objects", str(destination / "objects/pack/snapshot")],
+                input_bytes=("\n".join(sorted(object_ids)) + "\n").encode("ascii"), env=pack_environment)
+    repo["snapshot"] = {"policy": SNAPSHOT_POLICY, "git_dir": relative,
+                        "captured_at": datetime.now(timezone.utc).isoformat(), "object_format": object_format}
+    for source in repo["sources"].values():
+        source["objects"] = relative + "/objects"
+        environment = source_environment(context, repo, source, api)
+        actual = str(api.run_git(destination, ["rev-parse", f"{source['ref']}^{{tree}}"], env=environment)).strip()
+        require(actual == source["tree_sha"], "frozen snapshot tree identity mismatch")
+        listing = api.run_git(destination, ["ls-tree", "-r", "-z", source["tree_sha"]],
+                              binary=True, env=environment)
+        require(len([entry for entry in listing.split(b"\0") if entry]) == len(source["files"]),
+                "frozen snapshot inventory differs")
+    checked = str(api.run_git(destination, ["cat-file", "--batch-check"],
+                              input_bytes=("\n".join(sorted(object_ids)) + "\n").encode("ascii"),
+                              env=source_environment(context, repo, next(iter(repo["sources"].values())), api)))
+    require(len(checked.splitlines()) == len(object_ids) and all(len(line.split()) == 3 for line in checked.splitlines()),
+            "frozen snapshot object closure is incomplete")
+    primary = repo["sources"][repo["review_source"]]
+    repo["instructions"] = []
+    for entry in primary["files"]:
+        if entry["kind"] == "blob" and PurePosixPath(entry["path"]).name == "AGENTS.md":
+            content = fixed_bytes(context, repo, repo["review_source"], entry["path"], api)
+            repo["instructions"].append({"repo": repo["id"], "source": repo["review_source"],
+                                         "ref": primary["ref"], "path": entry["path"],
+                                         "sha256": hashlib.sha256(content).hexdigest()})
+
+
+def capture_workspace_instructions(context, roots, repositories):
+    entries = []
+    scopes = set(roots)
+    for repo in repositories:
+        scopes.update(parent for parent in repo.parents if any(parent.is_relative_to(root) for root in roots))
+    for root in sorted(scopes):
+        if root in repositories:
+            continue  # Repo instructions come from committed, fixed trees.
+        path = root / "AGENTS.md"
+        require(not is_link(path), "linked workspace instruction file")
+        if path.is_file():
+            content = path.read_bytes()
+            stored = f"instructions/workspace-{len(entries):03}.md"
+            target = safe_path(context, stored)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            entries.append({"path": str(path), "scope": str(root), "stored_path": stored,
+                            "sha256": hashlib.sha256(content).hexdigest()})
+    return entries
+
+
+def instructions(context, manifest, repo_id, path, api):
+    repo = repository(manifest, repo_id)
+    if path is not None:
+        safe_path(context, path)
+    entries = []
+    workspace_entries = manifest.get("workspace_instructions", [])
+    require(isinstance(workspace_entries, list), "workspace instructions must be an array")
+    for item in workspace_entries:
+        require(isinstance(item, dict) and all(isinstance(item.get(field), str) and item[field]
+                for field in ("path", "scope", "stored_path", "sha256")), "invalid workspace instruction metadata")
+        if Path(repo["path"]).is_relative_to(Path(item["scope"])):
+            raw = safe_path(context, item["stored_path"]).read_bytes()
+            require(hashlib.sha256(raw).hexdigest() == item["sha256"], "workspace instruction identity mismatch")
+            entries.append({**item, "content": raw.decode("utf-8", errors="replace")})
+    repo_entries = repo.get("instructions", [])
+    require(isinstance(repo_entries, list), "Repo instructions must be an array")
+    if repo.get("snapshot") is not None:
+        primary = repo["sources"][repo["review_source"]]
+        expected = {entry["path"] for entry in primary["files"]
+                    if entry["kind"] == "blob" and PurePosixPath(entry["path"]).name == "AGENTS.md"}
+        require(all(isinstance(item, dict) and item.get("repo") == repo_id
+                    and item.get("source") == repo["review_source"] and item.get("ref") == primary["ref"]
+                    and isinstance(item.get("path"), str) and isinstance(item.get("sha256"), str)
+                    for item in repo_entries), "invalid frozen Repo instruction metadata")
+        require(len(repo_entries) == len(expected) and {item["path"] for item in repo_entries} == expected,
+                "frozen Repo instruction inventory differs")
+    for item in repo_entries:
+        parent = PurePosixPath(item["path"]).parent
+        if path is None or parent in PurePosixPath(path).parents:
+            raw = fixed_bytes(context, repo, item["source"], item["path"], api)
+            require(hashlib.sha256(raw).hexdigest() == item["sha256"], "Repo instruction identity mismatch")
+            entries.append({**item, "content": raw.decode("utf-8", errors="replace")})
+    return {"instructions": entries}
 
 
 def branch_snapshot(context: Path, repo: dict, args, api):
@@ -241,7 +386,8 @@ def build(args, api) -> dict:
         "extension_reason": f"宣告工作區包含 {len(paths)} 個不同的 Git 根目錄。" if enabled else "宣告工作區只有一個 Git 根目錄。",
         "selected_repo": None, "repositories": [], "seed_repos": [], "searches": [],
         "changed_contracts": [], "context_gaps": [], "context_dir": str(context),
-        "context_cleanup_required": True,
+        "context_cleanup_required": True, "snapshot_policy": SNAPSHOT_POLICY,
+        "workspace_instructions": capture_workspace_instructions(context, roots, paths),
     }
     for index, candidate in enumerate(paths):
         record = {"id": f"repo-{index:03}", "name": candidate.name, "path": str(candidate),
@@ -263,16 +409,23 @@ def build(args, api) -> dict:
                 record["review_source"] = "head"
                 add_source(context, record, "head", record["head_sha"], api)
             require(record["before"] == api.snapshot(actual), "Repo changed during capture; rebuild context")
+            seal_snapshot(context, record, api)
         except (ValueError, OSError, api.ReviewContextError) as exc:
             if candidate == seed:
                 raise
             record["state"] = "error"
             record["review_source"] = "head"
+            # A failed candidate has no sealed evidence; never expose borrowed
+            # partial sources as if they were an old, live-backed v3 context.
+            record["sources"] = {}
+            record["instructions"] = []
+            record.pop("snapshot", None)
             record["limitations"].append(str(exc))
         if candidate == seed:
             manifest["context_gaps"].extend(f"{record['id']}: {gap}" for gap in record["limitations"])
     manifest["required_coverage"] = required_coverage(manifest)
     manifest["context_complete"] = not manifest["context_gaps"]
+    manifest["capture_completed_at"] = datetime.now(timezone.utc).isoformat()
     save(context, manifest)
     return manifest
 
@@ -331,7 +484,7 @@ def validate_contract(context, manifest, item, api, *, cache=None):
         comparison = repo["sources"][root["source"]]
         baseline = repo["sources"]["head"]["ref"] if root["source"] == "merge-preview" else repo["diff_base"]
         patch = (cache.changed_patch(repo, root["source"], baseline, path) if cache is not None else
-                 str(api.run_git(Path(repo["path"]), ["diff", *api.DIFF_FLAGS, "--no-renames", "--unified=0",
+                 str(api.run_git(evidence_repository(context, repo), ["diff", *api.DIFF_FLAGS, "--no-renames", "--unified=0",
                              baseline, comparison["ref"], "--", path],
                              env=source_environment(context, repo, comparison, api))))
         hunks = re.findall(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", patch, re.MULTILINE)
@@ -392,7 +545,7 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
         try:
             source = repo["sources"][name]
             env = source_environment(context, repo, source, api)
-            code, output, error = api.run_git_capture(Path(repo["path"]),
+            code, output, error = api.run_git_capture(evidence_repository(context, repo),
                 ["grep", "-n", "-I", "--no-textconv", "-F", "-e", query, source["ref"], "--"], env=env)
             require(code in (0, 1), "fixed-source search failed: " + error)
             record["ref"] = source["ref"]
@@ -453,7 +606,7 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("read", "search", "batch-read", "batch-search", "inventory", "register-contract"))
+    parser.add_argument("command", choices=("read", "search", "batch-read", "batch-search", "inventory", "register-contract", "instructions"))
     parser.add_argument("--context-dir", type=Path, required=True)
     parser.add_argument("--repo", action="append")
     parser.add_argument("--source")
@@ -482,6 +635,9 @@ def main(argv=None):
         elif args.command == "read":
             require(args.repo and len(args.repo) == 1 and args.path, "read needs one --repo and --path")
             value = read(context, manifest, args.repo[0], args.path, api, args.source)
+        elif args.command == "instructions":
+            require(args.repo and len(args.repo) == 1, "instructions needs one --repo")
+            value = instructions(context, manifest, args.repo[0], args.path, api)
         else:
             value = {"repositories": [{"repo": r["id"], "name": r["name"], "path": r["path"], "role": r["role"],
                        "sources": {k: {"ref": v["ref"], "files": v["files"]} for k, v in r["sources"].items()}}

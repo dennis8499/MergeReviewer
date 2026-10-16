@@ -14,13 +14,20 @@ python "<skill-dir>/scripts/git_review_context.py" --workspace "<root>" --projec
 
 其他欄位：`workspace_roots`、`extension_reason`、`review_basis=codex-native`、`repositories`、`required_coverage`、`changed_contracts`、`searches`、`context_gaps`。所選儲存庫記錄兩個分支的固定版本、差異、合併父提交與合併預覽；其他儲存庫只擷取自身 HEAD。
 
+新 context 加上 `snapshot_policy=frozen-start/v1`、`capture_completed_at` 及 `workspace_instructions`。各成功擷取的 Repo 帶有 `snapshot`（`policy`、owned 相對 `git_dir`、`captured_at`、`object_format`）及固定 `instructions` 索引；所有來源的 `objects` 都指向該 owned Git 證據庫。普通非 thin pack 保存所需 commit、完整 tree/blob 及預覽物件，不借用原 Repo objects、不依賴原分支或後續 fetch。準備階段完成前仍需完整取得物件；完成後雲端／本機更新、force push、原 Repo GC 或工作區宣告變動不會替換或使這份快照失效。
+
+快照紀錄的是準備階段選定的各個 SHA，跨 Repo 不宣稱同一瞬間的原子擷取。報告列出準備起迄時間並只適用於這次固定版本；不自動重審或補抓新版本。缺少 `snapshot_policy` 的舊 v3 context 維持原本發布前漂移驗證，不能視為自足快照。
+
 ~~~powershell
 python "<skill-dir>/scripts/review_workspace.py" inventory --context-dir "<context>" --repo repo-000
 python "<skill-dir>/scripts/review_workspace.py" read --context-dir "<context>" --repo repo-000 --source head --path src/orders.py
 python "<skill-dir>/scripts/review_workspace.py" search --context-dir "<context>" --repo repo-000 --query orderId
+python "<skill-dir>/scripts/review_workspace.py" instructions --context-dir "<context>" --repo repo-000 --path src/orders.py
 ~~~
 
 `inventory` 提供 ID、來源及路徑／檔案內容物件（blob）清單；保留已取得的索引，需要定位檔案時才查對應 Repo，避免重讀完整清單。`read` 提供參照（ref）、SHA-256 及逐行內容。完整差異的位置列於各儲存庫的 `patches`。閱讀所選儲存庫的差異、基礎內容、必要合併父提交差異與合併預覽，完成語意審查。
+
+`instructions` 回傳擷取時適用的工作區指示與該 Repo 固定主要來源中的 `AGENTS.md` 內容、原始路徑／來源及 SHA-256；省略 `--path` 時列出該 Repo 全部固定指示，指定時只列祖先路徑。工作區 Git 外指示複製到 owned context，Repo 指示來自固定 head；未提交的 Repo 指示不替代固定版本。後續修改不改本次背景，使用者／系統指示仍優先。base／preview 中的指示差異作為受審資料閱讀。
 
 ### 批次固定讀取與搜尋
 
@@ -112,6 +119,29 @@ v3 輸入欄位維持上述名稱；報告的六欄依序對應 `impact`（問�
 
 `next_steps` 可空，最多三項 `owner`／`action`。`limitations` 記錄必要缺口；未執行測試放在 `tests_not_executed`。問題不因其他證據缺口而丟棄。
 
+### 待人工確認
+
+`pending_confirmations` 為選填陣列，省略等同 `[]`。用於具體疑問尚無足夠證據驗證的情況，不是已確認缺陷，也不接受 `priority`、`confirmed` 或草稿中的人工簽核。每項必填 `id`（Q-001 起連續編號）、`title`、`reason`、`missing_evidence`、`verification`（人工應執行的核對步驟文字）、`owner`（開發／維運設定／QA）及 `related_changes`（至少一筆恰含 `repo`、`source`、`path` 的必要變更覆蓋鍵）。例如：
+
+~~~json
+{
+  "id": "Q-001",
+  "title": "確認外部消費端是否支援新格式",
+  "reason": "工作區沒有部署中的外部消費端，無法確認相容性。",
+  "missing_evidence": "消費端版本與契約測試紀錄。",
+  "verification": "請服務負責人核對實際版本並提供契約測試結果。",
+  "owner": "QA",
+  "related_changes": [{"repo": "repo-000", "source": "head", "path": "src/orders.py"}],
+  "evidence": []
+}
+~~~
+
+`evidence` 選填且可空；提供時仍依固定 Repo／來源／ref／路徑及行號完整驗證。找不到證據不需虛構行號；錯誤引用不會自動降格成待確認。項目及關聯變更不可重複，不能指向本次必要變更以外的路徑。
+
+待確認與 `findings` 分開計數，不計入 P0–P3，保留全部已確認問題及證據。沒有其他必要缺口時狀態為「待人工確認」、`review_complete=false`，建議為「需人工確認」；已確認 P0／P1 仍優先建議「暫緩合併」／「修正後再合併」。既有覆蓋或來源缺口仍為「審查未完成／需補做審查」。任何必要待確認項都不能產生無條件「可以合併」。
+
+報告在固定問題後列出每個疑問、缺少證據與確認方式，另以 `merge-confirmations:start`／`merge-confirmations:end` 註解包住可編輯人工紀錄。checkbox 初始未勾選；人工填寫核對人、日期、確認結果與證據。只編輯此區，不改動上方固定判斷；勾選不會自動重算結果或證明目前分支已受審。
+
 ~~~powershell
 python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result "<context>/draft.json"
 ~~~
@@ -120,4 +150,4 @@ python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result
 
 Markdown 呈現 `extension_status=disabled|complete|incomplete`、`review_status`、`priority_counts` 對應的結論、問題及限制，不輸出技術附錄。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約仍完整驗證；省略顯示不改變完成程度或問題數量。發布器標準輸出只回傳完整報告路徑。
 
-發布前核對工作區宣告、儲存庫清單、所選分支參照、相關 HEAD 與固定搜尋；漂移使結果未完成。完整 Markdown 先寫入暫存，再原子發布到報告檔案；同名時遞增時間戳，不覆寫既有內容。成功、驗證失敗及寫入失敗均清理本次工作階段建立並由工具識別的證據目錄；提前中止用 `review_session.py cleanup`。
+發布前核對快照的 owned 儲存、固定物件身分、指示、證據、覆蓋及固定搜尋。新的固定快照不再比較目前雲端／本機 refs、工作區宣告與 Repo 清單；owned 物件缺失或損壞不能回退到原 Repo。完整 Markdown 先寫入暫存，再原子發布到報告檔案；同名時遞增時間戳，不覆寫既有內容。成功、驗證失敗及寫入失敗均清理本次工作階段建立並由工具識別的證據目錄；提前中止用 `review_session.py cleanup`。

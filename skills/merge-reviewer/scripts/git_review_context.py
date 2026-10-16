@@ -1280,6 +1280,7 @@ def context_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "workspace_file_sha256", "review_basis", "scope", "target", "extension_enabled",
         "extension_reason", "selected_repo", "seed_repos", "context_dir",
         "context_cleanup_required", "required_coverage", "context_complete", "context_gaps",
+        "snapshot_policy", "capture_completed_at", "workspace_instructions",
     )
     summary = {key: manifest[key] for key in fields if key in manifest}
     summary.update(schema="merge-reviewer-workspace-summary/v1",
@@ -1296,7 +1297,7 @@ def context_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
     )
     for repo in manifest["repositories"]:
         item = {key: repo[key] for key in
-                ("id", "name", "path", "role", "state", "review_source", "head_sha", "diff_base", "limitations")
+                ("id", "name", "path", "role", "state", "review_source", "head_sha", "diff_base", "limitations", "snapshot", "instructions")
                 if key in repo}
         item["sources"] = {
             name: {"ref": source["ref"], "tree_sha": source["tree_sha"],

@@ -47,14 +47,16 @@ class BatchReviewTests(ReviewFixture):
     def test_batch_read_preserves_single_read_behavior_for_newline_paths(self):
         # A Git tree can contain a newline even on hosts whose worktree cannot.
         relative = "line\nbreak.py"
-        blob = str(api.run_git(self.repo, ["hash-object", "-w", "--stdin"],
-                               input_bytes=b"newline = 'contract'\n")).strip()
-        tree = str(api.run_git(self.repo, ["mktree", "-z"],
-                               input_bytes=f"100644 blob {blob}\t{relative}\0".encode("utf-8"))).strip()
         context, manifest = self.capture()
         repo = workspace.repository(manifest, manifest["selected_repo"])
+        git_repo = workspace.evidence_repository(context, repo)
+        env = workspace.source_environment(context, repo, repo["sources"]["head"], api)
+        blob = str(api.run_git(git_repo, ["hash-object", "-w", "--stdin"],
+                               input_bytes=b"newline = 'contract'\n", env=env)).strip()
+        tree = str(api.run_git(git_repo, ["mktree", "-z"],
+                               input_bytes=f"100644 blob {blob}\t{relative}\0".encode("utf-8"), env=env)).strip()
         repo["sources"]["newline-source"] = {
-            "ref": tree, "tree_sha": tree, "objects": None,
+            "ref": tree, "tree_sha": tree, "objects": repo["sources"]["head"]["objects"],
             "files": [{"path": relative, "mode": "100644", "kind": "blob", "blob_sha": blob}],
         }
         workspace.save(context, manifest)
@@ -274,6 +276,11 @@ class FixedSourceCacheTests(ReviewFixture):
         self.assertEqual(base, cache.read(changed, "head", "app.py"))
         for name in ("cache-objects-a", "cache-objects-b"):
             (context / name).mkdir()
+        # Borrowed object-store switching remains a legacy-v3 capability.
+        repo = copy.deepcopy(repo)
+        repo.pop("snapshot")
+        for name, source in repo["sources"].items():
+            source["objects"] = f"repos/{repo['id']}/native/merge-preview-objects" if name == "merge-preview" else None
         with mock.patch.object(workspace, "fixed_bytes", wraps=workspace.fixed_bytes) as read:
             repo["sources"]["head"]["objects"] = "cache-objects-a"
             self.assertEqual(head, cache.read(repo, "head", "app.py"))
