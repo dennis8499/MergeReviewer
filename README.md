@@ -62,6 +62,8 @@ python scripts/package_release.py --tag v0.13.0
 
 CI 維持 Linux／Windows × Python 3.10／3.14 矩陣；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及五個必要 helper，不包含測試及舊收據 runtime。
 
+main 與手動驗證會保存完整矩陣證據及 Linux／Python 3.14 的正式 ZIP，附件保留十四天。推送版本 tag 時，CI 只重用七天內、同一個最終 commit、工作流程及依賴識別均相同的 main 證據；證據或附件缺漏就重跑完整矩陣。發布直接使用已驗證的 ZIP，已有相同 tag／附件可安全重試，內容不同則停止。PR 與本機測試紀錄不能取代正式 CI 證據。
+
 自動測試驗證介面、證據、延伸、報告及清理；[語意品質案例](tests/review_quality_cases.md)與[實際技能紀錄](tests/skill_acceptance_results.md)另行驗收。Helper 通過不代表模型審查品質已通過。
 
 [效能重播工具](tests/benchmark_review.py)以相同固定提交與實際審查草稿比較舊新版，預設各量測五次並比對完整證據及報告。輸出分階段耗時與 Python／Git 命令數；這是 helper 效能量測，模型分析時間與語意品質另行記錄。參數見 `python -X utf8 -B tests/benchmark_review.py --help`。
