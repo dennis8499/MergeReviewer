@@ -82,6 +82,13 @@ class DocumentationPackageTests(unittest.TestCase):
                     "findings": [], "next_steps": [], "tests_executed": [],
                     "tests_not_executed": ["僅驗證 helper，未執行模型審查。"], "limitations": [],
                 }
+                draft["findings"] = [{
+                    "id": "F-001", "priority": "P1", "title": "就緒狀態過早開啟",
+                    "impact": "尚未準備完成就開始接收請求。", "trigger": "服務在初始化前讀取就緒狀態。",
+                    "expected": "完成初始化後才開啟就緒狀態。", "actual": "就緒狀態在初始化前已開啟。",
+                    "recommendation": "將狀態切換移至初始化完成後。", "owner": "開發",
+                    "scenario_source": "code-derived", "evidence": [dict(draft["coverage"][0]["evidence"][0])],
+                }]
                 write_text(owned / "draft.json", json.dumps(draft, ensure_ascii=False))
                 published = run_python(scripts / "review_report.py", "--context-dir", str(owned),
                                        "--result", str(owned / "draft.json"))
@@ -95,8 +102,15 @@ class DocumentationPackageTests(unittest.TestCase):
                 text = markdown.read_text(encoding="utf-8")
                 self.assertIn(f"| 基礎分支 | `main` | `refs/heads/main` | `{base[:8]}` |", text)
                 self.assertIn(f"| 比較分支 | `feature/payment` | `refs/heads/feature/payment` | `{head[:8]}` |", text)
-                self.assertIn(f"`{base}`", text.split("## 技術附錄\n", 1)[1])
-                self.assertIn(f"`{head}`", text.split("## 技術附錄\n", 1)[1])
+                self.assertNotIn("技術附錄", text)
+                self.assertNotIn("逐檔覆蓋", text)
+                self.assertIn("### F-001｜[P1] 就緒狀態過早開啟", text)
+                self.assertEqual(["問題描述", "重現原因", "預期結果", "實際結果", "證據", "建議改善方式"],
+                                 re.findall(r"^\*\*([^*]+)\*\*$", text, flags=re.MULTILINE))
+                self.assertIn(f"`OrderService/app.py:1–1`（來源：`head`；固定版本：`{head}`）", text)
+                self.assertIn("\n```\nready = True\n```\n", text)
+                self.assertIn("依程式推導，未實際重現", text)
+                self.assertIn("僅驗證 helper，未執行模型審查。", text)
             finally:
                 if owned.exists():
                     cleaned = run_python(scripts / "review_session.py", "cleanup", "--context-dir", str(owned))

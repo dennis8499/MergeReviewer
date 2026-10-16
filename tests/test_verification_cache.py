@@ -29,6 +29,8 @@ class VerificationCacheTests(ReviewFixture):
                 result = workspace.search(context, manifest, term["query"], [row["repo"]], api,
                                           contract_id=second["id"])
                 row["search_ids"].extend(s["id"] for s in result["searches"])
+        draft["findings"] = [self.finding(draft)]
+        original_draft = copy.deepcopy(draft)
 
         class Uncached(workspace.FixedSourceCache):
             def read(self, repo, source_name, path):
@@ -47,6 +49,8 @@ class VerificationCacheTests(ReviewFixture):
                 uncached = workspace_report.validate(draft, manifest, context)
                 uncached_commands = [c.args[1] for c in calls.call_args_list]
         self.assertEqual(uncached, cached)
+        self.assertEqual(original_draft, draft)
+        self.assertEqual("contract = 'new'", cached["findings"][0]["evidence"][0]["excerpt"])
         self.assertTrue(cached["review_complete"])
         for command in ("cat-file", "diff"):
             self.assertLess(sum(c[0] == command for c in cached_commands),

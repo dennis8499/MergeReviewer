@@ -88,6 +88,18 @@ def publish(context):
     context.markdown = review_report.publish_report(owned, owned / "draft.json")
 
 
+@when("I publish a finding from the frozen evidence")
+def publish_finding(context):
+    fixture = context.branch_fixture
+    owned = Path(context.manifest["context_dir"])
+    draft = fixture.draft(owned, context.manifest)
+    context.finding = fixture.finding(draft)
+    draft["findings"] = [context.finding]
+    (fixture.repo / "app.py").write_text("dirty_worktree = True\n", encoding="utf-8")
+    (owned / "draft.json").write_text(json.dumps(draft), encoding="utf-8")
+    context.markdown = review_report.publish_report(owned, owned / "draft.json")
+
+
 @then("the report is in the selected Repo")
 def selected_output(context):
     assert context.markdown.parent == context.branch_fixture.repo / "review-reports"
@@ -112,9 +124,32 @@ def comparison_details(context):
     for role, label in (("base", "基礎分支"), ("head", "比較分支")):
         commit = seed["sources"][role]["ref"]
         assert f"| {label} | `{native[role + '_input']}` | `{native[role + '_resolved_ref']}` | `{commit[:8]}` |" in comparison
-        assert f"`{commit}`" in text.split("## 技術附錄\n", 1)[1]
     assert f"- 合併方向：`{native['head_input']}` → `{native['base_input']}`" in comparison
     assert f"- 主要差異範圍（共同祖先 → 比較分支）：`{native['diff_base'][:8]}` → `{native['review_right'][:8]}`" in comparison
+
+
+@then("the report has no technical appendix or coverage dump")
+def no_appendix(context):
+    text = context.markdown.read_text(encoding="utf-8")
+    for heading in ("技術附錄", "逐檔覆蓋", "固定版本搜尋紀錄", "問題證據版本", "功能鏈與 Repo 判定", "變更與延伸契約"):
+        assert heading not in text
+
+
+@then("the finding has six ordered fields and only its frozen code excerpt")
+def finding_details(context):
+    text = context.markdown.read_text(encoding="utf-8")
+    assert ["問題描述", "重現原因", "預期結果", "實際結果", "證據", "建議改善方式"] == re.findall(
+        r"^\*\*([^*]+)\*\*$", text, flags=re.MULTILINE)
+    item = context.finding
+    assert f"### {item['id']}｜[{item['priority']}] {item['title']}" in text
+    assert "問題數量：P0 0／P1 1／P2 0／P3 0" in text
+    for field in ("impact", "trigger", "expected", "actual", "recommendation", "owner"):
+        assert item[field] in text
+    evidence = item["evidence"][0]
+    assert f"`api/app.py:1–1`（來源：`head`；固定版本：`{evidence['ref']}`）" in text
+    assert "\n```\ncontract = 'new'\n```\n" in text
+    assert "dirty_worktree" not in text
+    assert "依程式推導，未實際重現" in text
 
 
 @then("the report is the only published file")

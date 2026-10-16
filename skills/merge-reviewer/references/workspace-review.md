@@ -106,12 +106,18 @@ python "<skill-dir>/scripts/review_workspace.py" read --context-dir "<context>" 
 
 問題紀錄包含 `id`（F-001 起連續編號）、原生 `priority`（P0–P3 順序）、`title`、`impact`、`trigger`、`expected`、`actual`、`recommendation`、`owner`（開發／維運設定／QA）、`scenario_source`（`code-derived`／`reproduced`）及 `evidence`。選填 `evidence_summary`／`engineering_fix`。至少一條證據連到已閱讀的所選儲存庫變更，其餘可包含既有消費端。
 
+v3 輸入欄位維持上述名稱；報告的六欄依序對應 `impact`（問題描述）、`trigger` 與 `scenario_source`（重現原因）、`expected`（預期結果）、`actual`（實際結果）、`evidence` 與選填 `evidence_summary`（證據）、`recommendation`、`owner` 與選填 `engineering_fix`（建議改善方式）。`code-derived` 只能標為依程式推導，`reproduced` 須有實際執行紀錄。
+
+每條非空文字問題證據必填 `line_start`／`line_end`，以 1 起算且包含兩端；選取能證明問題的最小必要行段，不附無關上下文。發布器依 Repo、來源、完整 ref、路徑及行號驗證並擷取固定內容，草稿不必提供程式碼片段。固定版本為空檔案時，兩個行號可同時省略，報告標示「固定版本內容為空（0 行）」；必要時另引用基礎版本的相關行段。一般覆蓋紀錄仍沿用既有證據規則。
+
 `next_steps` 可空，最多三項 `owner`／`action`。`limitations` 記錄必要缺口；未執行測試放在 `tests_not_executed`。問題不因其他證據缺口而丟棄。
 
 ~~~powershell
 python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result "<context>/draft.json"
 ~~~
 
-只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。結論與問題數量後的「比較資訊」列出所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）；完整 SHA 留在技術附錄。多儲存庫延伸證據整合於同一份報告。內部驗證結果的 `extension_status=disabled|complete|incomplete`、`review_status`、`priority_counts`、固定版本及技術紀錄呈現在 Markdown，發布器標準輸出只回傳完整報告路徑。
+只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。結論與問題數量後的「比較資訊」列出所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）。問題證據附完整固定 ref；多儲存庫延伸證據整合於同一份報告。
+
+Markdown 呈現 `extension_status=disabled|complete|incomplete`、`review_status`、`priority_counts` 對應的結論、問題及限制，不輸出技術附錄。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約仍完整驗證；省略顯示不改變完成程度或問題數量。發布器標準輸出只回傳完整報告路徑。
 
 發布前核對工作區宣告、儲存庫清單、所選分支參照、相關 HEAD 與固定搜尋；漂移使結果未完成。完整 Markdown 先寫入暫存，再原子發布到報告檔案；同名時遞增時間戳，不覆寫既有內容。成功、驗證失敗及寫入失敗均清理本次工作階段建立並由工具識別的證據目錄；提前中止用 `review_session.py cleanup`。
