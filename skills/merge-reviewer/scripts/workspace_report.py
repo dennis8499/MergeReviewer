@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import tempfile
 
-from review_workspace import (CONTEXT, RESULT, fixed_bytes,
+from review_workspace import (CONTEXT, RESULT, FixedSourceCache,
                               repository, required_coverage, require, safe_path, source_environment,
                               validate_contract)
 
@@ -83,14 +83,14 @@ def _validate(draft, manifest, context, api):
     require(manifest.get("required_coverage") == required_coverage(manifest), "changed-path contract differs from captured changes")
     expected = {location(c) for c in manifest["required_coverage"]}
     contracts = {}
+    source_cache = FixedSourceCache(context, api)
     contract_manifest = {**manifest, "changed_contracts": []}
     for contract in manifest.get("changed_contracts", []):
-        validated = validate_contract(context, contract_manifest, contract, api)
+        validated = validate_contract(context, contract_manifest, contract, api, cache=source_cache)
         require(contract == validated, "registered contract anchor bytes changed")
         contracts[contract["id"]] = contract
         contract_manifest["changed_contracts"].append(contract)
     verified = set()
-    content_cache = {}
 
     def evidence(e):
         require(isinstance(e, dict) and e.get("repo") in repos, "evidence must name a captured Repo ID")
@@ -108,9 +108,7 @@ def _validate(draft, manifest, context, api):
             require(actual == source["tree_sha"], "fixed tree identity mismatch")
             verified.add(version_key)
         key = location(e)
-        if key not in content_cache:
-            content_cache[key] = fixed_bytes(context, repo, name, path, api)
-        raw = content_cache[key]
+        raw = source_cache.read(repo, name, path)
         start, end = e.get("line_start"), e.get("line_end")
         require((start is None and end is None) or
                 (type(start) is int and type(end) is int and 1 <= start <= end <= len(raw.splitlines())),

@@ -1,3 +1,60 @@
+# 0.12.2 效能改善驗收 — 2026-10-16
+
+以 `df4e50c9d00db8f42388b1b62ccbb8eafb9f784c` 的未修改副本作基準，在同一台 Windows／Python 3.14 機器比較目前工作樹。批次操作、摘要輸出及單次驗證快取減少 helper 成本；原有命令預設輸出、v3 證據／結果契約、完整 snapshot、發布前搜尋重驗與漂移檢查保留。
+
+## 五次 helper 對照
+
+兩個系統暫存目錄中的六 Repo 工作區各自使用同一組固定提交、五個已實際審查的契約、10 次固定讀取、60 筆搜尋及同一份 Codex 草稿。每版各跑五次，交替先後順序；正式量測時未並行執行測試。計時包含 CLI 程序啟動及 Git 呼叫計數器，不含工具平台往返。以下為秒數中位數，總計欄獨立取中位數，並非各欄中位數相加。
+
+| 情境／階段 | 原版 | 改善後 |
+| --- | ---: | ---: |
+| 安全別名：擷取 | 5.84 | 4.81 |
+| 安全別名：讀取／搜尋／契約註冊 | 7.11 | 4.21 |
+| 安全別名：驗證／發布 | 5.21 | 4.53 |
+| 安全別名：helper 總計 | 18.17 | 13.72（減少 24.5%） |
+| 欄位移除：擷取 | 5.70 | 5.42 |
+| 欄位移除：讀取／搜尋／契約註冊 | 7.17 | 4.38 |
+| 欄位移除：驗證／發布 | 5.01 | 4.83 |
+| 欄位移除：helper 總計 | 17.95 | 14.52（減少 19.1%） |
+
+兩例每次 Python CLI 呼叫由 27 降為 9，Git subprocess 由 407 降為 368；擷取回傳由 10,920 降為 5,868 bytes，完整 manifest 仍寫入磁碟。60 筆發布前搜尋照常重跑。20 次重播的完整 manifest、讀取內容、搜尋紀錄／ID／順序及 Markdown 均相等；只正規化時間、run ID、暫存路徑及衍生 context hash。
+
+這是**固定草稿的 helper 重播量測**。模型語意審查另行執行，未做舊新版各五次模型分析時間對照，`model_review_seconds` 明確為 null；上述百分比不能當作完整技能或模型加速比例。
+
+## 語意與相容性驗收
+
+| 實際靜態審查案例 | 結果 |
+| --- | --- |
+| 保留 totalCents，新增 amountCents 別名 | 完整追查 web、invoice、共用驗證／轉換及間接 settlement 消費端；零問題。 |
+| 從事件及 API 回應移除 totalCents | 一項 P1 結算鏈中斷、一項 P2 金額顯示 NaN；完整覆蓋並保留無關 Repo 排除理由。 |
+| Merge 解衝突遺失 owner 檢查 | 一項 P1，以 main parent 與最終版本證明授權回歸。 |
+| 後續提交補回 owner 檢查 | 零問題，未把舊 merge 的缺陷回報為目前問題。 |
+| 乾淨合併預覽仍有 charge 簽章衝突 | 一項 P1，以 base 新介面及 preview 舊呼叫證明不相容。 |
+
+後三例也使用相同 fixtures／Codex 草稿比較原版與新版的完整 manifest、驗證結果及報告，結果一致。這些是知道案例背景的實際靜態審查，不是盲測或一般化模型準確率評估；未執行應用程式測試／編譯器，問題標示 `code-derived`。
+
+| 本機檢查 | 結果 |
+| --- | --- |
+| 完整 Python 回歸 | 90 項：89 通過，1 項因 Windows 符號連結權限不足略過。 |
+| 最後稽核後的快取回歸 | 8 項通過，包含追加的兩項損壞 JSON metadata 案例；維持原有錯誤與忽略欄位行為。 |
+| 快取整合／安裝 ZIP 再驗證 | 7 項通過；解壓後的 batch-read、batch-search 及報告發布可執行。 |
+| 自動 BDD | 15 情境／57 步驟通過；GitHub 發布人工情境未執行。 |
+| Skill validator、Python 3.10 語法及 diff 空白檢查 | 通過；未宣稱執行 Linux 或 Python 3.10 runtime。 |
+
+snapshot 另與原版逐欄比較，涵蓋特殊路徑、tracked／untracked 報告、缺少檔案、衝突索引及 clean／dirty／missing submodule。批次驗證涵蓋順序、逐查詢 checkpoint、部分失敗及二進位內容；快取驗證涵蓋跨 Repo／版本／物件儲存隔離、損壞 metadata、下一次驗證重新讀取及 tree identity 檢查。
+
+本機忽略於 Git 的可重播資料：[彙總](../test-artifacts/performance-20261016/summary.json)、[安全案例](../test-artifacts/performance-20261016/safe/summary.json)、[欄位移除案例](../test-artifacts/performance-20261016/regression/summary.json)、[merge／preview 驗收](../test-artifacts/performance-20261016/merge-acceptance.json)。同目錄保留每次完整 artifacts、原版來源、固定 Git fixtures 與實際審查 scenarios；本次 owned context 及原始一次性 fixture 已清理。
+
+資料封存到工作樹後，另用封存的原版來源、Git fixtures 及 scenario 實際重跑一組舊新版，證據／報告仍相等；這組重播位於 OneDrive，僅驗證可重跑性，未納入上述五次中位數。
+
+重跑安全案例可執行以下命令，輸出目錄須尚未存在；將 `safe` 換成 `regression` 可重跑缺陷案例：
+
+~~~powershell
+python -X utf8 -B tests/benchmark_review.py --baseline test-artifacts/performance-20261016/baseline --fixture-root test-artifacts/performance-20261016/fixtures/safe --scenario test-artifacts/performance-20261016/safe-scenario.json --output-dir test-artifacts/performance-rerun-safe --repeats 5
+~~~
+
+---
+
 # 0.12.1 報告格式驗收 — 2026-10-15
 
 本次調整報告檔名的固定 8 碼 commit，並在結論後補上比較資訊。完整 SHA、UTC 微秒時間戳、單一 Markdown 輸出及碰撞保護均保留。

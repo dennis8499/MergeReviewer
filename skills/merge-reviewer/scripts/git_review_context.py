@@ -771,10 +771,24 @@ def file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def working_tree_digest(repo: Path) -> str:
+def tracked_index_entries(repo: Path, *, check: bool = True) -> list[tuple[str, str]]:
+    """Read index metadata and unquoted names together, including every stage."""
+    raw = str(run_git(repo, ["ls-files", "-s", "-z"], check=check))
+    entries = []
+    for record in raw.split("\0"):
+        if record and "\t" in record:
+            metadata, path = record.split("\t", 1)
+            entries.append((metadata, path))
+    return entries
+
+
+def working_tree_digest(
+    repo: Path, *, tracked_index: Sequence[tuple[str, str]] | None = None
+) -> str:
     """Hash actual tracked and non-ignored untracked file contents."""
-    tracked_raw = str(run_git(repo, ["ls-files", "-z"]))
-    tracked = {item for item in tracked_raw.split("\0") if item}
+    if tracked_index is None:
+        tracked_index = tracked_index_entries(repo)
+    tracked = {path for _metadata, path in tracked_index}
     paths_raw = str(
         run_git(repo, ["ls-files", "-co", "--exclude-standard", "-z"])
     )
@@ -801,21 +815,20 @@ def working_tree_digest(repo: Path) -> str:
     return digest.hexdigest()
 
 
-def submodule_paths(repo: Path) -> set[str]:
-    records = str(run_git(repo, ["ls-files", "-s", "-z"], check=False)).split("\0")
-    paths: set[str] = set()
-    for record in records:
-        if not record or "\t" not in record:
-            continue
-        metadata, path = record.split("\t", 1)
-        if metadata.split(" ", 1)[0] == "160000":
-            paths.add(path)
-    return paths
+def submodule_paths(
+    repo: Path, *, tracked_index: Sequence[tuple[str, str]] | None = None
+) -> set[str]:
+    if tracked_index is None:
+        tracked_index = tracked_index_entries(repo, check=False)
+    return {path for metadata, path in tracked_index
+            if metadata.split(" ", 1)[0] == "160000"}
 
 
-def dirty_submodule_paths(repo: Path) -> list[str]:
+def dirty_submodule_paths(
+    repo: Path, *, tracked_index: Sequence[tuple[str, str]] | None = None
+) -> list[str]:
     """Find submodules whose nested checkout is not a committed clean tree."""
-    candidates = submodule_paths(repo)
+    candidates = submodule_paths(repo, tracked_index=tracked_index)
     if not candidates:
         return []
     status = str(
@@ -852,13 +865,15 @@ def snapshot(repo: Path) -> dict[str, Any]:
     branch = str(run_git(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"], check=False)).strip()
     status = str(run_git(repo, ["status", "--porcelain=v1", "--untracked-files=all"], check=False))
     index = git_path(repo, "index")
+    index_digest = file_digest(index)
+    tracked_index = tracked_index_entries(repo)
     return {
         "head": head,
         "branch": branch,
         "status": status,
-        "index_digest": file_digest(index),
-        "working_tree_digest": working_tree_digest(repo),
-        "dirty_submodules": dirty_submodule_paths(repo),
+        "index_digest": index_digest,
+        "working_tree_digest": working_tree_digest(repo, tracked_index=tracked_index),
+        "dirty_submodules": dirty_submodule_paths(repo, tracked_index=tracked_index),
     }
 
 
@@ -1257,6 +1272,64 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
         if not succeeded:
             review_session.cleanup_session(session_dir)
 
+
+def context_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the persisted context into a compact, distinctly typed index."""
+    fields = (
+        "generated_at", "run_id", "workspace", "workspace_roots", "workspace_file",
+        "workspace_file_sha256", "review_basis", "scope", "target", "extension_enabled",
+        "extension_reason", "selected_repo", "seed_repos", "context_dir",
+        "context_cleanup_required", "required_coverage", "context_complete", "context_gaps",
+    )
+    summary = {key: manifest[key] for key in fields if key in manifest}
+    summary.update(schema="merge-reviewer-workspace-summary/v1",
+                   context_schema=manifest["schema"],
+                   manifest_path=str(Path(manifest["context_dir"]) / "manifest.json"),
+                   repositories=[])
+    native_fields = (
+        "base_input", "head_input", "base_resolved_ref", "head_resolved_ref", "base_sha",
+        "head_sha", "mode", "merge_base", "diff_base", "review_scope", "review_right",
+        "fetches", "fetch_status", "working_tree_unchanged", "dirty_submodule_paths",
+        "review_limitations", "context_complete", "context_gaps", "review_complete",
+        "changed_file_count", "commit_count", "diff_patch_bytes", "diff_check", "diff_stat",
+        "binary_or_submodule_paths", "submodule_paths",
+    )
+    for repo in manifest["repositories"]:
+        item = {key: repo[key] for key in
+                ("id", "name", "path", "role", "state", "review_source", "head_sha", "diff_base", "limitations")
+                if key in repo}
+        item["sources"] = {
+            name: {"ref": source["ref"], "tree_sha": source["tree_sha"],
+                   "file_count": len(source["files"])}
+            for name, source in repo["sources"].items()
+        }
+        item["changed_file_count"] = len(repo["changed_files"])
+        item["patches"] = list(repo["patches"])
+        native = repo.get("native")
+        if native:
+            item["native"] = {key: native[key] for key in native_fields if key in native}
+            merges = []
+            for merge in native["merge_commits"]:
+                parents = []
+                for parent in merge["parent_views"]:
+                    patch = (f"repos/{repo['id']}/native/merge-{merge['sha'][:12]}"
+                             f"-parent-{parent['position']}.patch")
+                    parents.append({"position": parent["position"], "sha": parent["sha"],
+                                    "changed_file_count": len(parent["changes"]), "patch": patch})
+                    if patch not in item["patches"]:
+                        item["patches"].append(patch)
+                merges.append({"sha": merge["sha"], "subject": merge["subject"],
+                               "parents": merge["parents"], "parent_views": parents})
+            item["native"]["merge_commits"] = merges
+            preview = native.get("merge_preview")
+            item["native"]["merge_preview"] = (
+                {**{key: value for key, value in preview.items() if key != "changed_files"},
+                 "changed_file_count": len(preview["changed_files"])} if preview else None
+            )
+        summary["repositories"].append(item)
+    return summary
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Prepare one Repo's base/head branch evidence; Codex performs the review."
@@ -1269,6 +1342,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--no-fetch", action="store_true", help="Offline preparation; local branches only.")
     parser.add_argument("--format", choices=("json",), default="json")
     parser.add_argument("--pretty", action="store_true")
+    parser.add_argument("--summary", action="store_true", help="Print a compact context index; persist the complete manifest as usual.")
     parser.add_argument("--context-dir", help="Fresh evidence directory inside system temporary storage.")
     parser.add_argument("--git-timeout", type=positive_timeout, default=180.0, help="Seconds per Git command (default: 180).")
     arguments = parser.parse_args(argv)
@@ -1289,7 +1363,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"merge-reviewer: 建議：{hint}", file=sys.stderr)
         return 2
     indent = 2 if args.pretty else None
-    print(json.dumps(manifest, ensure_ascii=False, indent=indent))
+    print(json.dumps(context_summary(manifest) if args.summary else manifest,
+                     ensure_ascii=False, indent=indent))
     return 0
 
 

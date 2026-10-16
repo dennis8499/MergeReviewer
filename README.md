@@ -29,6 +29,8 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 - 不修改原始檔案、index 或目前分支；只同步指定遠端、建立系統暫存證據及寫報告。
 - 必要來源、預覽或影響鏈缺失時保持未完成，保留已有證據的問題。
 
+擷取可用 `--summary` 減少回傳內容，完整 manifest 與證據仍保存；已知的固定讀取及搜尋可批次執行，保留完整審查與發布前驗證。介面見[批次操作](skills/merge-reviewer/references/workspace-review.md#批次固定讀取與搜尋)。
+
 ## 報告
 
 ~~~text
@@ -59,6 +61,8 @@ python scripts/package_release.py --tag v0.12.2
 CI 維持 Linux／Windows × Python 3.10／3.14 矩陣；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及五個必要 helper，不包含測試及舊收據 runtime。
 
 自動測試驗證介面、證據、延伸、報告及清理；[語意品質案例](tests/review_quality_cases.md)與[實際技能紀錄](tests/skill_acceptance_results.md)另行驗收。Helper 通過不代表模型審查品質已通過。
+
+[效能重播工具](tests/benchmark_review.py)以相同固定提交與實際審查草稿比較舊新版，預設各量測五次並比對完整證據及報告。輸出分階段耗時與 Python／Git 命令數；這是 helper 效能量測，模型分析時間與語意品質另行記錄。參數見 `python -X utf8 -B tests/benchmark_review.py --help`。
 
 ## 文件
 

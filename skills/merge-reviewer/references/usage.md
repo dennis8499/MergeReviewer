@@ -100,6 +100,7 @@ $merge-reviewer 專案名稱="C:\Work\Customer Portal" 基礎分支=main 比較�
 | `--no-fetch` | 離線準備；僅本機分支可使用。 |
 | `--git-timeout` | 每個 Git 指令秒數，預設 180；有限正數。 |
 | `--context-dir` | 系統暫存目錄中的全新證據路徑；省略時自動建立。 |
+| `--summary` | 擷取時僅回傳來源索引、必要覆蓋與缺口；完整 manifest 與證據仍保存。省略時保留完整 JSON 回傳。 |
 | `--pretty` | 格式化準備／搜尋輔助程式的內部證據 JSON。 |
 | 發布器 `--report-dir` | 進階目的地覆寫；預設所選儲存庫的 `review-reports` 目錄。 |
 
@@ -280,15 +281,17 @@ $skillDir = if ($env:CODEX_HOME) {
 }
 $prepared = python "$skillDir/scripts/git_review_context.py" `
     --workspace "C:\Work\OrderService" `
-    --project "OrderService" --base "main" --head "feature/payment" --pretty
+    --project "OrderService" --base "main" --head "feature/payment" --summary --pretty
 if ($LASTEXITCODE -ne 0) { throw "證據準備失敗，請依訊息處理。" }
-$manifest = $prepared | ConvertFrom-Json
-$contextDir = $manifest.context_dir
-$manifest.selected_repo
-$manifest.extension_enabled
+$summary = $prepared | ConvertFrom-Json
+$contextDir = $summary.context_dir
+$summary.selected_repo
+$summary.extension_enabled
 ~~~
 
-成功回傳系統暫存證據目錄、唯一受審儲存庫、固定來源與必要覆蓋紀錄。多儲存庫時把 `--workspace` 改為容器，或提供 `--workspace-file`，三個審查輸入相同。
+成功回傳 `merge-reviewer-workspace-summary/v1`，包含系統暫存證據目錄、唯一受審儲存庫、固定來源索引、必要覆蓋及缺口；完整 v3 manifest 留在 `$contextDir/manifest.json`。多儲存庫時把 `--workspace` 改為容器，或提供 `--workspace-file`，三個審查輸入相同。需要完整 JSON 的既有整合可省略 `--summary`。
+
+已知的固定讀取及搜尋可用 `review_workspace.py batch-read`／`batch-search --requests-file`，以 context 內的 JSON 陣列減少工具往返；請求與回傳格式見[批次操作](workspace-review.md#批次固定讀取與搜尋)。共用 manifest 的搜尋及契約註冊依序執行；新發現的延伸契約分輪追查。
 
 讓 Codex 依 [v3 結果契約](workspace-review.md) 閱讀固定來源，完成真實審查並寫入 `$contextDir/draft.json`。不能以輔助程式成功訊息取代此步，也不能預填「沒有問題」當作完成。
 

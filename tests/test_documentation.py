@@ -61,6 +61,18 @@ class DocumentationPackageTests(unittest.TestCase):
                 self.assertEqual(0, inventory.returncode, inventory.stderr)
                 self.assertIn("app.py", inventory.stdout)
                 seed = next(r for r in manifest["repositories"] if r["id"] == manifest["selected_repo"])
+                requests = owned / "reads.json"
+                write_text(requests, json.dumps([{"repo": seed["id"], "path": "app.py"}]))
+                batch = run_python(scripts / "review_workspace.py", "batch-read", "--context-dir", str(owned),
+                                   "--requests-file", str(requests))
+                self.assertEqual(0, batch.returncode, batch.stderr)
+                self.assertEqual(seed["sources"]["head"]["ref"], json.loads(batch.stdout)["reads"][0]["ref"])
+                requests = owned / "searches.json"
+                write_text(requests, json.dumps([{"query": "ready", "repo": [seed["id"]]}]))
+                batch = run_python(scripts / "review_workspace.py", "batch-search", "--context-dir", str(owned),
+                                   "--requests-file", str(requests))
+                self.assertEqual(0, batch.returncode, batch.stderr)
+                self.assertEqual("complete", json.loads(batch.stdout)["searches"][0]["status"])
                 draft = {
                     "schema": "merge-reviewer-workspace-result/v3",
                     "summary": "已完成安裝套件的固定證據測試。",

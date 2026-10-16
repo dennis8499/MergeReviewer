@@ -5,20 +5,56 @@
 ## 證據目錄與固定讀取
 
 ~~~powershell
-python "<skill-dir>/scripts/git_review_context.py" --workspace "<root>" --project "<Repo>" --base main --head feature/payment --pretty
+python "<skill-dir>/scripts/git_review_context.py" --workspace "<root>" --project "<Repo>" --base main --head feature/payment --summary --pretty
 ~~~
 
-`schema` 為 `merge-reviewer-workspace-context/v3`；`selected_repo` 是唯一受審儲存庫 ID，`seed_repos` 必須只有此 ID。`extension_enabled` 由宣告邊界內的不同 Git 根目錄數決定，不能以 `scope` 參數覆寫。`scope`／`target` 是內部紀錄，固定為自動辨識的 `repo`／`group` 及 `branch`。
+`--summary` 回傳 `merge-reviewer-workspace-summary/v1` 摘要，提供 `context_dir`、`manifest_path`、Repo／來源索引、必要覆蓋及缺口，省略完整檔案清單與 snapshot。`context_schema` 標示固定證據仍為 v3。完整 `manifest.json` 與證據照常保存，未加 `--summary` 時仍回傳完整 manifest。
+
+磁碟上的 manifest `schema` 為 `merge-reviewer-workspace-context/v3`；`selected_repo` 是唯一受審儲存庫 ID，`seed_repos` 必須只有此 ID。`extension_enabled` 由宣告邊界內的不同 Git 根目錄數決定，不能以 `scope` 參數覆寫。`scope`／`target` 是內部紀錄，固定為自動辨識的 `repo`／`group` 及 `branch`。
 
 其他欄位：`workspace_roots`、`extension_reason`、`review_basis=codex-native`、`repositories`、`required_coverage`、`changed_contracts`、`searches`、`context_gaps`。所選儲存庫記錄兩個分支的固定版本、差異、合併父提交與合併預覽；其他儲存庫只擷取自身 HEAD。
 
 ~~~powershell
-python "<skill-dir>/scripts/review_workspace.py" inventory --context-dir "<context>"
+python "<skill-dir>/scripts/review_workspace.py" inventory --context-dir "<context>" --repo repo-000
 python "<skill-dir>/scripts/review_workspace.py" read --context-dir "<context>" --repo repo-000 --source head --path src/orders.py
 python "<skill-dir>/scripts/review_workspace.py" search --context-dir "<context>" --repo repo-000 --query orderId
 ~~~
 
-`inventory` 提供 ID、來源及路徑／檔案內容物件（blob）清單；`read` 提供參照（ref）、SHA-256 及逐行內容。完整差異的位置列於各儲存庫的 `patches`。閱讀所選儲存庫的差異、基礎內容、必要合併父提交差異與合併預覽，完成語意審查。
+`inventory` 提供 ID、來源及路徑／檔案內容物件（blob）清單；保留已取得的索引，需要定位檔案時才查對應 Repo，避免重讀完整清單。`read` 提供參照（ref）、SHA-256 及逐行內容。完整差異的位置列於各儲存庫的 `patches`。閱讀所選儲存庫的差異、基礎內容、必要合併父提交差異與合併預覽，完成語意審查。
+
+### 批次固定讀取與搜尋
+
+將已知且互不相依的操作寫入本次 owned context 內的 UTF-8 JSON 陣列，依陣列順序處理。`batch-read` 每項使用 `repo`、`path` 及選填 `source`；省略來源沿用該 Repo 的固定主來源。例如 `<context>/reads.json`：
+
+~~~json
+[
+  {"repo": "repo-000", "source": "head", "path": "src/orders.py"},
+  {"repo": "repo-000", "source": "merge-base", "path": "src/orders.py"}
+]
+~~~
+
+~~~powershell
+python "<skill-dir>/scripts/review_workspace.py" batch-read --context-dir "<context>" --requests-file "<context>/reads.json"
+~~~
+
+回傳 `{"reads": [...]}`，各項保留原本 `read` 的結果格式。請求中的 ID、來源與路徑換成實際固定資料；僅在來源確實有該路徑時列入。
+
+`batch-search` 每項使用 `query`，可選 `contract`、`repo`（Repo ID 陣列）及 `source`，其語意與單次 `search` 相同。例如已註冊 C-001 後的 `<context>/searches.json`：
+
+~~~json
+[
+  {"query": "totalCents", "contract": "C-001", "repo": ["repo-000", "repo-001"]},
+  {"query": "orderId", "contract": "C-001", "repo": ["repo-000", "repo-001"]}
+]
+~~~
+
+~~~powershell
+python "<skill-dir>/scripts/review_workspace.py" batch-search --context-dir "<context>" --requests-file "<context>/searches.json"
+~~~
+
+範例搜尋詞必須換成該契約已註冊的相關詞；停用延伸時可省略 `contract`。回傳 `{"searches": [...]}`，依查詢及 Repo 順序平展原本的搜尋紀錄。每個查詢完成即保存 manifest，搜尋 ID 按原有順序遞增。
+
+同一 context 的搜尋及契約註冊只用單一寫入者，避免同時執行會修改 manifest 的命令。先註冊本輪所需契約及其父契約，再批次搜尋；閱讀命中內容後，將新發現的延伸契約另行註冊並進入下一輪。批次只合併工具往返，逐檔覆蓋、搜尋證據與直接／間接消費端追查要求不變。
 
 ## 單一儲存庫最小結果
 

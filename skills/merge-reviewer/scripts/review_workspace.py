@@ -102,6 +102,60 @@ def fixed_bytes(context: Path, repo: dict, name: str, path: str, api) -> bytes:
     return data
 
 
+class FixedSourceCache:
+    """Verified fixed content shared only within one report validation.
+
+    Metadata and safe paths are checked on every lookup. Changing a source,
+    entry, repository, or object location therefore cannot reuse older bytes.
+    """
+
+    def __init__(self, context: Path, api):
+        self.context = Path(context).resolve()
+        self.api = api
+        self._content = {}
+        self._patches = {}
+
+    def _source_key(self, repo, name, path):
+        safe_path(self.context, path)
+        source = repo.get("sources", {}).get(name)
+        require(source is not None, f"unknown fixed source: {repo['id']}/{name}")
+        storage = source.get("objects")
+        if storage:
+            objects = safe_path(self.context, storage)
+            require(objects.is_dir(), "fixed object storage is missing")
+            storage = str(objects.resolve())
+        inherited_objects = tuple(os.environ.get(key) for key in (
+            "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_DIR", "GIT_COMMON_DIR"))
+        return (str(self.context), repo["id"], str(Path(repo["path"]).resolve()),
+                name, source["ref"], source["tree_sha"], storage, inherited_objects, path), source
+
+    def read(self, repo: dict, source_name: str, path: str) -> bytes:
+        key, source = self._source_key(repo, source_name, path)
+        matches = [f for f in source["files"] if f["path"] == path]
+        require(len(matches) == 1 and matches[0]["kind"] == "blob", "path is not a fixed blob")
+        entry = matches[0]
+        # Manifest values may be malformed JSON arrays/objects. Keep them in
+        # the identity without bypassing the original content/tree validation.
+        key = json.dumps(("read", key, entry["blob_sha"], entry.get("mode"), entry["kind"]),
+                         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if key not in self._content:
+            self._content[key] = fixed_bytes(self.context, repo, source_name, path, self.api)
+        return self._content[key]
+
+    def changed_patch(self, repo: dict, comparison_source_name: str, baseline: str, path: str) -> str:
+        key, source = self._source_key(repo, comparison_source_name, path)
+        entries = tuple((entry["blob_sha"], entry.get("mode"), entry["kind"])
+                        for entry in source["files"] if entry["path"] == path)
+        key = json.dumps(("changed-patch", key, entries, baseline, tuple(self.api.DIFF_FLAGS)),
+                         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if key not in self._patches:
+            self._patches[key] = str(self.api.run_git(
+                Path(repo["path"]), ["diff", *self.api.DIFF_FLAGS, "--no-renames", "--unified=0",
+                                    baseline, source["ref"], "--", path],
+                env=source_environment(self.context, repo, source, self.api)))
+        return self._patches[key]
+
+
 def add_source(context: Path, repo: dict, name: str, reference: str, api, *, env=None):
     path = Path(repo["path"])
     env = env or {}
@@ -155,8 +209,8 @@ def branch_snapshot(context: Path, repo: dict, args, api):
 def validate_root(path: Path, api) -> Path:
     require(not is_link(path), f"linked Repo root: {path}")
     resolved = path.resolve(strict=True)
-    require(str(api.run_git(resolved, ["rev-parse", "--show-toplevel"])).strip()
-            and Path(str(api.run_git(resolved, ["rev-parse", "--show-toplevel"])).strip()).resolve() == resolved,
+    git_root = str(api.run_git(resolved, ["rev-parse", "--show-toplevel"])).strip()
+    require(git_root and Path(git_root).resolve() == resolved,
             "Repo path must be its Git root")
     return resolved
 
@@ -242,7 +296,7 @@ def contract_rows(manifest):
     return {c["id"]: c for c in values}
 
 
-def validate_contract(context, manifest, item, api):
+def validate_contract(context, manifest, item, api, *, cache=None):
     """Anchor reviewer-selected contracts before searching their names or aliases."""
     require(manifest.get("schema") == CONTEXT, "contract registration needs context v3")
     require(manifest.get("extension_enabled") is True, "contract registration applies only to multi-Repo extension")
@@ -263,7 +317,7 @@ def validate_contract(context, manifest, item, api):
     repo = repository(manifest, evidence.get("repo"))
     source, path = evidence.get("source"), evidence.get("path")
     require(source in repo["sources"] and evidence.get("ref") == repo["sources"][source]["ref"], "contract source identity differs")
-    raw = fixed_bytes(context, repo, source, path, api)
+    raw = cache.read(repo, source, path) if cache is not None else fixed_bytes(context, repo, source, path, api)
     lines = raw.decode("utf-8", errors="strict").splitlines()
     start, end = evidence.get("line_start"), evidence.get("line_end")
     require(type(start) is int and type(end) is int and 1 <= start <= end <= len(lines), "invalid contract line interval")
@@ -276,9 +330,10 @@ def validate_contract(context, manifest, item, api):
                 source in allowed_sources(repo, key), "initial contract anchor must cover its changed root")
         comparison = repo["sources"][root["source"]]
         baseline = repo["sources"]["head"]["ref"] if root["source"] == "merge-preview" else repo["diff_base"]
-        patch = str(api.run_git(Path(repo["path"]), ["diff", *api.DIFF_FLAGS, "--no-renames", "--unified=0",
-                            baseline, comparison["ref"], "--", path],
-                            env=source_environment(context, repo, comparison, api)))
+        patch = (cache.changed_patch(repo, root["source"], baseline, path) if cache is not None else
+                 str(api.run_git(Path(repo["path"]), ["diff", *api.DIFF_FLAGS, "--no-renames", "--unified=0",
+                             baseline, comparison["ref"], "--", path],
+                             env=source_environment(context, repo, comparison, api))))
         hunks = re.findall(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", patch, re.MULTILINE)
         if hunks:
             side = 2 if source == root["source"] else 0
@@ -300,7 +355,9 @@ def validate_contract(context, manifest, item, api):
         alias_source = alias.get("source")
         require(alias_source in alias_repo["sources"] and alias.get("ref") == alias_repo["sources"][alias_source]["ref"],
                 "alias source identity differs")
-        alias_lines = fixed_bytes(context, alias_repo, alias_source, alias.get("path"), api).decode("utf-8").splitlines()
+        alias_raw = (cache.read(alias_repo, alias_source, alias.get("path")) if cache is not None else
+                     fixed_bytes(context, alias_repo, alias_source, alias.get("path"), api))
+        alias_lines = alias_raw.decode("utf-8").splitlines()
         first, last = alias.get("line_start"), alias.get("line_end")
         require(type(first) is int and type(last) is int and 1 <= first <= last <= len(alias_lines) and
                 term["query"] in "\n".join(alias_lines[first-1:last]), "alternate query must occur in frozen alias evidence")
@@ -350,12 +407,53 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
     return {"searches": results}
 
 
+def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_name=None) -> dict:
+    require(isinstance(repo_id, str) and bool(repo_id) and path, "read needs one --repo and --path")
+    repo = repository(manifest, repo_id)
+    name = source_name or repo["review_source"]
+    content = fixed_bytes(context, repo, name, path, api)
+    require(b"\0" not in content, "binary blob; record a coverage limitation")
+    return {"repo": repo["id"], "source": name, "ref": repo["sources"][name]["ref"], "path": path,
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "lines": [{"line": i, "text": s} for i, s in enumerate(
+                content.decode("utf-8", errors="replace").splitlines(), 1)]}
+
+
+def batch_read(context: Path, manifest: dict, requests: list[dict], api) -> dict:
+    require(isinstance(requests, list), "batch requests must be an array")
+    results = []
+    for request in requests:
+        require(isinstance(request, dict), "batch request must be an object")
+        require(set(request) <= {"repo", "source", "path"}, "unknown batch-read request argument")
+        require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
+        results.append(read(context, manifest, request.get("repo"), request.get("path"), api, request.get("source")))
+    return {"reads": results}
+
+
+def batch_search(context: Path, manifest: dict, requests: list[dict], api) -> dict:
+    require(isinstance(requests, list), "batch requests must be an array")
+    results = []
+    for request in requests:
+        require(isinstance(request, dict), "batch request must be an object")
+        require(set(request) <= {"repo", "source", "query", "contract"}, "unknown batch-search request argument")
+        repos = request.get("repo")
+        require(repos is None or isinstance(repos, list) and all(isinstance(r, str) for r in repos),
+                "search repo must be an array of Repo IDs")
+        require(request.get("query") is None or isinstance(request["query"], str), "search query must be text")
+        require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
+        require(request.get("contract") is None or isinstance(request["contract"], str), "contract must be text")
+        value = search(context, manifest, request.get("query"), repos, api,
+                       request.get("source"), request.get("contract"))
+        results.extend(value["searches"])
+    return {"searches": results}
+
+
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("read", "search", "inventory", "register-contract"))
+    parser.add_argument("command", choices=("read", "search", "batch-read", "batch-search", "inventory", "register-contract"))
     parser.add_argument("--context-dir", type=Path, required=True)
     parser.add_argument("--repo", action="append")
     parser.add_argument("--source")
@@ -363,6 +461,7 @@ def main(argv=None):
     parser.add_argument("--query")
     parser.add_argument("--contract", help="Previously registered changed/propagated contract ID")
     parser.add_argument("--contract-file", type=Path, help="One fixed-anchor contract JSON object")
+    parser.add_argument("--requests-file", type=Path, help="Ordered JSON array for batch-read or batch-search")
     parser.add_argument("--git-timeout", type=float, default=180.0)
     args = parser.parse_args(argv)
     import git_review_context as api
@@ -370,20 +469,19 @@ def main(argv=None):
     token = api.GIT_TIMEOUT_SECONDS.set(api.positive_timeout(str(args.git_timeout)))
     try:
         manifest = load(context)
-        if args.command == "search":
+        if args.command in ("batch-read", "batch-search"):
+            require(args.requests_file, f"{args.command} needs --requests-file")
+            requests = json.loads(args.requests_file.read_text(encoding="utf-8"))
+            operation = batch_read if args.command == "batch-read" else batch_search
+            value = operation(context, manifest, requests, api)
+        elif args.command == "search":
             value = search(context, manifest, args.query, args.repo, api, args.source, args.contract)
         elif args.command == "register-contract":
             require(args.contract_file, "register-contract needs --contract-file")
             value = register_contract(context, manifest, json.loads(args.contract_file.read_text(encoding="utf-8")), api)
         elif args.command == "read":
             require(args.repo and len(args.repo) == 1 and args.path, "read needs one --repo and --path")
-            repo = repository(manifest, args.repo[0])
-            name = args.source or repo["review_source"]
-            content = fixed_bytes(context, repo, name, args.path, api)
-            require(b"\0" not in content, "binary blob; record a coverage limitation")
-            value = {"repo": repo["id"], "source": name, "ref": repo["sources"][name]["ref"], "path": args.path,
-                     "sha256": hashlib.sha256(content).hexdigest(),
-                     "lines": [{"line": i, "text": s} for i, s in enumerate(content.decode("utf-8", errors="replace").splitlines(), 1)]}
+            value = read(context, manifest, args.repo[0], args.path, api, args.source)
         else:
             value = {"repositories": [{"repo": r["id"], "name": r["name"], "path": r["path"], "role": r["role"],
                        "sources": {k: {"ref": v["ref"], "files": v["files"]} for k, v in r["sources"].items()}}
