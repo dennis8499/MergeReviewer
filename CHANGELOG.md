@@ -1,5 +1,12 @@
 # Change log
 
+## 0.13.0 — 2026-10-16
+
+- Add compact capture summaries, ordered batch reads/searches and operation-scoped verification caches while retaining complete fixed evidence and v3 validation.
+- Render each finding as problem, trigger, expected result, actual result, fixed line evidence and recommended change. Preserve complete refs in citations and omit the technical appendix.
+- Require explicit line ranges for non-empty finding evidence; retain empty-file evidence and incomplete-review behavior.
+- Package the native Skill for GitlabWorkSpace 0.24.4; retain the three branch-review inputs.
+
 ## 0.12.2 — 2026-10-15
 
 - Apply the shared Concise style from the start of each task to progress messages, answers and newly created or updated documents; preserve full evidence, errors and requested explanations.
