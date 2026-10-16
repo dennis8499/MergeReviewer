@@ -175,6 +175,153 @@ class BatchReviewTests(ReviewFixture):
                 workspace.batch_read(context, manifest, requests, api)
         self.assertEqual(2, read.call_count)
 
+    def test_batch_read_reuses_verified_content_only_within_the_batch(self):
+        context, manifest = self.capture()
+        request = {"repo": manifest["selected_repo"], "path": "app.py"}
+        with mock.patch.object(api, "run_git", wraps=api.run_git) as calls:
+            first = workspace.batch_read(context, manifest, [request, request], api)
+            self.assertEqual(2, calls.call_count)
+            self.assertEqual(first["reads"][0], first["reads"][1])
+            self.assertEqual(first, workspace.batch_read(context, manifest, [request, request], api))
+            self.assertEqual(4, calls.call_count)
+        self.assertEqual(manifest, workspace.load(context))
+
+    def test_cached_batch_read_rechecks_changed_metadata_before_next_request(self):
+        context, manifest = self.capture()
+        repo = workspace.repository(manifest, manifest["selected_repo"])
+        request = {"repo": repo["id"], "path": "app.py"}
+        original = workspace.read
+
+        def read_then_change(*args, **kwargs):
+            result = original(*args, **kwargs)
+            repo["sources"]["head"]["files"][0]["blob_sha"] = "0" * 40
+            return result
+
+        with mock.patch.object(workspace, "read", side_effect=read_then_change) as reads:
+            with self.assertRaisesRegex(ValueError, "blob identity mismatch"):
+                workspace.batch_read(context, manifest, [request, request, request], api)
+        self.assertEqual(2, reads.call_count)
+
+    def contract_batch(self, context, manifest):
+        self.draft(context, manifest)
+        first = copy.deepcopy(manifest["changed_contracts"][0])
+        first.pop("anchor_sha256")
+        first["extra_metadata"] = {"preserved": True}
+        second = {**copy.deepcopy(first), "id": "C-second", "parent_ids": [first["id"]]}
+        manifest["changed_contracts"] = []
+        manifest["searches"] = []
+        workspace.save(context, manifest)
+        return [first, second]
+
+    def test_batch_register_contract_matches_single_registration_and_each_checkpoint(self):
+        self.make_repo("consumer")
+        context, manifest = self.capture()
+        requests = self.contract_batch(context, manifest)
+        before = copy.deepcopy(manifest)
+        expected = [workspace.register_contract(context, manifest, item, api) for item in requests]
+        expected_manifest = copy.deepcopy(manifest)
+        workspace.save(context, before)
+        result = self.command(context, "batch-register-contract", requests)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({"contracts": expected}, json.loads(result.stdout))
+        self.assertEqual(expected_manifest, workspace.load(context))
+        self.assertTrue(expected[0]["extra_metadata"]["preserved"])
+        with mock.patch.object(workspace, "save", wraps=workspace.save) as saves:
+            self.assertEqual({"contracts": expected}, workspace.batch_register_contract(context, before, requests, api))
+        self.assertEqual(len(requests), saves.call_count)
+
+    def test_batch_register_failure_keeps_prior_contract_and_stops_before_later_items(self):
+        self.make_repo("consumer")
+        context, manifest = self.capture()
+        first, second = self.contract_batch(context, manifest)
+        invalid = {**second, "parent_ids": ["C-missing"]}
+        result = self.command(context, "batch-register-contract", [first, invalid, second])
+        self.assertEqual(2, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn("parent contracts must already be registered", result.stderr)
+        persisted = workspace.load(context)
+        self.assertEqual([first["id"]], [row["id"] for row in persisted["changed_contracts"]])
+        self.assertEqual({"contracts": []}, json.loads(
+            self.command(context, "batch-register-contract", []).stdout))
+        for requests in ({}, [None], [second]):
+            failure = self.command(context, "batch-register-contract", requests)
+            self.assertEqual(2 if requests != [second] else 0, failure.returncode, failure.stderr)
+
+    def test_batch_search_reuses_same_query_across_contracts_but_keeps_each_record(self):
+        self.make_repo("consumer")
+        context, manifest = self.capture()
+        contracts = self.contract_batch(context, manifest)
+        workspace.batch_register_contract(context, manifest, contracts, api)
+        requests = [{"query": contracts[0]["symbol"], "contract": item["id"]} for item in contracts]
+        before = copy.deepcopy(manifest)
+        expected = []
+        for request in requests:
+            expected.extend(workspace.search(context, manifest, request["query"], None, api,
+                                              contract_id=request["contract"])["searches"])
+        workspace.save(context, before)
+        with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls, \
+                mock.patch.object(workspace, "save", wraps=workspace.save) as saves:
+            actual = workspace.batch_search(context, before, requests, api)
+        self.assertEqual({"searches": expected}, actual)
+        self.assertEqual(len(before["repositories"]), calls.call_count)
+        self.assertEqual(len(requests), saves.call_count)
+        self.assertEqual(["S-0001", "S-0002", "S-0003", "S-0004"],
+                         [row["id"] for row in actual["searches"]])
+        with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
+            workspace.batch_search(context, before, requests, api)
+        self.assertEqual(len(before["repositories"]), calls.call_count)
+
+    def test_batch_search_checks_contract_even_when_the_query_is_cached(self):
+        self.make_repo("consumer")
+        context, manifest = self.capture()
+        contract = self.contract_batch(context, manifest)[0]
+        workspace.register_contract(context, manifest, contract, api)
+        requests = [{"query": contract["symbol"], "contract": contract["id"]},
+                    {"query": contract["symbol"], "contract": "C-missing"}]
+        with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
+            with self.assertRaisesRegex(ValueError, "registered --contract"):
+                workspace.batch_search(context, manifest, requests, api)
+        self.assertEqual(len(manifest["repositories"]), calls.call_count)
+        self.assertEqual(len(manifest["repositories"]), len(workspace.load(context)["searches"]))
+
+    def test_batch_search_does_not_cache_failures_or_live_backed_sources(self):
+        context, manifest = self.capture()
+        requests = [{"query": "contract"}, {"query": "contract"}]
+        original = api.run_git_capture
+        attempted = []
+
+        def fail_first(*args, **kwargs):
+            attempted.append(True)
+            return (128, "", "transient error") if len(attempted) == 1 else original(*args, **kwargs)
+
+        with mock.patch.object(api, "run_git_capture", side_effect=fail_first):
+            result = workspace.batch_search(context, manifest, requests, api)
+        self.assertEqual(2, len(attempted))
+        self.assertEqual(["unresolved", "complete"], [row["status"] for row in result["searches"]])
+        repo = workspace.repository(manifest, manifest["selected_repo"])
+        repo.pop("snapshot")
+        for source in repo["sources"].values():
+            source["objects"] = None
+        cache = workspace.FixedSearchCache(context, api)
+        with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
+            self.assertEqual(cache.run(repo, "head", "contract"), cache.run(repo, "head", "contract"))
+        self.assertEqual(2, calls.call_count)
+
+    def test_search_cache_rechecks_owned_storage_and_isolates_source_and_query(self):
+        context, manifest = self.capture()
+        repo = workspace.repository(manifest, manifest["selected_repo"])
+        cache = workspace.FixedSearchCache(context, api)
+        with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
+            first = cache.run(repo, "head", "contract")
+            self.assertEqual(first, cache.run(repo, "head", "contract"))
+            cache.run(repo, "base", "contract")
+            cache.run(repo, "head", "no-match")
+            self.assertEqual(3, calls.call_count)
+            repo["sources"]["head"]["objects"] = "missing"
+            with self.assertRaisesRegex(ValueError, "outside its frozen"):
+                cache.run(repo, "head", "contract")
+            self.assertEqual(3, calls.call_count)
+
 
 class FixedSourceCacheTests(ReviewFixture):
     def setUp(self):
@@ -197,6 +344,16 @@ class FixedSourceCacheTests(ReviewFixture):
             cache.read(repo, "head", "../app.py")
         repo["sources"]["head"]["files"].append(copy.deepcopy(repo["sources"]["head"]["files"][0]))
         with self.assertRaisesRegex(ValueError, "fixed blob"):
+            cache.read(repo, "head", "app.py")
+
+    def test_read_cache_hit_still_rejects_borrowed_owned_object_storage(self):
+        context, manifest = self.capture()
+        repo = workspace.repository(manifest, manifest["selected_repo"])
+        cache = workspace.FixedSourceCache(context, api)
+        cache.read(repo, "head", "app.py")
+        alternate = workspace.evidence_repository(context, repo) / "objects/info/alternates"
+        alternate.write_text(str(self.repo / ".git/objects"), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "cannot borrow"):
             cache.read(repo, "head", "app.py")
 
     def test_cache_distinguishes_inherited_git_object_environment(self):

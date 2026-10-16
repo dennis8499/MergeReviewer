@@ -44,7 +44,7 @@ python "<skill-dir>/scripts/review_workspace.py" instructions --context-dir "<co
 python "<skill-dir>/scripts/review_workspace.py" batch-read --context-dir "<context>" --requests-file "<context>/reads.json"
 ~~~
 
-回傳 `{"reads": [...]}`，各項保留原本 `read` 的結果格式。請求中的 ID、來源與路徑換成實際固定資料；僅在來源確實有該路徑時列入。
+回傳 `{"reads": [...]}`，各項保留原本 `read` 的結果格式。請求中的 ID、來源與路徑換成實際固定資料；僅在來源確實有該路徑時列入。同一批重複讀取共用已驗證內容，每項仍檢查來源、檔案身分與路徑；下一次命令重新取得證據。
 
 `batch-search` 每項使用 `query`，可選 `contract`、`repo`（Repo ID 陣列）及 `source`，其語意與單次 `search` 相同。例如已註冊 C-001 後的 `<context>/searches.json`：
 
@@ -59,9 +59,19 @@ python "<skill-dir>/scripts/review_workspace.py" batch-read --context-dir "<cont
 python "<skill-dir>/scripts/review_workspace.py" batch-search --context-dir "<context>" --requests-file "<context>/searches.json"
 ~~~
 
-範例搜尋詞必須換成該契約已註冊的相關詞；停用延伸時可省略 `contract`。回傳 `{"searches": [...]}`，依查詢及 Repo 順序平展原本的搜尋紀錄。每個查詢完成即保存 manifest，搜尋 ID 按原有順序遞增。
+範例搜尋詞必須換成該契約已註冊的相關詞；停用延伸時可省略 `contract`。回傳 `{"searches": [...]}`，依查詢及 Repo 順序平展原本的搜尋紀錄。每個查詢完成即保存 manifest，搜尋 ID 按原有順序遞增。相同固定來源與搜尋詞在單批內可共用成功結果，每筆契約綁定、紀錄及 checkpoint 照常建立；失敗的搜尋不共用，發布仍重新驗證固定搜尋。
 
 同一 context 的搜尋及契約註冊只用單一寫入者，避免同時執行會修改 manifest 的命令。先註冊本輪所需契約及其父契約，再批次搜尋；閱讀命中內容後，將新發現的延伸契約另行註冊並進入下一輪。批次只合併工具往返，逐檔覆蓋、搜尋證據與直接／間接消費端追查要求不變。
+
+### 批次契約註冊
+
+同輪已知契約可放在 UTF-8 JSON 陣列，例如 `<context>/contracts.json`；各項沿用下方「多儲存庫延伸」的契約物件，父契約必須先於子契約。執行：
+
+~~~powershell
+python "<skill-dir>/scripts/review_workspace.py" batch-register-contract --context-dir "<context>" --requests-file "<context>/contracts.json"
+~~~
+
+成功回傳 `{"contracts": [...]}`，每項與逐筆 `register-contract` 的結果相同，含固定 anchor hash。每個契約驗證成功即保存 manifest；首項錯誤停止後續項目，先前成功紀錄保留。批次命令失敗時 exit code 為 2、錯誤寫入 stderr、stdout 為空；空陣列成功回傳對應的空結果陣列。後續追查才發現的契約留到下一輪註冊。
 
 ## 單一儲存庫最小結果
 
@@ -150,4 +160,6 @@ python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result
 
 Markdown 呈現 `extension_status=disabled|complete|incomplete`、`review_status`、`priority_counts` 對應的結論、問題及限制，不輸出技術附錄。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約仍完整驗證；省略顯示不改變完成程度或問題數量。發布器標準輸出只回傳完整報告路徑。
 
-發布前核對快照的 owned 儲存、固定物件身分、指示、證據、覆蓋及固定搜尋。新的固定快照不再比較目前雲端／本機 refs、工作區宣告與 Repo 清單；owned 物件缺失或損壞不能回退到原 Repo。完整 Markdown 先寫入暫存，再原子發布到報告檔案；同名時遞增時間戳，不覆寫既有內容。成功、驗證失敗及寫入失敗均清理本次工作階段建立並由工具識別的證據目錄；提前中止用 `review_session.py cleanup`。
+發布前核對快照的 owned 儲存、固定物件身分、指示、證據、覆蓋及固定搜尋。新的固定快照不再比較目前雲端／本機 refs、工作區宣告與 Repo 清單；owned 物件缺失或損壞不能回退到原 Repo。完整 Markdown 先寫入暫存，再原子發布到報告檔案；同名時遞增時間戳，不覆寫既有內容。預設成功、驗證失敗及寫入失敗均清理本次工作階段建立並由工具識別的證據目錄。
+
+需要修正草稿後重試時，在發布命令加 `--retain-on-validation-error`：成功仍 exit 0、輸出報告路徑並清理；可修正的草稿錯誤 exit 3，stderr 回傳含 `context_dir`、`context_retained: true` 與 `error` 的 JSON，不發布報告，修正草稿後沿用該 context 重試。固定來源、快照、hash、指示、搜尋紀錄損毀及 I/O 錯誤仍清理並依原錯誤處理；中斷也不保留。舊命令不加旗標時維持原本 exit 2 與清理行為。放棄重試或提前中止時用 `review_session.py cleanup`。

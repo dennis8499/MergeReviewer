@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import tempfile
 
-from review_workspace import (CONTEXT, RESULT, FixedSourceCache,
+from review_workspace import (CONTEXT, RESULT, FixedSourceCache, FixedSearchCache,
                               SNAPSHOT_POLICY, evidence_repository, instructions,
                               repository, required_coverage, require, safe_path, source_environment,
                               validate_contract)
@@ -17,6 +17,15 @@ from review_workspace import (CONTEXT, RESULT, FixedSourceCache,
 PRIORITIES = ("P0", "P1", "P2", "P3")
 OWNERS = {"開發", "維運設定", "QA"}
 SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+
+
+class DraftValidationError(ValueError):
+    """A repairable authoring error, never a failure of captured evidence."""
+
+
+def draft_require(condition, message):
+    if not condition:
+        raise DraftValidationError(message)
 
 
 def location(item):
@@ -46,9 +55,113 @@ def validate(draft: dict, manifest: dict, context: Path, *, timeout=180.0) -> di
         api.GIT_TIMEOUT_SECONDS.reset(token)
 
 
+def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
+    """Before retaining a broken draft, independently reject damaged evidence.
+
+    This guard runs only on the opt-in retry error path. It never marks coverage
+    reviewed or replaces the full validation required by the next publication.
+    """
+    import git_review_context as api
+    from review_session import validate_session
+    context = validate_session(context)
+    token = api.GIT_TIMEOUT_SECONDS.set(api.positive_timeout(str(timeout)))
+    try:
+        require(manifest.get("schema") == CONTEXT, "workspace context v3 is required")
+        require(manifest.get("target") == "branch" and manifest.get("review_basis") == "codex-native",
+                "only Codex-native branch reviews are supported")
+        repos = {repo["id"]: repo for repo in manifest["repositories"]}
+        require(len(repos) == len(manifest["repositories"]), "duplicate Repo IDs")
+        require(len({repo["path"] for repo in repos.values()}) == len(repos), "duplicate canonical Repo paths")
+        enabled = manifest.get("extension_enabled")
+        require(type(enabled) is bool and enabled == (len(repos) > 1), "extension must match the captured Repo count")
+        require(manifest.get("scope") == ("group" if enabled else "repo"), "scope differs from detected environment")
+        selected = manifest.get("selected_repo")
+        require(selected in repos and manifest.get("seed_repos") == [selected], "exactly one selected Repo is required")
+        require(repos[selected].get("state") == "captured", "selected Repo snapshot was not captured")
+        require(all(repo.get("role") == ("seed" if repo["id"] == selected else "candidate")
+                    for repo in repos.values()), "Repo roles differ from the single selected Repo")
+        require(manifest.get("required_coverage") == required_coverage(manifest), "changed-path contract differs from captured changes")
+        frozen = manifest.get("snapshot_policy") is not None
+        if frozen:
+            require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
+            require(isinstance(manifest.get("capture_completed_at"), str), "snapshot completion time is required")
+        for repo in repos.values():
+            require(repo.get("state") in ("captured", "error"), "invalid captured Repo state")
+            if repo["state"] == "error":
+                require(repo.get("sources") == {} and repo.get("instructions") == [] and
+                        repo.get("snapshot") is None, "failed candidate exposes partial frozen evidence")
+                continue
+            if frozen:
+                require(repo.get("snapshot") is not None, "frozen context needs an owned snapshot for every captured Repo")
+            git_repo = evidence_repository(context, repo)
+            verified_trees, objects = {}, set()
+            for source in repo["sources"].values():
+                environment = source_environment(context, repo, source, api)
+                actual = str(api.run_git(git_repo, ["rev-parse", f"{source['ref']}^{{tree}}"], env=environment)).strip()
+                require(actual == source["tree_sha"], "fixed tree identity mismatch")
+                if actual not in verified_trees:
+                    raw = api.run_git(git_repo, ["ls-tree", "-r", "-t", "-z", actual], binary=True, env=environment)
+                    entries = []
+                    for item in raw.split(b"\0"):
+                        if not item:
+                            continue
+                        metadata, name = item.split(b"\t", 1)
+                        mode, kind, object_id = metadata.decode("ascii").split()
+                        if kind in ("tree", "blob"):
+                            objects.add(object_id)
+                        if kind != "tree":
+                            entries.append({"path": name.decode("utf-8", errors="strict"),
+                                            "mode": mode, "kind": kind, "blob_sha": object_id})
+                    verified_trees[actual] = entries
+                require(verified_trees[actual] == source["files"], "frozen snapshot inventory differs")
+                objects.update((source["ref"], actual))
+            if frozen:
+                require(repo["sources"], "captured Repo has no frozen sources")
+                environment = source_environment(context, repo, next(iter(repo["sources"].values())), api)
+                checked = str(api.run_git(git_repo, ["cat-file", "--batch-check"], env=environment,
+                                          input_bytes=("\n".join(sorted(objects)) + "\n").encode("ascii")))
+                require(len(checked.splitlines()) == len(objects) and
+                        all(len(line.split()) == 3 for line in checked.splitlines()),
+                        "frozen snapshot object closure is incomplete")
+                for index in sorted((git_repo / "objects/pack").glob("*.idx")):
+                    api.run_git(git_repo, ["verify-pack", str(index)], env=environment)
+                instructions(context, manifest, repo["id"], None, api)
+        source_cache = FixedSourceCache(context, api)
+        prefix = {**manifest, "changed_contracts": []}
+        contracts = {}
+        for contract in manifest.get("changed_contracts", []):
+            checked = validate_contract(context, prefix, contract, api, cache=source_cache)
+            require(checked == contract, "registered contract anchor bytes changed")
+            prefix["changed_contracts"].append(contract)
+            contracts[contract["id"]] = contract
+        searches = {row["id"]: row for row in manifest["searches"]}
+        require(len(searches) == len(manifest["searches"]), "duplicate search IDs")
+        replay = FixedSearchCache(context, api)
+        for row in searches.values():
+            require(row.get("repo") in repos and row.get("status") in ("complete", "unresolved"), "invalid search record")
+            if row["status"] != "complete":
+                continue
+            source = repos[row["repo"]]["sources"].get(row.get("source"))
+            require(source and row.get("ref") == source["ref"], "search version differs from the selected snapshot")
+            contract_id = row.get("contract_id")
+            if enabled or contract_id is not None:
+                require(contract_id in contracts and row.get("query") in
+                        {term["query"] for term in contracts[contract_id]["search_terms"]},
+                        "search is not bound to a relevant changed contract")
+            code, output, error = replay.run(repos[row["repo"]], row["source"], row["query"])
+            require(code in (0, 1) and output == row.get("output") and output.splitlines() == row.get("matches"),
+                    "fixed search ledger differs from captured objects: " + error)
+    except (api.ReviewContextError, KeyError, TypeError, AttributeError) as exc:
+        # This guard is only the new retry path; retain legacy CLI failures in
+        # the normal validation path while reporting a fatal retry as exit 2.
+        raise ValueError(str(exc)) from exc
+    finally:
+        api.GIT_TIMEOUT_SECONDS.reset(token)
+
+
 def _validate(draft, manifest, context, api):
     require(isinstance(manifest, dict) and manifest.get("schema") == CONTEXT, "workspace context v3 is required")
-    require(isinstance(draft, dict) and draft.get("schema") == RESULT, "workspace result v3 is required")
+    draft_require(isinstance(draft, dict) and draft.get("schema") == RESULT, "workspace result v3 is required")
     require(manifest.get("target") == "branch" and manifest.get("review_basis") == "codex-native",
             "only Codex-native branch reviews are supported")
     enabled = manifest.get("extension_enabled")
@@ -67,16 +180,16 @@ def _validate(draft, manifest, context, api):
                  "repository_coverage": draft.get("repository_coverage", [
                      {"repo": selected, "status": "seed", "reason": "使用者選定的唯一受審 Repo。", "search_ids": []}
                  ])}
-    require(isinstance(draft.get("summary"), str) and draft["summary"].strip(), "summary is required")
+    draft_require(isinstance(draft.get("summary"), str) and draft["summary"].strip(), "summary is required")
     draft = {**draft, "pending_confirmations": draft.get("pending_confirmations", [])}
     for field in ("coverage", "impact_coverage", "repository_coverage", "findings", "limitations",
                   "next_steps", "tests_executed", "tests_not_executed", "pending_confirmations"):
-        require(isinstance(draft.get(field), list), f"{field} must be an array")
+        draft_require(isinstance(draft.get(field), list), f"{field} must be an array")
     for field in ("limitations", "tests_executed", "tests_not_executed"):
-        require(all(isinstance(s, str) for s in draft[field]), f"{field} must contain text")
-    require(len(draft["next_steps"]) <= 3, "next_steps allows up to 3 actions")
+        draft_require(all(isinstance(s, str) for s in draft[field]), f"{field} must contain text")
+    draft_require(len(draft["next_steps"]) <= 3, "next_steps allows up to 3 actions")
     for step in draft["next_steps"]:
-        require(isinstance(step, dict) and step.get("owner") in OWNERS
+        draft_require(isinstance(step, dict) and step.get("owner") in OWNERS
                 and isinstance(step.get("action"), str) and step["action"].strip(), "invalid next step")
     repos = {r["id"]: r for r in manifest["repositories"]}
     require(len(repos) == len(manifest["repositories"]), "duplicate Repo IDs")
@@ -104,13 +217,13 @@ def _validate(draft, manifest, context, api):
     verified = set()
 
     def evidence(e):
-        require(isinstance(e, dict) and e.get("repo") in repos, "evidence must name a captured Repo ID")
+        draft_require(isinstance(e, dict) and e.get("repo") in repos, "evidence must name a captured Repo ID")
         repo = repos[e["repo"]]
         name, path = e.get("source"), e.get("path")
-        require(name in repo["sources"], "evidence source was not captured")
+        draft_require(name in repo["sources"], "evidence source was not captured")
         safe_path(context, path)
         source = repo["sources"][name]
-        require(isinstance(e.get("ref"), str) and SHA.fullmatch(e["ref"])
+        draft_require(isinstance(e.get("ref"), str) and SHA.fullmatch(e["ref"])
                 and e["ref"] == source["ref"], "evidence ref must match its frozen version")
         version_key = (repo["id"], name)
         if version_key not in verified:
@@ -121,14 +234,14 @@ def _validate(draft, manifest, context, api):
         key = location(e)
         raw = source_cache.read(repo, name, path)
         start, end = e.get("line_start"), e.get("line_end")
-        require((start is None and end is None) or
+        draft_require((start is None and end is None) or
                 (type(start) is int and type(end) is int and 1 <= start <= end <= len(raw.splitlines())),
                 "evidence line interval is outside the frozen file")
         return key
 
     def evidence_list(row, required=True):
         values = row.get("evidence", [])
-        require(isinstance(values, list) and (bool(values) or not required), "fixed evidence is required")
+        draft_require(isinstance(values, list) and (bool(values) or not required), "fixed evidence is required")
         return [evidence(e) for e in values]
 
     nodes = {}
@@ -151,23 +264,23 @@ def _validate(draft, manifest, context, api):
         incomplete = True
         gaps.append(str(exc))
     for node in draft["impact_coverage"]:
-        require(isinstance(node, dict), "impact node must be an object")
+        draft_require(isinstance(node, dict), "impact node must be an object")
         identifier = node.get("id")
-        require(isinstance(identifier, str) and identifier and identifier not in nodes, "duplicate/empty impact ID")
-        require(node.get("repo") in repos and node.get("source") in repos[node["repo"]]["sources"],
+        draft_require(isinstance(identifier, str) and identifier and identifier not in nodes, "duplicate/empty impact ID")
+        draft_require(node.get("repo") in repos and node.get("source") in repos[node["repo"]]["sources"],
                 "impact node must name a fixed Repo/source")
-        require(isinstance(node.get("reason"), str) and node["reason"].strip(), "impact relation/disposition needs a reason")
-        require(node.get("status") in ("reviewed", "not-reviewed"), "invalid impact status")
-        require(isinstance(node.get("related_to"), list) and all(isinstance(s, str) for s in node["related_to"])
+        draft_require(isinstance(node.get("reason"), str) and node["reason"].strip(), "impact relation/disposition needs a reason")
+        draft_require(node.get("status") in ("reviewed", "not-reviewed"), "invalid impact status")
+        draft_require(isinstance(node.get("related_to"), list) and all(isinstance(s, str) for s in node["related_to"])
                 and len(set(node["related_to"])) == len(node["related_to"]), "related_to must contain unique impact IDs")
         safe_path(context, node.get("path"))
         ids = node.get("contract_ids", [])
-        require(isinstance(ids, list) and all(i in contracts for i in ids), "impact contracts must be registered")
+        draft_require(isinstance(ids, list) and all(i in contracts for i in ids), "impact contracts must be registered")
         if enabled:
-            require(ids, "Group impact nodes must identify their changed/propagated contracts")
+            draft_require(ids, "Group impact nodes must identify their changed/propagated contracts")
         keys = evidence_list(node, node["status"] == "reviewed")
         if node["status"] == "reviewed":
-            require(location(node) in keys, "impact evidence must cover its own fixed path/source")
+            draft_require(location(node) in keys, "impact evidence must cover its own fixed path/source")
         else:
             incomplete = True
             gaps.append(f"{identifier}: {node['reason']}")
@@ -175,59 +288,60 @@ def _validate(draft, manifest, context, api):
     graph = {identifier: set() for identifier in nodes}
     for identifier, node in nodes.items():
         for neighbor in node["related_to"]:
-            require(neighbor in nodes, "impact edge references an unknown node")
-            require(neighbor != identifier, "self-link is not an impact edge")
+            draft_require(neighbor in nodes, "impact edge references an unknown node")
+            draft_require(neighbor != identifier, "self-link is not an impact edge")
             graph[identifier].add(neighbor)
             graph[neighbor].add(identifier)
 
     coverage, root_nodes, reviewed_anchors = {}, set(), set()
     for row in draft["coverage"]:
-        require(isinstance(row, dict), "coverage row must be an object")
+        draft_require(isinstance(row, dict), "coverage row must be an object")
         key = location(row)
-        require(key in expected and key not in coverage, "coverage is extra, duplicated, or outside seed changes")
-        require(row.get("status") in ("reviewed", "metadata-only", "not-reviewed"), "invalid coverage status")
+        draft_require(key in expected and key not in coverage, "coverage is extra, duplicated, or outside seed changes")
+        draft_require(row.get("status") in ("reviewed", "metadata-only", "not-reviewed"), "invalid coverage status")
         keys = evidence_list(row, row["status"] == "reviewed")
         if row["status"] == "reviewed":
             changes = repos[key[0]]["changed_files"]
-            require(not any(c["source"] == key[1] and key[2] in (c["path"], c.get("old_path"))
+            draft_require(not any(c["source"] == key[1] and key[2] in (c["path"], c.get("old_path"))
                             and (c.get("binary") or "160000" in (c.get("old_mode"), c.get("new_mode")))
                             for c in changes), "binary/submodule change requires explicit incomplete coverage")
             allowed = allowed_sources(repos[key[0]], key)
             matches = [k for k in keys if k[0] == key[0] and k[2] == key[2] and k[1] in allowed]
-            require(matches, "change coverage cites the wrong version/source")
+            draft_require(matches, "change coverage cites the wrong version/source")
             if enabled:
                 ids = row.get("impact_ids")
-                require(isinstance(ids, list) and ids and all(i in nodes for i in ids), "each extended change needs impact nodes")
-                require(all(location(nodes[i]) in matches for i in ids), "change's impact roots must cover its own frozen evidence")
+                draft_require(isinstance(ids, list) and ids and all(i in nodes for i in ids), "each extended change needs impact nodes")
+                draft_require(all(location(nodes[i]) in matches for i in ids), "change's impact roots must cover its own frozen evidence")
                 root_nodes.update(ids)
             reviewed_anchors.update(matches)
             if enabled:
                 applicable = {c["id"] for c in contracts.values()
                               if location(c["root"]) == key and not c["parent_ids"]}
-                require(applicable, "each reviewed Group change needs an anchored changed contract")
-                require(applicable <= {c for i in ids for c in nodes[i].get("contract_ids", [])},
+                draft_require(applicable, "each reviewed Group change needs an anchored changed contract")
+                draft_require(applicable <= {c for i in ids for c in nodes[i].get("contract_ids", [])},
                         "change impact roots must cover their registered contracts")
         else:
-            require(isinstance(row.get("reason"), str) and row["reason"].strip(), "unreviewed change needs a reason")
+            draft_require(isinstance(row.get("reason"), str) and row["reason"].strip(), "unreviewed change needs a reason")
             incomplete = True
             gaps.append(f"{key}: {row['reason']}")
         coverage[key] = row
-    require(set(coverage) == expected, "coverage must include every changed/old/merge-preview path")
+    draft_require(set(coverage) == expected, "coverage must include every changed/old/merge-preview path")
     visited, queue = set(), deque(root_nodes)
     while queue:
         current = queue.popleft()
         if current not in visited:
             visited.add(current)
             queue.extend(graph[current] - visited)
-    require(set(nodes) == visited, "impact graph includes nodes disconnected from the selected changes")
+    draft_require(set(nodes) == visited, "impact graph includes nodes disconnected from the selected changes")
     if enabled:
         for contract in contracts.values():
             anchor = location(contract["evidence"])
-            require(any(location(n) == anchor and contract["id"] in n.get("contract_ids", []) for n in nodes.values()),
+            draft_require(any(location(n) == anchor and contract["id"] in n.get("contract_ids", []) for n in nodes.values()),
                     "every changed/propagated contract needs its own connected impact anchor")
 
     searches = {s["id"]: s for s in manifest["searches"]}
     require(len(searches) == len(manifest["searches"]), "duplicate search IDs")
+    search_cache = FixedSearchCache(context, api)
     for record in searches.values():
         require(record.get("repo") in repos and record.get("status") in ("complete", "unresolved"), "invalid search record")
         if record["status"] == "complete":
@@ -238,33 +352,31 @@ def _validate(draft, manifest, context, api):
                 require(identifier in contracts and record.get("query") in {t["query"] for t in contracts[identifier]["search_terms"]},
                         "search is not bound to a relevant changed contract")
             repo = repos[record["repo"]]
-            env = source_environment(context, repo, source, api)
-            code, output, error = api.run_git_capture(evidence_repository(context, repo),
-                ["grep", "-n", "-I", "--no-textconv", "-F", "-e", record["query"], source["ref"], "--"], env=env)
+            code, output, error = search_cache.run(repo, record["source"], record["query"])
             require(code in (0, 1) and output == record.get("output") and output.splitlines() == record.get("matches"),
                     "fixed search ledger differs from captured objects: " + error)
     dispositions = {}
     involved = {n["repo"] for n in nodes.values()} | set(manifest["seed_repos"])
     for row in draft["repository_coverage"]:
-        require(isinstance(row, dict) and row.get("repo") in repos and row["repo"] not in dispositions,
+        draft_require(isinstance(row, dict) and row.get("repo") in repos and row["repo"] not in dispositions,
                 "repository_coverage must contain unique captured Repo IDs")
         repo_id, state = row["repo"], row.get("status")
-        require(state in ("seed", "related", "not-related", "unresolved"), "invalid Repo disposition")
-        require(isinstance(row.get("reason"), str) and row["reason"].strip(), "Repo disposition needs a reason")
+        draft_require(state in ("seed", "related", "not-related", "unresolved"), "invalid Repo disposition")
+        draft_require(isinstance(row.get("reason"), str) and row["reason"].strip(), "Repo disposition needs a reason")
         ids = row.get("search_ids", [])
-        require(isinstance(ids, list) and all(s in searches and searches[s]["repo"] == repo_id for s in ids),
+        draft_require(isinstance(ids, list) and all(s in searches and searches[s]["repo"] == repo_id for s in ids),
                 "search IDs must come from that captured Repo")
         repo = repos[repo_id]
         if repo_id in manifest["seed_repos"]:
-            require(state in ("seed", "unresolved"), "seed cannot be excluded")
+            draft_require(state in ("seed", "unresolved"), "seed cannot be excluded")
         elif repo_id in involved:
-            require(state in ("related", "unresolved"), "reachable Repo cannot be excluded")
+            draft_require(state in ("related", "unresolved"), "reachable Repo cannot be excluded")
         else:
-            require(state in ("not-related", "unresolved"), "unrelated Repo cannot be expanded without evidence")
+            draft_require(state in ("not-related", "unresolved"), "unrelated Repo cannot be expanded without evidence")
         if repo["state"] == "error":
-            require(state == "unresolved", "failed Repo capture cannot be claimed reviewed/excluded")
+            draft_require(state == "unresolved", "failed Repo capture cannot be claimed reviewed/excluded")
         if expected and repo_id not in manifest["seed_repos"] and state != "unresolved":
-            require(ids and any(searches[s]["status"] == "complete" and
+            draft_require(ids and any(searches[s]["status"] == "complete" and
                                 searches[s]["source"] == repo["review_source"] for s in ids),
                     "candidate Repo needs completed searches against its selected fixed version")
         if expected and enabled and state != "unresolved":
@@ -275,12 +387,12 @@ def _validate(draft, manifest, context, api):
                 for source_name in source_names:
                     bound = [searches[s] for s in ids if searches[s]["status"] == "complete" and
                              searches[s]["source"] == source_name and searches[s].get("contract_id") == contract_id]
-                    require(bound, "candidate must search every changed/propagated contract in each review source")
+                    draft_require(bound, "candidate must search every changed/propagated contract in each review source")
                     if state == "not-related":
-                        require(len({s["query"] for s in bound}) >= 2,
+                        draft_require(len({s["query"] for s in bound}) >= 2,
                                 "exclusion needs alternate names or contract terms; one negative search is insufficient")
             if state == "related":
-                require(any(searches[s].get("matches") for s in ids), "related Repo needs a fixed contract search match")
+                draft_require(any(searches[s].get("matches") for s in ids), "related Repo needs a fixed contract search match")
         if state == "unresolved":
             incomplete = True
             gaps.append(f"{repo_id}: {row['reason']}")
@@ -303,51 +415,51 @@ def _validate(draft, manifest, context, api):
                 incomplete = True
                 gaps.append(f"{repo_id}: 工作區版本於擷取後改變，請重做審查。")
         dispositions[repo_id] = row
-    require(set(dispositions) == set(repos), "every candidate Repo needs an explicit disposition")
+    draft_require(set(dispositions) == set(repos), "every candidate Repo needs an explicit disposition")
 
     pending_fingerprints = set()
     for index, item in enumerate(draft["pending_confirmations"], 1):
-        require(isinstance(item, dict) and item.get("id") == f"Q-{index:03}",
+        draft_require(isinstance(item, dict) and item.get("id") == f"Q-{index:03}",
                 "pending confirmation IDs must be sequential Q-001")
-        require(set(item) <= {"id", "title", "reason", "missing_evidence", "verification", "owner", "related_changes", "evidence"},
+        draft_require(set(item) <= {"id", "title", "reason", "missing_evidence", "verification", "owner", "related_changes", "evidence"},
                 "unknown pending confirmation field; human confirmation is recorded only in the report")
         for field in ("title", "reason", "missing_evidence", "verification"):
-            require(isinstance(item.get(field), str) and item[field].strip(), f"pending confirmation needs {field}")
-        require(item.get("owner") in OWNERS, "pending confirmation needs a valid owner")
+            draft_require(isinstance(item.get(field), str) and item[field].strip(), f"pending confirmation needs {field}")
+        draft_require(item.get("owner") in OWNERS, "pending confirmation needs a valid owner")
         related = item.get("related_changes")
-        require(isinstance(related, list) and related and all(isinstance(row, dict) and set(row) == {"repo", "source", "path"}
+        draft_require(isinstance(related, list) and related and all(isinstance(row, dict) and set(row) == {"repo", "source", "path"}
                     and all(isinstance(row[field], str) and row[field] for field in ("repo", "source", "path"))
                     and location(row) in expected for row in related),
                 "pending confirmation must identify captured selected changes")
-        require(len({location(row) for row in related}) == len(related), "duplicate pending related change")
+        draft_require(len({location(row) for row in related}) == len(related), "duplicate pending related change")
         keys = evidence_list(item, required=False)
-        require(all(key[0] in involved for key in keys), "pending evidence cannot expand excluded Repos")
+        draft_require(all(key[0] in involved for key in keys), "pending evidence cannot expand excluded Repos")
         fingerprint = tuple(item[field].strip() for field in ("title", "reason", "missing_evidence"))
-        require(fingerprint not in pending_fingerprints, "duplicate pending confirmation")
+        draft_require(fingerprint not in pending_fingerprints, "duplicate pending confirmation")
         pending_fingerprints.add(fingerprint)
 
     findings = []
     fingerprints, last_priority = set(), -1
     for index, finding in enumerate(draft["findings"], 1):
-        require(isinstance(finding, dict) and finding.get("id") == f"F-{index:03}", "finding IDs must be sequential")
+        draft_require(isinstance(finding, dict) and finding.get("id") == f"F-{index:03}", "finding IDs must be sequential")
         priority = finding.get("priority")
-        require(priority in PRIORITIES and PRIORITIES.index(priority) >= last_priority, "findings must be ordered P0-P3")
+        draft_require(priority in PRIORITIES and PRIORITIES.index(priority) >= last_priority, "findings must be ordered P0-P3")
         last_priority = PRIORITIES.index(priority)
         for field in ("title", "impact", "trigger", "expected", "actual", "recommendation"):
-            require(isinstance(finding.get(field), str) and finding[field].strip(), f"finding needs {field}")
-        require(finding.get("owner") in OWNERS and finding.get("scenario_source") in ("code-derived", "reproduced"),
+            draft_require(isinstance(finding.get(field), str) and finding[field].strip(), f"finding needs {field}")
+        draft_require(finding.get("owner") in OWNERS and finding.get("scenario_source") in ("code-derived", "reproduced"),
                 "finding needs a valid owner and scenario_source")
         keys = evidence_list(finding)
-        require(any(k in reviewed_anchors for k in keys), "finding must cite a reviewed seed change in its correct version")
-        require(all(k[0] in involved for k in keys), "finding evidence cannot silently expand excluded Repos")
+        draft_require(any(k in reviewed_anchors for k in keys), "finding must cite a reviewed seed change in its correct version")
+        draft_require(all(k[0] in involved for k in keys), "finding evidence cannot silently expand excluded Repos")
         fingerprint = tuple(finding[f].strip() for f in ("title", "trigger", "expected", "actual"))
-        require(fingerprint not in fingerprints, "duplicate finding")
+        draft_require(fingerprint not in fingerprints, "duplicate finding")
         fingerprints.add(fingerprint)
         excerpts = []
         for item in finding["evidence"]:
             raw_lines = source_cache.read(repos[item["repo"]], item["source"], item["path"]).splitlines()
             start, end = item.get("line_start"), item.get("line_end")
-            require(not raw_lines or (start is not None and end is not None),
+            draft_require(not raw_lines or (start is not None and end is not None),
                     "nonempty finding evidence needs explicit line_start and line_end")
             # Match the byte-line intervals checked above before decoding Unicode.
             selected_lines = b"\n".join(raw_lines[start - 1:end]) if raw_lines else None

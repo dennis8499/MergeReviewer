@@ -69,6 +69,10 @@ main 與手動驗證會保存完整矩陣證據及 Linux／Python 3.14 的正式
 
 [效能重播工具](tests/benchmark_review.py)以相同固定提交與實際審查草稿比較舊新版，預設各量測五次並比對完整證據及報告。輸出分階段耗時與 Python／Git 命令數；這是 helper 效能量測，模型分析時間與語意品質另行記錄。參數見 `python -X utf8 -B tests/benchmark_review.py --help`。
 
+同輪契約可用 `review_workspace.py batch-register-contract --requests-file <契約陣列.json>` 按序註冊，保留逐筆驗證與 checkpoint；單筆入口及既有結果格式維持。批次讀取與搜尋快取只存在同次操作，發布仍從固定物件重新驗證搜尋紀錄。
+
+`review_report.py --retain-on-validation-error` 是選用的修稿模式：可修草稿錯誤回傳 exit 3 與診斷並保留 owned context，修正後重試；來源損毀、終止錯誤與發布失敗仍清理。舊呼叫預設的退出碼、報告格式及失敗清理行為保留，成功或最終放棄時須清理 context。
+
 ## 文件
 
 - [技能流程](skills/merge-reviewer/SKILL.md)

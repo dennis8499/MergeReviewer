@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import importlib
 import json
 from pathlib import Path
 import re
@@ -39,6 +40,16 @@ def invoke():
         return original(command, *args, **kwargs)
 
     subprocess.run = measured
+    if script.name == "review_report.py":
+        report = importlib.import_module("workspace_report")
+        original_validate = report.validate
+
+        def validated(*args, **kwargs):
+            result = original_validate(*args, **kwargs)
+            write_json(metrics_path.with_suffix(".validated.json"), result)
+            return result
+
+        report.validate = validated
     try:
         runpy.run_path(str(script), run_name="__main__")
     finally:
@@ -46,13 +57,15 @@ def invoke():
 
 
 def normalize(value, context):
-    volatile = {"generated_at", "run_id", "context_sha256"}
+    # Capture-instance fields only; blob/tree/content hashes remain compared.
+    volatile = {"generated_at", "captured_at", "capture_completed_at", "run_id", "context_sha256"}
     if isinstance(value, dict):
         return {k: normalize(v, context) for k, v in value.items() if k not in volatile}
     if isinstance(value, list):
         return [normalize(v, context) for v in value]
     if isinstance(value, str):
-        return value.replace(str(context), "<context>").replace(context.as_posix(), "<context>")
+        value = value.replace(str(context), "<context>").replace(context.as_posix(), "<context>")
+        return re.sub(r"(?m)^- 快照擷取：.*（UTC）。$", "- 快照擷取：<capture-times>（UTC）。", value)
     return value
 
 
@@ -69,59 +82,53 @@ def measure(source, fixture, scenario, destination, optimized):
                                 capture_output=True, text=True, encoding="utf-8")
         elapsed = time.perf_counter() - started
         totals.update(json.loads(metrics_path.read_text(encoding="utf-8")))
+        totals["output_bytes"] += len(result.stdout.encode("utf-8"))
         if result.returncode:
             raise RuntimeError(f"{script} failed: {result.stderr}")
         return result.stdout, elapsed
 
-    output, capture_time = cli("git_review_context.py", "--workspace", fixture, "--project", "orders-api",
-                               "--base", "main", "--head", "feature/amount", "--no-fetch",
-                               *(["--summary"] if optimized else []))
+    capture = scenario.get("capture", {})
+    # Both frozen versions already support these batching/summary interfaces.
+    output, capture_time = cli("git_review_context.py", "--workspace", fixture,
+                               "--project", capture.get("project", "orders-api"),
+                               "--base", capture.get("base", "main"),
+                               "--head", capture.get("head", "feature/amount"), "--no-fetch", "--summary")
     context = Path(json.loads(output)["context_dir"])
     counts = {"capture": dict(totals)}
     captured_bytes = len(output.encode("utf-8"))
     reads, searches = [], []
     read_search_time = 0.0
     try:
-        for index, contract in enumerate(scenario["contracts"]):
-            request_file = context / f"benchmark-contract-{index}.json"
-            write_json(request_file, contract)
-            _, elapsed = cli("review_workspace.py", "register-contract", "--context-dir", context,
-                             "--contract-file", request_file)
+        if optimized and scenario["contracts"]:
+            request_file = context / "benchmark-contracts.json"
+            write_json(request_file, scenario["contracts"])
+            _, elapsed = cli("review_workspace.py", "batch-register-contract", "--context-dir", context,
+                             "--requests-file", request_file)
             read_search_time += elapsed
-        if optimized:
-            for name in ("read", "search"):
-                plural = "reads" if name == "read" else "searches"
-                request_file = context / f"benchmark-{plural}.json"
-                write_json(request_file, scenario[plural])
-                output, elapsed = cli("review_workspace.py", "batch-" + name, "--context-dir", context,
-                                       "--requests-file", request_file)
-                read_search_time += elapsed
-                (reads if name == "read" else searches).extend(json.loads(output)[plural])
         else:
-            for request in scenario["reads"]:
-                args = ["--repo", request["repo"], "--path", request["path"]]
-                if request.get("source"):
-                    args += ["--source", request["source"]]
-                output, elapsed = cli("review_workspace.py", "read", "--context-dir", context, *args)
-                reads.append(json.loads(output))
+            for index, contract in enumerate(scenario["contracts"]):
+                request_file = context / f"benchmark-contract-{index}.json"
+                write_json(request_file, contract)
+                _, elapsed = cli("review_workspace.py", "register-contract", "--context-dir", context,
+                                 "--contract-file", request_file)
                 read_search_time += elapsed
-            for request in scenario["searches"]:
-                args = ["--query", request["query"]]
-                if request.get("contract"):
-                    args += ["--contract", request["contract"]]
-                if request.get("source"):
-                    args += ["--source", request["source"]]
-                for repo in request.get("repo") or []:
-                    args += ["--repo", repo]
-                output, elapsed = cli("review_workspace.py", "search", "--context-dir", context, *args)
-                searches.extend(json.loads(output)["searches"])
-                read_search_time += elapsed
+        for name in ("read", "search"):
+            plural = "reads" if name == "read" else "searches"
+            request_file = context / f"benchmark-{plural}.json"
+            write_json(request_file, scenario[plural])
+            output, elapsed = cli("review_workspace.py", "batch-" + name, "--context-dir", context,
+                                   "--requests-file", request_file)
+            read_search_time += elapsed
+            (reads if name == "read" else searches).extend(json.loads(output)[plural])
         counts["read_search"] = dict(Counter(totals) - Counter(counts["capture"]))
         manifest = json.loads((context / "manifest.json").read_text(encoding="utf-8"))
+        patches = {path.relative_to(context).as_posix(): path.read_bytes().hex()
+                   for path in sorted(context.rglob("*.patch"))}
         draft_file = context / "benchmark-draft.json"
         write_json(draft_file, scenario["draft"])
         before_publish = Counter(totals)
         output, publish_time = cli("review_report.py", "--context-dir", context, "--result", draft_file)
+        validated_result = json.loads(metrics_path.with_suffix(".validated.json").read_text(encoding="utf-8"))
         counts["publish"] = dict(Counter(totals) - before_publish)
         report = Path(output.strip())
         try:
@@ -133,7 +140,8 @@ def measure(source, fixture, scenario, destination, optimized):
                 report.parent.rmdir()
         markdown = re.sub(r"(?m)^- Context 摘要：.*$", "- Context 摘要：<context-hash>", markdown)
         artifacts = normalize({"manifest": manifest, "reads": reads, "searches": searches,
-                               "draft": scenario["draft"], "markdown": markdown}, context)
+                               "draft": scenario["draft"], "result": validated_result,
+                               "patches": patches, "markdown": markdown}, context)
         write_json(destination / "artifacts.json", artifacts)
         row = {"capture_seconds": capture_time, "read_search_seconds": read_search_time,
                "publish_seconds": publish_time, "helper_total_seconds": capture_time + read_search_time + publish_time,

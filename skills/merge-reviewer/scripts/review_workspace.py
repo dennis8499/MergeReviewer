@@ -140,7 +140,7 @@ def fixed_bytes(context: Path, repo: dict, name: str, path: str, api) -> bytes:
 
 
 class FixedSourceCache:
-    """Verified fixed content shared only within one report validation.
+    """Verified fixed content shared only within one read/validation operation.
 
     Metadata and safe paths are checked on every lookup. Changing a source,
     entry, repository, or object location therefore cannot reuse older bytes.
@@ -171,6 +171,8 @@ class FixedSourceCache:
         matches = [f for f in source["files"] if f["path"] == path]
         require(len(matches) == 1 and matches[0]["kind"] == "blob", "path is not a fixed blob")
         entry = matches[0]
+        if repo.get("snapshot") is not None:
+            source_environment(self.context, repo, source, self.api)
         # Manifest values may be malformed JSON arrays/objects. Keep them in
         # the identity without bypassing the original content/tree validation.
         key = json.dumps(("read", key, entry["blob_sha"], entry.get("mode"), entry["kind"]),
@@ -193,26 +195,86 @@ class FixedSourceCache:
         return self._patches[key]
 
 
-def add_source(context: Path, repo: dict, name: str, reference: str, api, *, env=None):
+SEARCH_FLAGS = ("grep", "-n", "-I", "--no-textconv", "-F", "-e")
+
+
+class FixedSearchCache:
+    """Replay each successful frozen search once within one operation.
+
+    Callers still validate and record every logical search. Legacy live-backed
+    contexts and unsuccessful commands are always executed again.
+    """
+
+    def __init__(self, context: Path, api):
+        self.context = Path(context).resolve()
+        self.api = api
+        self._results = {}
+
+    def run(self, repo: dict, source_name: str, query: str) -> tuple[int, str, str]:
+        source = repo["sources"][source_name]
+        environment = source_environment(self.context, repo, source, self.api)
+        git_repo = evidence_repository(self.context, repo)
+        inherited = {key: value for key, value in os.environ.items() if key.startswith("GIT_")}
+        key = json.dumps((str(self.context), repo["id"], str(Path(repo["path"]).resolve()),
+                          str(git_repo), source_name, source["ref"], source["tree_sha"],
+                          source.get("objects"), repo.get("snapshot"), inherited, environment,
+                          SEARCH_FLAGS, query), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        snapshot = repo.get("snapshot")
+        frozen = isinstance(snapshot, dict) and snapshot.get("policy") == SNAPSHOT_POLICY
+        if not frozen or key not in self._results:
+            result = self.api.run_git_capture(
+                git_repo, [*SEARCH_FLAGS, query, source["ref"], "--"], env=environment)
+            if not frozen or result[0] not in (0, 1):
+                return result
+            self._results[key] = result
+        return self._results[key]
+
+
+class CaptureTreeCache:
+    """Tree inventories and object closure isolated to one capture operation."""
+
+    def __init__(self, context: Path, api):
+        self.context = context
+        self.api = api
+        self._trees = {}
+
+    def inventory(self, repo: dict, tree: str, environment: dict) -> tuple[list[dict], frozenset[str]]:
+        inherited = {key: value for key, value in os.environ.items() if key.startswith("GIT_")}
+        inherited.update(environment)
+        key = (repo["id"], str(Path(repo["path"]).resolve()), tree, tuple(sorted(inherited.items())))
+        if key not in self._trees:
+            raw = self.api.run_git(Path(repo["path"]), ["ls-tree", "-r", "-t", "-z", tree],
+                                   binary=True, env=environment)
+            files, objects = [], {tree}
+            for item in raw.split(b"\0"):
+                if not item:
+                    continue
+                meta, file_path = item.split(b"\t", 1)
+                mode, kind, object_id = meta.decode("ascii").split()
+                if kind in ("tree", "blob"):
+                    objects.add(object_id)
+                if kind != "tree":
+                    relative = file_path.decode("utf-8", errors="strict")
+                    safe_path(self.context, relative)
+                    files.append({"path": relative, "mode": mode, "kind": kind, "blob_sha": object_id})
+            self._trees[key] = (files, frozenset(objects))
+        files, objects = self._trees[key]
+        # Source metadata stays independently mutable, as it was without caching.
+        return [entry.copy() for entry in files], objects
+
+
+def add_source(context: Path, repo: dict, name: str, reference: str, api, *, env=None, tree_cache=None):
     path = Path(repo["path"])
     env = env or {}
     tree = str(api.run_git(path, ["rev-parse", f"{reference}^{{tree}}"], env=env)).strip()
-    raw = api.run_git(path, ["ls-tree", "-r", "-z", tree], binary=True, env=env)
-    files = []
-    for item in raw.split(b"\0"):
-        if not item:
-            continue
-        meta, file_path = item.split(b"\t", 1)
-        mode, kind, blob = meta.decode("ascii").split()
-        relative = file_path.decode("utf-8", errors="strict")
-        safe_path(context, relative)
-        files.append({"path": relative, "mode": mode, "kind": kind, "blob_sha": blob})
+    cache = tree_cache if tree_cache is not None else CaptureTreeCache(context, api)
+    files, _ = cache.inventory(repo, tree, env)
     storage = env.get("GIT_OBJECT_DIRECTORY")
     repo["sources"][name] = {"ref": reference, "tree_sha": tree, "files": files,
                              "objects": Path(storage).relative_to(context).as_posix() if storage else None}
 
 
-def seal_snapshot(context: Path, repo: dict, api):
+def seal_snapshot(context: Path, repo: dict, api, *, tree_cache=None):
     """Pack complete captured trees, without copying unrelated commit history."""
     source_repo = Path(repo["path"])
     relative = f"repos/{repo['id']}/snapshot.git"
@@ -222,32 +284,31 @@ def seal_snapshot(context: Path, repo: dict, api):
     api.run_git(context, ["init", "--bare", f"--object-format={object_format}", str(destination)])
     object_ids = set()
     pack_environment = {}
+    cache = tree_cache if tree_cache is not None else CaptureTreeCache(context, api)
     for source in repo["sources"].values():
         environment = source_environment(context, repo, source, api)
         # Preview objects borrow the original store, and can read every source.
         if source.get("objects"):
             pack_environment = environment
         object_ids.update((source["ref"], source["tree_sha"]))
-        listing = api.run_git(source_repo, ["ls-tree", "-r", "-t", "-z", source["tree_sha"]],
-                              binary=True, env=environment)
-        for entry in listing.split(b"\0"):
-            if entry:
-                metadata = entry.split(b"\t", 1)[0].decode("ascii").split()
-                if metadata[1] in ("tree", "blob"):
-                    object_ids.add(metadata[2])
+        _, objects = cache.inventory(repo, source["tree_sha"], environment)
+        object_ids.update(objects)
     # A normal pack includes its delta bases; no thin pack, alternates or hardlinks.
     api.run_git(source_repo, ["pack-objects", str(destination / "objects/pack/snapshot")],
                 input_bytes=("\n".join(sorted(object_ids)) + "\n").encode("ascii"), env=pack_environment)
     repo["snapshot"] = {"policy": SNAPSHOT_POLICY, "git_dir": relative,
                         "captured_at": datetime.now(timezone.utc).isoformat(), "object_format": object_format}
+    verified_trees = {}
     for source in repo["sources"].values():
         source["objects"] = relative + "/objects"
         environment = source_environment(context, repo, source, api)
         actual = str(api.run_git(destination, ["rev-parse", f"{source['ref']}^{{tree}}"], env=environment)).strip()
         require(actual == source["tree_sha"], "frozen snapshot tree identity mismatch")
-        listing = api.run_git(destination, ["ls-tree", "-r", "-z", source["tree_sha"]],
-                              binary=True, env=environment)
-        require(len([entry for entry in listing.split(b"\0") if entry]) == len(source["files"]),
+        tree = source["tree_sha"]
+        if tree not in verified_trees:
+            listing = api.run_git(destination, ["ls-tree", "-r", "-z", tree], binary=True, env=environment)
+            verified_trees[tree] = len([entry for entry in listing.split(b"\0") if entry])
+        require(verified_trees[tree] == len(source["files"]),
                 "frozen snapshot inventory differs")
     checked = str(api.run_git(destination, ["cat-file", "--batch-check"],
                               input_bytes=("\n".join(sorted(object_ids)) + "\n").encode("ascii"),
@@ -320,7 +381,7 @@ def instructions(context, manifest, repo_id, path, api):
     return {"instructions": entries}
 
 
-def branch_snapshot(context: Path, repo: dict, args, api):
+def branch_snapshot(context: Path, repo: dict, args, api, *, tree_cache=None):
     native_args = copy.copy(args)
     native_args.workspace, native_args.workspace_file = repo["path"], None
     native_args.project = repo["path"]
@@ -329,14 +390,14 @@ def branch_snapshot(context: Path, repo: dict, args, api):
     repo["native"] = native
     repo["review_source"] = "head"
     for name, reference in (("head", native["head_sha"]), ("base", native["base_sha"])):
-        add_source(context, repo, name, reference, api)
+        add_source(context, repo, name, reference, api, tree_cache=tree_cache)
     if native["merge_base"]:
-        add_source(context, repo, "merge-base", native["merge_base"], api)
+        add_source(context, repo, "merge-base", native["merge_base"], api, tree_cache=tree_cache)
     for merge in native["merge_commits"]:
         for parent in merge["parents"]:
             name = "parent-" + parent
             if name not in repo["sources"]:
-                add_source(context, repo, name, parent, api)
+                add_source(context, repo, name, parent, api, tree_cache=tree_cache)
     repo["changed_files"] = [{**c, "source": "head"} for c in native["changed_files"]]
     repo["patches"] = [f"repos/{repo['id']}/native/diff.patch"]
     preview = native.get("merge_preview")
@@ -344,7 +405,7 @@ def branch_snapshot(context: Path, repo: dict, args, api):
         info = preview["manifest_info"]
         env = {"GIT_OBJECT_DIRECTORY": info["object_directory"],
                "GIT_ALTERNATE_OBJECT_DIRECTORIES": info["alternate_objects"]}
-        add_source(context, repo, "merge-preview", preview["tree_sha"], api, env=env)
+        add_source(context, repo, "merge-preview", preview["tree_sha"], api, env=env, tree_cache=tree_cache)
         repo["changed_files"].extend({**c, "source": "merge-preview"} for c in preview["changed_files"])
         repo["patches"].append(f"repos/{repo['id']}/native/merge-preview.patch")
     repo["limitations"].extend(native["context_gaps"])
@@ -398,18 +459,19 @@ def build(args, api) -> dict:
             manifest["selected_repo"] = record["id"]
             manifest["seed_repos"] = [record["id"]]
         try:
+            tree_cache = CaptureTreeCache(context, api)
             actual = validate_root(candidate, api)
             record["before"] = api.snapshot(actual)
             record["head_sha"] = api.verified_commit(actual, "HEAD")
             safe_path(context, f"repos/{record['id']}").mkdir(parents=True)
             if candidate == seed:
-                branch_snapshot(context, record, args, api)
+                branch_snapshot(context, record, args, api, tree_cache=tree_cache)
             else:
                 require(record["head_sha"], "related Repo has no HEAD commit")
                 record["review_source"] = "head"
-                add_source(context, record, "head", record["head_sha"], api)
+                add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
             require(record["before"] == api.snapshot(actual), "Repo changed during capture; rebuild context")
-            seal_snapshot(context, record, api)
+            seal_snapshot(context, record, api, tree_cache=tree_cache)
         except (ValueError, OSError, api.ReviewContextError) as exc:
             if candidate == seed:
                 raise
@@ -525,8 +587,16 @@ def register_contract(context, manifest, item, api):
     return value
 
 
+def batch_register_contract(context, manifest, requests, api):
+    require(isinstance(requests, list), "batch requests must be an array")
+    values = []
+    for item in requests:
+        values.append(register_contract(context, manifest, item, api))
+    return {"contracts": values}
+
+
 def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None, api, source_name=None,
-           contract_id=None) -> dict:
+           contract_id=None, *, cache=None) -> dict:
     require(bool(query), "search query must be nonempty")
     if manifest.get("extension_enabled") is True:
         require(contract_id in contract_rows(manifest), "Group searches require a registered --contract")
@@ -544,9 +614,12 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
                   "query": query, "contract_id": contract_id, "matches": [], "status": "complete"}
         try:
             source = repo["sources"][name]
-            env = source_environment(context, repo, source, api)
-            code, output, error = api.run_git_capture(evidence_repository(context, repo),
-                ["grep", "-n", "-I", "--no-textconv", "-F", "-e", query, source["ref"], "--"], env=env)
+            if cache is None:
+                env = source_environment(context, repo, source, api)
+                code, output, error = api.run_git_capture(evidence_repository(context, repo),
+                    [*SEARCH_FLAGS, query, source["ref"], "--"], env=env)
+            else:
+                code, output, error = cache.run(repo, name, query)
             require(code in (0, 1), "fixed-source search failed: " + error)
             record["ref"] = source["ref"]
             record["output"] = output
@@ -560,11 +633,11 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
     return {"searches": results}
 
 
-def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_name=None) -> dict:
+def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_name=None, *, cache=None) -> dict:
     require(isinstance(repo_id, str) and bool(repo_id) and path, "read needs one --repo and --path")
     repo = repository(manifest, repo_id)
     name = source_name or repo["review_source"]
-    content = fixed_bytes(context, repo, name, path, api)
+    content = cache.read(repo, name, path) if cache is not None else fixed_bytes(context, repo, name, path, api)
     require(b"\0" not in content, "binary blob; record a coverage limitation")
     return {"repo": repo["id"], "source": name, "ref": repo["sources"][name]["ref"], "path": path,
             "sha256": hashlib.sha256(content).hexdigest(),
@@ -575,17 +648,20 @@ def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_nam
 def batch_read(context: Path, manifest: dict, requests: list[dict], api) -> dict:
     require(isinstance(requests, list), "batch requests must be an array")
     results = []
+    cache = FixedSourceCache(context, api)
     for request in requests:
         require(isinstance(request, dict), "batch request must be an object")
         require(set(request) <= {"repo", "source", "path"}, "unknown batch-read request argument")
         require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
-        results.append(read(context, manifest, request.get("repo"), request.get("path"), api, request.get("source")))
+        results.append(read(context, manifest, request.get("repo"), request.get("path"), api,
+                            request.get("source"), cache=cache))
     return {"reads": results}
 
 
 def batch_search(context: Path, manifest: dict, requests: list[dict], api) -> dict:
     require(isinstance(requests, list), "batch requests must be an array")
     results = []
+    cache = FixedSearchCache(context, api)
     for request in requests:
         require(isinstance(request, dict), "batch request must be an object")
         require(set(request) <= {"repo", "source", "query", "contract"}, "unknown batch-search request argument")
@@ -596,7 +672,7 @@ def batch_search(context: Path, manifest: dict, requests: list[dict], api) -> di
         require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
         require(request.get("contract") is None or isinstance(request["contract"], str), "contract must be text")
         value = search(context, manifest, request.get("query"), repos, api,
-                       request.get("source"), request.get("contract"))
+                       request.get("source"), request.get("contract"), cache=cache)
         results.extend(value["searches"])
     return {"searches": results}
 
@@ -606,7 +682,8 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("read", "search", "batch-read", "batch-search", "inventory", "register-contract", "instructions"))
+    parser.add_argument("command", choices=("read", "search", "batch-read", "batch-search", "inventory",
+                                           "register-contract", "batch-register-contract", "instructions"))
     parser.add_argument("--context-dir", type=Path, required=True)
     parser.add_argument("--repo", action="append")
     parser.add_argument("--source")
@@ -614,7 +691,7 @@ def main(argv=None):
     parser.add_argument("--query")
     parser.add_argument("--contract", help="Previously registered changed/propagated contract ID")
     parser.add_argument("--contract-file", type=Path, help="One fixed-anchor contract JSON object")
-    parser.add_argument("--requests-file", type=Path, help="Ordered JSON array for batch-read or batch-search")
+    parser.add_argument("--requests-file", type=Path, help="Ordered JSON array for a batch command")
     parser.add_argument("--git-timeout", type=float, default=180.0)
     args = parser.parse_args(argv)
     import git_review_context as api
@@ -622,10 +699,11 @@ def main(argv=None):
     token = api.GIT_TIMEOUT_SECONDS.set(api.positive_timeout(str(args.git_timeout)))
     try:
         manifest = load(context)
-        if args.command in ("batch-read", "batch-search"):
+        if args.command in ("batch-read", "batch-search", "batch-register-contract"):
             require(args.requests_file, f"{args.command} needs --requests-file")
             requests = json.loads(args.requests_file.read_text(encoding="utf-8"))
-            operation = batch_read if args.command == "batch-read" else batch_search
+            operation = {"batch-read": batch_read, "batch-search": batch_search,
+                         "batch-register-contract": batch_register_contract}[args.command]
             value = operation(context, manifest, requests, api)
         elif args.command == "search":
             value = search(context, manifest, args.query, args.repo, api, args.source, args.contract)

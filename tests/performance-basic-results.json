@@ -1,0 +1,775 @@
+{
+  "schema": "MergeReviewerBasicOptimizationSummary/v1",
+  "baseline_commit": "2b4defe2eb2bee727ffe1218cb6cbe51814111ea",
+  "baseline_skill_version": "0.14.0",
+  "candidate": "unreleased working tree",
+  "environment": {
+    "os": "Windows",
+    "python": "3.14.7",
+    "git": "2.55.0.windows.5"
+  },
+  "candidate_skill_sha256": {
+    "merge-reviewer\\agents\\openai.yaml": "ecc4ca6b80baec31b883ba5050ba5ab84c217c3fc4891989077f51be671aa377",
+    "merge-reviewer\\references\\claude-code-style.md": "f730bd868052261947a6e4ae64abf9b419250f30d04c44637459abf8bcf6219e",
+    "merge-reviewer\\references\\report-style.md": "ae227e5e75073a0026b71673035d78c353864bd2e7ca02cb70274ecec50b3fd6",
+    "merge-reviewer\\references\\review-rules.md": "9f73cf2e4612cc5bea51e91e4e32dfb9cd857c532ffaa01d85a9aa026fa3741d",
+    "merge-reviewer\\references\\usage.md": "f2d216cca6bf11e70629166ef59b8967633429716720c7decffa356c85d4107b",
+    "merge-reviewer\\references\\workspace-review.md": "f89ff4cf4d9d037f57f17af850061fcb30d7a804a995473f1f3669a6f9a9d92a",
+    "merge-reviewer\\scripts\\git_review_context.py": "fa23f7f1ef90f218435894075e7fdf5a5c332341911ea917d19b2c05c2394a47",
+    "merge-reviewer\\scripts\\review_report.py": "33f3b93a16939fb4db35b7a416d9beb10c9b45727e03801944ad9f9cf31d3a0e",
+    "merge-reviewer\\scripts\\review_session.py": "5e7845821c85e4d3cd867928aa02379e592dd7cb1a6653b2da1d549b393026ea",
+    "merge-reviewer\\scripts\\review_workspace.py": "c117d7fd6f5dba50da998da576775d2c72e19324cf15c46a5f426f2fcf0dfc76",
+    "merge-reviewer\\scripts\\workspace_report.py": "ba48f6f210b5157c2a59e6d949365764c665c0d2438d80803acb8d60b3ee56ec",
+    "merge-reviewer\\SKILL.md": "053160628d0ebafb6232ee157fa5b997f4e7a0fcc57b350a5ba751f453971fd8",
+    "merge-reviewer\\VERSION": "065582655aacd6fc83ff742a5715c04bb4a57395bf3ee4559798fa42c2ce4589"
+  },
+  "helper_method": {
+    "repeats_per_variant": 5,
+    "sequential": true,
+    "alternating": true,
+    "model_review_seconds": null,
+    "scope": "CLI helpers including process startup, fixed authored draft replay, fixture creation excluded; full artifact oracle outside timed stages."
+  },
+  "existing_helper_cases": {
+    "merge-safe": {
+      "equivalent": true,
+      "runs_per_variant": 5,
+      "baseline": {
+        "median_seconds": 16.7560004000552,
+        "max_seconds": 17.076813399995444,
+        "under_600_seconds": 5,
+        "python_cli": 9,
+        "git": 379,
+        "output_bytes": 44877
+      },
+      "optimized": {
+        "median_seconds": 15.667809900041902,
+        "max_seconds": 16.143363699986367,
+        "under_600_seconds": 5,
+        "python_cli": 5,
+        "git": 343,
+        "output_bytes": 45562
+      },
+      "time_reduction_pct": 6.494333218145021,
+      "output_change_pct": 1.526394366824868
+    },
+    "merge-regression": {
+      "equivalent": true,
+      "runs_per_variant": 5,
+      "baseline": {
+        "median_seconds": 17.530151099985233,
+        "max_seconds": 18.738421600079164,
+        "under_600_seconds": 5,
+        "python_cli": 9,
+        "git": 379,
+        "output_bytes": 44673
+      },
+      "optimized": {
+        "median_seconds": 15.522432999976445,
+        "max_seconds": 16.30670519999694,
+        "under_600_seconds": 5,
+        "python_cli": 5,
+        "git": 343,
+        "output_bytes": 45358
+      },
+      "time_reduction_pct": 11.452942353762596,
+      "output_change_pct": 1.533364672173354
+    }
+  },
+  "regression": {
+    "unique_tests": 143,
+    "passed": 142,
+    "skipped": 1,
+    "skip_reason": "Windows symbolic-link privilege",
+    "bdd_scenarios": 16,
+    "bdd_steps": 65,
+    "count_status": "143 AST test methods agree138 full-suite cases+5 late executed cases"
+  },
+  "original_features": {
+    "fixed_source_snapshot_and_source_isolation": true,
+    "individual_search_ledger_replay": true,
+    "complete_changed_old_parent_preview_coverage": true,
+    "v3_contract_and_traditional_chinese_markdown": true,
+    "default_cli_and_cleanup": true,
+    "optional_flags_only_for_new_formats": true
+  },
+  "large_helper": {
+    "method": "Same fixed source and actual authored baseline1 scenario:24 ordered contracts,71 reads,48 query requests/576 ledger rows; all requests known, one read/search batch;5 per variant alternating; helpers only, CLI startup included.",
+    "result": {
+      "repeats": 5,
+      "normalized_artifacts_equal": true,
+      "model_review_seconds": null,
+      "note": "Replays an authored draft; measures helpers, not repeated model reasoning.",
+      "medians": {
+        "baseline": {
+          "capture_seconds": 34.814012499991804,
+          "read_search_seconds": 40.49160050001228,
+          "publish_seconds": 32.55063730000984,
+          "helper_total_seconds": 106.54039269991335,
+          "capture_stdout_bytes": 13422
+        },
+        "optimized": {
+          "capture_seconds": 33.20584689997486,
+          "read_search_seconds": 32.97525529997074,
+          "publish_seconds": 29.629873900004895,
+          "helper_total_seconds": 95.48870309998165,
+          "capture_stdout_bytes": 13422
+        }
+      },
+      "runs": {
+        "baseline": [
+          {
+            "capture_seconds": 39.36964190000435,
+            "read_search_seconds": 46.80376699997578,
+            "publish_seconds": 35.15688169997884,
+            "helper_total_seconds": 121.33029059995897,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 337,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 26,
+                "git": 786,
+                "output_bytes": 283866
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 743,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 28,
+              "git": 1866,
+              "output_bytes": 297472
+            }
+          },
+          {
+            "capture_seconds": 36.45263580000028,
+            "read_search_seconds": 40.98569120001048,
+            "publish_seconds": 31.18028990001767,
+            "helper_total_seconds": 108.61861690002843,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 337,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 26,
+                "git": 786,
+                "output_bytes": 283866
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 743,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 28,
+              "git": 1866,
+              "output_bytes": 297472
+            }
+          },
+          {
+            "capture_seconds": 34.814012499991804,
+            "read_search_seconds": 39.647736599930795,
+            "publish_seconds": 32.078643599990755,
+            "helper_total_seconds": 106.54039269991335,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 337,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 26,
+                "git": 786,
+                "output_bytes": 283866
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 743,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 28,
+              "git": 1866,
+              "output_bytes": 297472
+            }
+          },
+          {
+            "capture_seconds": 34.000266300019575,
+            "read_search_seconds": 39.49735960000544,
+            "publish_seconds": 32.620296099979896,
+            "helper_total_seconds": 106.11792200000491,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 337,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 26,
+                "git": 786,
+                "output_bytes": 283866
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 743,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 28,
+              "git": 1866,
+              "output_bytes": 297472
+            }
+          },
+          {
+            "capture_seconds": 32.74058800001512,
+            "read_search_seconds": 40.49160050001228,
+            "publish_seconds": 32.55063730000984,
+            "helper_total_seconds": 105.78282580003724,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 337,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 26,
+                "git": 786,
+                "output_bytes": 283866
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 743,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 28,
+              "git": 1866,
+              "output_bytes": 297472
+            }
+          }
+        ],
+        "optimized": [
+          {
+            "capture_seconds": 32.89586020002025,
+            "read_search_seconds": 32.668220699968515,
+            "publish_seconds": 29.924622199992882,
+            "helper_total_seconds": 95.48870309998165,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 319,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 3,
+                "git": 714,
+                "output_bytes": 286826
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 671,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 5,
+              "git": 1704,
+              "output_bytes": 300432
+            }
+          },
+          {
+            "capture_seconds": 32.535901499999454,
+            "read_search_seconds": 32.97525529997074,
+            "publish_seconds": 29.901800199993886,
+            "helper_total_seconds": 95.41295699996408,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 319,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 3,
+                "git": 714,
+                "output_bytes": 286826
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 671,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 5,
+              "git": 1704,
+              "output_bytes": 300432
+            }
+          },
+          {
+            "capture_seconds": 33.359591099986574,
+            "read_search_seconds": 32.61177159997169,
+            "publish_seconds": 29.629873900004895,
+            "helper_total_seconds": 95.60123659996316,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 319,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 3,
+                "git": 714,
+                "output_bytes": 286826
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 671,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 5,
+              "git": 1704,
+              "output_bytes": 300432
+            }
+          },
+          {
+            "capture_seconds": 34.00764909997815,
+            "read_search_seconds": 33.73017609998351,
+            "publish_seconds": 29.246346899977652,
+            "helper_total_seconds": 96.98417209993931,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 319,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 3,
+                "git": 714,
+                "output_bytes": 286826
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 671,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 5,
+              "git": 1704,
+              "output_bytes": 300432
+            }
+          },
+          {
+            "capture_seconds": 33.20584689997486,
+            "read_search_seconds": 33.24106179998489,
+            "publish_seconds": 28.85871440000483,
+            "helper_total_seconds": 95.30562309996458,
+            "capture_stdout_bytes": 13422,
+            "counts": {
+              "capture": {
+                "python_cli": 1,
+                "git": 319,
+                "output_bytes": 13422
+              },
+              "read_search": {
+                "python_cli": 3,
+                "git": 714,
+                "output_bytes": 286826
+              },
+              "publish": {
+                "python_cli": 1,
+                "git": 671,
+                "output_bytes": 184
+              }
+            },
+            "total_counts": {
+              "python_cli": 5,
+              "git": 1704,
+              "output_bytes": 300432
+            }
+          }
+        ]
+      }
+    }
+  },
+  "agent": {
+    "method": {
+      "runs_per_variant": 3,
+      "independent_fresh_agents": true,
+      "sequential": true,
+      "no_model_override": true,
+      "timing_scope": "Before spawn through publication, report copy and owned-context cleanup; skill loading included. Final response excluded.",
+      "other_elapsed_note": "Includes model/service scheduling, source/skill reading, tool round trips, request/draft preparation and process startup. This is not measured model inference time.",
+      "fixture": "large-fixture-v2;12 repos,1000 tracked files and20 branch changes per repo; entry20 changes=16 text notes+4 publishers;4 event chains; unrelated3. Supporting versions follow skill.",
+      "counter_scope": "Only traced reviewer helper main/CLI invocations, Git subprocesses and helper stdout; other shell/file/draft operations are not counted as helpers but remain within complete elapsed time."
+    },
+    "rows": [
+      {
+        "reviewer": "MergeReviewer",
+        "variant": "baseline",
+        "run": 1,
+        "elapsed_seconds": 396.04793000000063,
+        "within_600_seconds": true,
+        "helper_cli_calls": 57,
+        "git_calls": 1866,
+        "helper_output_bytes": 3381326,
+        "helper_seconds": 107.0537424000504,
+        "helper_wall_union_seconds": 107.05374312400818,
+        "helper_calls_overlap": false,
+        "helper_stages": {
+          "git_review_context": {
+            "calls": 1,
+            "seconds": 35.38069789999281
+          },
+          "review_report": {
+            "calls": 1,
+            "seconds": 32.65286490001017
+          },
+          "review_workspace": {
+            "calls": 55,
+            "seconds": 39.02017960004741
+          }
+        },
+        "other_elapsed_seconds": 288.99418687599245,
+        "model_review_seconds": null,
+        "helper_nonzero_exits": [
+          {
+            "module": "review_workspace",
+            "exit_code": 2
+          }
+        ]
+      },
+      {
+        "reviewer": "MergeReviewer",
+        "variant": "candidate",
+        "run": 1,
+        "elapsed_seconds": 439.7047011999821,
+        "within_600_seconds": true,
+        "helper_cli_calls": 35,
+        "git_calls": 1704,
+        "helper_output_bytes": 3351998,
+        "helper_seconds": 101.45110759991803,
+        "helper_wall_union_seconds": 101.45110821723938,
+        "helper_calls_overlap": false,
+        "helper_stages": {
+          "git_review_context": {
+            "calls": 1,
+            "seconds": 34.99188869999489
+          },
+          "review_report": {
+            "calls": 1,
+            "seconds": 29.071366199990734
+          },
+          "review_workspace": {
+            "calls": 33,
+            "seconds": 37.38785269993241
+          }
+        },
+        "other_elapsed_seconds": 338.2535929827427,
+        "model_review_seconds": null,
+        "helper_nonzero_exits": [
+          {
+            "module": "review_workspace",
+            "exit_code": 2
+          }
+        ]
+      },
+      {
+        "reviewer": "MergeReviewer",
+        "variant": "candidate",
+        "run": 2,
+        "elapsed_seconds": 325.74036569998134,
+        "within_600_seconds": true,
+        "helper_cli_calls": 35,
+        "git_calls": 1368,
+        "helper_output_bytes": 6739554,
+        "helper_seconds": 82.93196620006347,
+        "helper_wall_union_seconds": 82.93196630477905,
+        "helper_calls_overlap": false,
+        "helper_stages": {
+          "git_review_context": {
+            "calls": 1,
+            "seconds": 32.062118500005454
+          },
+          "review_report": {
+            "calls": 1,
+            "seconds": 20.199828699987847
+          },
+          "review_workspace": {
+            "calls": 33,
+            "seconds": 30.67001900007017
+          }
+        },
+        "other_elapsed_seconds": 242.8083993952023,
+        "model_review_seconds": null,
+        "helper_nonzero_exits": [
+          {
+            "module": "review_workspace",
+            "exit_code": 2
+          }
+        ]
+      },
+      {
+        "reviewer": "MergeReviewer",
+        "variant": "baseline",
+        "run": 2,
+        "elapsed_seconds": 356.10069950000616,
+        "within_600_seconds": true,
+        "helper_cli_calls": 45,
+        "git_calls": 1860,
+        "helper_output_bytes": 266229,
+        "helper_seconds": 105.08391939997091,
+        "helper_wall_union_seconds": 105.08391904830933,
+        "helper_calls_overlap": false,
+        "helper_stages": {
+          "git_review_context": {
+            "calls": 1,
+            "seconds": 32.87126549999812
+          },
+          "review_report": {
+            "calls": 1,
+            "seconds": 33.680120000004536
+          },
+          "review_workspace": {
+            "calls": 43,
+            "seconds": 38.53253389996826
+          }
+        },
+        "other_elapsed_seconds": 251.01678045169683,
+        "model_review_seconds": null,
+        "helper_nonzero_exits": [
+          {
+            "module": "review_workspace",
+            "exit_code": 2
+          }
+        ]
+      },
+      {
+        "reviewer": "MergeReviewer",
+        "variant": "baseline",
+        "run": 3,
+        "elapsed_seconds": 339.0763193000166,
+        "within_600_seconds": true,
+        "helper_cli_calls": 45,
+        "git_calls": 1787,
+        "helper_output_bytes": 268769,
+        "helper_seconds": 117.89106600004015,
+        "helper_wall_union_seconds": 117.89106607437134,
+        "helper_calls_overlap": false,
+        "helper_stages": {
+          "git_review_context": {
+            "calls": 1,
+            "seconds": 34.75656829998479
+          },
+          "review_report": {
+            "calls": 1,
+            "seconds": 37.37383240001509
+          },
+          "review_workspace": {
+            "calls": 43,
+            "seconds": 45.76066530004027
+          }
+        },
+        "other_elapsed_seconds": 221.18525322564528,
+        "model_review_seconds": null,
+        "helper_nonzero_exits": [
+          {
+            "module": "review_workspace",
+            "exit_code": 2
+          },
+          {
+            "module": "review_workspace",
+            "exit_code": 2
+          }
+        ]
+      },
+      {
+        "reviewer": "MergeReviewer",
+        "variant": "candidate",
+        "run": 3,
+        "elapsed_seconds": 428.48099640000146,
+        "within_600_seconds": true,
+        "helper_cli_calls": 25,
+        "git_calls": 2298,
+        "helper_output_bytes": 386450,
+        "helper_seconds": 156.20447729996522,
+        "helper_wall_union_seconds": 144.0787467956543,
+        "helper_calls_overlap": true,
+        "helper_stages": {
+          "git_review_context": {
+            "calls": 2,
+            "seconds": 77.04921860000468
+          },
+          "review_report": {
+            "calls": 1,
+            "seconds": 29.30332669999916
+          },
+          "review_session": {
+            "calls": 1,
+            "seconds": 0.044754000002285466
+          },
+          "review_workspace": {
+            "calls": 21,
+            "seconds": 49.807177999959094
+          }
+        },
+        "other_elapsed_seconds": 284.40224960434716,
+        "model_review_seconds": null,
+        "helper_nonzero_exits": [
+          {
+            "module": "review_workspace",
+            "exit_code": 2
+          },
+          {
+            "module": "review_workspace",
+            "exit_code": 2
+          }
+        ]
+      }
+    ],
+    "summaries": [
+      {
+        "reviewer": "MergeReviewer",
+        "variant": "baseline",
+        "runs": 3,
+        "within_600": 3,
+        "review_complete": 3,
+        "context_cleaned": 3,
+        "max_elapsed_seconds": 396.04793000000063,
+        "median_elapsed_seconds": 356.10069950000616,
+        "median_helper_cli_calls": 45,
+        "median_git_calls": 1860,
+        "median_helper_output_bytes": 268769,
+        "median_helper_seconds": 107.0537424000504
+      },
+      {
+        "reviewer": "MergeReviewer",
+        "variant": "candidate",
+        "runs": 3,
+        "within_600": 3,
+        "review_complete": 3,
+        "context_cleaned": 3,
+        "max_elapsed_seconds": 439.7047011999821,
+        "median_elapsed_seconds": 428.48099640000146,
+        "median_helper_cli_calls": 35,
+        "median_git_calls": 1704,
+        "median_helper_output_bytes": 3351998,
+        "median_helper_seconds": 101.45110759991803
+      }
+    ],
+    "quality": [
+      {
+        "job": "merge-reviewer-baseline-1",
+        "required_paths_reviewed": 20,
+        "impact_nodes": 28,
+        "repository_coverage": 12,
+        "four_chains_accounted": true,
+        "unrelated_repositories_excluded": 3,
+        "P1_findings": 4,
+        "pending_confirmations": 0,
+        "fixed_heads_match_fixture": true,
+        "archived_report_hash_verified": true,
+        "context_absent_verified": true,
+        "semantic_manual_review": "All six describe unchanged relays forwarding renamed total payload to amount-reading consumers; source-derived KeyError regression, no note-only false positives."
+      },
+      {
+        "job": "merge-reviewer-baseline-2",
+        "required_paths_reviewed": 20,
+        "impact_nodes": 28,
+        "repository_coverage": 12,
+        "four_chains_accounted": true,
+        "unrelated_repositories_excluded": 3,
+        "P1_findings": 4,
+        "pending_confirmations": 0,
+        "fixed_heads_match_fixture": true,
+        "archived_report_hash_verified": true,
+        "context_absent_verified": true,
+        "semantic_manual_review": "All six describe unchanged relays forwarding renamed total payload to amount-reading consumers; source-derived KeyError regression, no note-only false positives."
+      },
+      {
+        "job": "merge-reviewer-baseline-3",
+        "required_paths_reviewed": 20,
+        "impact_nodes": 28,
+        "repository_coverage": 12,
+        "four_chains_accounted": true,
+        "unrelated_repositories_excluded": 3,
+        "P1_findings": 4,
+        "pending_confirmations": 0,
+        "fixed_heads_match_fixture": true,
+        "archived_report_hash_verified": true,
+        "context_absent_verified": true,
+        "semantic_manual_review": "All six describe unchanged relays forwarding renamed total payload to amount-reading consumers; source-derived KeyError regression, no note-only false positives."
+      },
+      {
+        "job": "merge-reviewer-candidate-1",
+        "required_paths_reviewed": 20,
+        "impact_nodes": 28,
+        "repository_coverage": 12,
+        "four_chains_accounted": true,
+        "unrelated_repositories_excluded": 3,
+        "P1_findings": 4,
+        "pending_confirmations": 0,
+        "fixed_heads_match_fixture": true,
+        "archived_report_hash_verified": true,
+        "context_absent_verified": true,
+        "semantic_manual_review": "All six describe unchanged relays forwarding renamed total payload to amount-reading consumers; source-derived KeyError regression, no note-only false positives."
+      },
+      {
+        "job": "merge-reviewer-candidate-2",
+        "required_paths_reviewed": 20,
+        "impact_nodes": 28,
+        "repository_coverage": 12,
+        "four_chains_accounted": true,
+        "unrelated_repositories_excluded": 3,
+        "P1_findings": 4,
+        "pending_confirmations": 0,
+        "fixed_heads_match_fixture": true,
+        "archived_report_hash_verified": true,
+        "context_absent_verified": true,
+        "semantic_manual_review": "All six describe unchanged relays forwarding renamed total payload to amount-reading consumers; source-derived KeyError regression, no note-only false positives."
+      },
+      {
+        "job": "merge-reviewer-candidate-3",
+        "required_paths_reviewed": 20,
+        "impact_nodes": 28,
+        "repository_coverage": 12,
+        "four_chains_accounted": true,
+        "unrelated_repositories_excluded": 3,
+        "P1_findings": 4,
+        "pending_confirmations": 0,
+        "fixed_heads_match_fixture": true,
+        "archived_report_hash_verified": true,
+        "context_absent_verified": true,
+        "semantic_manual_review": "All six describe unchanged relays forwarding renamed total payload to amount-reading consumers; source-derived KeyError regression, no note-only false positives."
+      }
+    ],
+    "observed_workflow_retries": {
+      "candidate-3": "One extra successful capture after background-process state confusion, first context cleaned; two contract JSON authoring corrections. All costs and both contexts retained in evidence/verified absent."
+    },
+    "conclusion": "All6 complete and below600s. Candidate helper median lower, full Agent median higher; Agent wall-time acceleration is not established in this sample."
+  },
+  "evidence_root": "workspace/.tmp/reviewer-basic-20261016-215439/",
+  "date_range": "2026-10-16/2026-10-17 Asia/Taipei"
+}

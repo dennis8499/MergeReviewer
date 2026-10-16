@@ -10,6 +10,67 @@ from tests.support import run_git as git, write_text
 
 
 class FrozenSnapshotTests(ReviewFixture):
+    def test_capture_reuses_tree_inventory_and_closure_without_skipping_owned_checks(self):
+        self.commit("nested contract\n", "nested/有 空格.py")
+        with mock.patch.object(api, "run_git", wraps=api.run_git) as calls:
+            context, manifest = self.capture()
+        repo = workspace.repository(manifest, manifest["selected_repo"])
+        listings = [call for call in calls.call_args_list if call.args[1][0] == "ls-tree"]
+        original = [call for call in listings if "-t" in call.args[1]]
+        owned = [call for call in listings if "-t" not in call.args[1]]
+        keys = [(str(call.args[0]), call.args[1][-1], tuple(sorted(call.kwargs["env"].items())))
+                for call in original]
+        self.assertEqual(len(set(keys)), len(keys))
+        self.assertLess(len(original), len(repo["sources"]) * 2)
+        self.assertEqual(len({source["tree_sha"] for source in repo["sources"].values()}), len(owned))
+        for call in owned:
+            self.assertEqual(workspace.evidence_repository(context, repo), call.args[0])
+        for source in repo["sources"].values():
+            listing = api.run_git(workspace.evidence_repository(context, repo),
+                                  ["ls-tree", "-r", "-z", source["tree_sha"]], binary=True,
+                                  env=workspace.source_environment(context, repo, source, api))
+            expected = []
+            for row in listing.split(b"\0"):
+                if row:
+                    meta, path = row.split(b"\t", 1)
+                    mode, kind, object_id = meta.decode("ascii").split()
+                    expected.append({"path": path.decode("utf-8"), "mode": mode, "kind": kind,
+                                     "blob_sha": object_id})
+            self.assertEqual(expected, source["files"])
+        base, merge_base = repo["sources"]["base"], repo["sources"]["merge-base"]
+        self.assertEqual(base["files"], merge_base["files"])
+        self.assertIsNot(base["files"], merge_base["files"])
+        self.assertIsNot(base["files"][0], merge_base["files"][0])
+
+    def test_capture_cache_isolates_repo_store_tree_and_capture_lifetime(self):
+        self.commit()
+        context, manifest = self.capture()
+        repo = workspace.repository(manifest, manifest["selected_repo"])
+        cache = workspace.CaptureTreeCache(context, api)
+        base, head = repo["sources"]["base"]["tree_sha"], repo["sources"]["head"]["tree_sha"]
+        with mock.patch.object(api, "run_git", wraps=api.run_git) as calls:
+            expected = cache.inventory(repo, base, {})
+            self.assertEqual(expected, cache.inventory(repo, base, {}))
+            cache.inventory({**repo, "id": "other-id"}, base, {})
+            cache.inventory(repo, base, {"GIT_NO_REPLACE_OBJECTS": "1"})
+            cache.inventory(repo, head, {})
+            self.assertEqual(4, calls.call_count)
+            workspace.CaptureTreeCache(context, api).inventory(repo, base, {})
+            self.assertEqual(5, calls.call_count)
+
+    def test_cached_capture_still_rejects_owned_inventory_damage(self):
+        self.commit()
+        original = api.run_git
+
+        def missing_owned_listing(repo, args, **kwargs):
+            if args[0] == "ls-tree" and "-t" not in args:
+                return b""
+            return original(repo, args, **kwargs)
+
+        with mock.patch.object(api, "run_git", side_effect=missing_owned_listing):
+            with self.assertRaisesRegex(ValueError, "frozen snapshot inventory differs"):
+                self.capture()
+
     def test_remote_updates_with_or_without_fetch_do_not_restart_snapshot_review(self):
         self.commit()
         remote = self.root / "origin.git"
@@ -128,10 +189,10 @@ class FrozenSnapshotTests(ReviewFixture):
         self.commit()
         seal = workspace.seal_snapshot
 
-        def fail_candidate(context, repo, git_api):
+        def fail_candidate(context, repo, git_api, **kwargs):
             if repo["path"] == str(consumer):
                 raise ValueError("candidate pack failed")
-            return seal(context, repo, git_api)
+            return seal(context, repo, git_api, **kwargs)
 
         with mock.patch.object(workspace, "seal_snapshot", side_effect=fail_candidate):
             context, manifest = self.capture()
