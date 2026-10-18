@@ -1,0 +1,9 @@
+{
+  "candidate": "05298732215327c20cc5f1f16be5f315d59cb27f",
+  "dependencies": {},
+  "previousTag": "v0.13.0",
+  "repository": "MergeReviewer",
+  "runId": "20261018T145255Z-40e8e7e0",
+  "schema": "workspace-release/v1",
+  "targetVersion": "0.14.0"
+}
