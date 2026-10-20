@@ -6,6 +6,7 @@
 - Pin all Repo SHAs before snapshot sealing; group explicit remote branch fetches once per remote and keep post-capture operations local.
 - Publish one Traditional Chinese report with five common sections, additive engineering details, validated technical records and sensitive evidence omission.
 - Preserve v3 drafts, all priorities, fixed citations, editable confirmations and historical reports.
+- Use the GitHub JSON media type for Actions artifact downloads while preserving binary media negotiation for Release assets.
 
 ## 0.14.0 — 2026-10-16
 
