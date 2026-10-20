@@ -62,7 +62,7 @@ class PendingConfirmationTests(ReviewFixture):
         explicit = workspace_report.validate(draft, manifest, context)
         self.assertEqual(omitted, explicit)
         self.assertTrue(explicit["review_complete"])
-        self.assertNotIn("待人工確認", workspace_report.render(explicit, manifest))
+        self.assertNotIn("### 待人工確認", workspace_report.render(explicit, manifest))
         self.assertNotIn("merge-confirmations:start", workspace_report.render(explicit, manifest))
 
     def test_incomplete_coverage_is_not_hidden_by_pending_confirmations(self):

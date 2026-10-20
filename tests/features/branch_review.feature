@@ -48,15 +48,15 @@ Feature: One Repo branch review with conditional impact extension
     Then the report is in the selected Repo
     And the filename contains the timestamp and 8 character branch commits
     And the report identifies the captured branch comparison
-    And the report has no technical appendix or coverage dump
+    And the report includes the validated technical review record
     And the report is the only published file
     And the owned context has been removed
 
-  Scenario: Publish six finding fields with only the selected frozen code evidence
+  Scenario: Publish common finding fields with only the selected frozen code evidence
     Given a branch fixture with 1 visible Repos
     When I prepare the explicit base and comparison branches
     And I publish a finding from the frozen evidence
     Then the report is in the selected Repo
-    And the finding has six ordered fields and only its frozen code excerpt
-    And the report has no technical appendix or coverage dump
+    And the finding has the common fields and only its frozen code excerpt
+    And the report includes the validated technical review record
     And the owned context has been removed

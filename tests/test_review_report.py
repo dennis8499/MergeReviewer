@@ -27,8 +27,8 @@ class ReviewReportTests(ReviewFixture):
         self.assertEqual([markdown], list(markdown.parent.iterdir()))
         self.assertFalse(context.exists())
         text = markdown.read_text(encoding="utf-8")
-        self.assertIn("# Merge Report: api", text)
-        comparison = text.split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("# 合併審查: api", text)
+        comparison = text.split("### 比較資訊\n", 1)[1].split("\n### ", 1)[0]
         self.assertIn("- Repo：`api`", comparison)
         self.assertIn(f"- 本機路徑：`{self.repo}`", comparison)
         self.assertIn(f"| 基礎分支 | `main` | `refs/heads/main` | `{base[:8]}` |", comparison)
@@ -38,9 +38,9 @@ class ReviewReportTests(ReviewFixture):
         self.assertNotIn(base, comparison)
         self.assertNotIn(head, comparison)
         self.assertNotIn("技術附錄", text)
-        self.assertNotIn(base, text)
-        self.assertNotIn(head, text)
-        self.assertLess(text.index("問題數量："), text.index("## 比較資訊"))
+        self.assertIn(base, text)
+        self.assertIn(head, text)
+        self.assertLess(text.index("問題數量："), text.index("### 比較資訊"))
         self.assertNotIn("## 問題\n", text)
         self.assertNotIn("## 下一步\n", text)
 
@@ -54,7 +54,7 @@ class ReviewReportTests(ReviewFixture):
         base, head = seed["sources"]["base"]["ref"], seed["sources"]["head"]["ref"]
         (context / "draft.json").write_text(json.dumps(self.draft(context, manifest)), encoding="utf-8")
         markdown = review_report.publish_report(context, context / "draft.json")
-        comparison = markdown.read_text(encoding="utf-8").split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
+        comparison = markdown.read_text(encoding="utf-8").split("### 比較資訊\n", 1)[1].split("\n### ", 1)[0]
         self.assertIn(f"| 基礎分支 | `origin/main` | `refs/remotes/origin/main` | `{base[:8]}` |", comparison)
         self.assertIn(f"| 比較分支 | `origin/feature` | `refs/remotes/origin/feature` | `{head[:8]}` |", comparison)
         self.assertIn("- 合併方向：`origin/feature` → `origin/main`", comparison)
@@ -70,7 +70,7 @@ class ReviewReportTests(ReviewFixture):
         self.assertFalse((self.root / "review-reports").exists())
         self.assertFalse((consumer / "review-reports").exists())
         self.assertEqual([markdown], list(markdown.parent.iterdir()))
-        comparison = markdown.read_text(encoding="utf-8").split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
+        comparison = markdown.read_text(encoding="utf-8").split("### 比較資訊\n", 1)[1].split("\n### ", 1)[0]
         self.assertIn(f"- 本機路徑：`{self.repo}`", comparison)
         self.assertNotIn(str(consumer), comparison)
 
@@ -88,29 +88,29 @@ class ReviewReportTests(ReviewFixture):
         markdown = review_report.publish_report(context, context / "draft.json")
         text = markdown.read_text(encoding="utf-8")
         self.assertIn("問題數量：P0 1／P1 1／P2 1／P3 1", text)
-        self.assertLess(text.index("## 比較資訊"), text.index("## 問題\n"))
-        self.assertLess(text.index("## 問題\n"), text.index("## 範圍與限制"))
-        self.assertLess(text.index("## 範圍與限制"), text.index("## 下一步"))
+        self.assertLess(text.index("## 問題詳情（工程師參考）\n"), text.index("### 比較資訊"))
+        self.assertLess(text.index("## 問題詳情（工程師參考）\n"), text.index("## 範圍與限制"))
+        self.assertLess(text.index("## 範圍與限制"), text.index("### 下一步"))
         sections = re.split(r"^### F-\d{3}｜", text, flags=re.MULTILINE)[1:]
         self.assertEqual(4, len(sections))
-        labels = ["問題描述", "重現原因", "預期結果", "實際結果", "證據", "建議改善方式"]
+        labels = ["問題名稱", "影響說明", "操作情境", "建議處理", "觸發條件", "證據說明", "影響範圍", "工程修正建議", "證據"]
         for item, section in zip(draft["findings"], sections):
             self.assertIn(f"### {item['id']}｜[{item['priority']}] {item['title']}", text)
             self.assertEqual(labels, re.findall(r"^\*\*([^*]+)\*\*$", section, flags=re.MULTILINE))
-            for label, field in zip(labels[:4], ("impact", "trigger", "expected", "actual")):
+            for label, field in (("影響說明", "impact"), ("觸發條件", "trigger")):
                 body = section.split(f"**{label}**", 1)[1].split("\n**", 1)[0]
                 self.assertIn(item[field], body)
-            reason = section.split("**重現原因**", 1)[1].split("**預期結果**", 1)[0]
+            reason = section.split("**操作情境**", 1)[1].split("**建議處理**", 1)[0]
             marker = "依程式推導，未實際重現" if item["scenario_source"] == "code-derived" else "已實際重現"
             self.assertIn(marker, reason)
-            evidence = section.split("**證據**", 1)[1].split("**建議改善方式**", 1)[0]
+            evidence = section.split("**證據**", 1)[1]
             self.assertIn(item["evidence_summary"], evidence)
             self.assertIn(item["evidence"][0]["ref"], evidence)
-            fix = section.split("**建議改善方式**", 1)[1]
+            fix = section
             for field in ("recommendation", "engineering_fix", "owner"):
                 self.assertIn(item[field], fix)
-        for heading in ("技術附錄", "逐檔覆蓋", "固定版本搜尋紀錄", "問題證據版本", "功能鏈與 Repo 判定", "變更與延伸契約"):
-            self.assertNotIn(heading, text)
+        for heading in ("逐檔覆蓋", "固定版本搜尋紀錄", "功能鏈與 Repo 判定", "變更與延伸契約"):
+            self.assertIn(heading, text)
         self.assertEqual([markdown], list(markdown.parent.iterdir()))
 
     def test_finding_excerpt_uses_only_frozen_selected_lines_and_does_not_mutate_draft(self):
@@ -416,12 +416,12 @@ class ReviewReportTests(ReviewFixture):
             markdown = review_report.publish_report(context, context / "draft.json")
         self.assertEqual(f"merge-review-20261014T091530123456Z-{base[:8]}-{head[:8]}.md", markdown.name)
         text = markdown.read_text(encoding="utf-8")
-        comparison = text.split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
+        comparison = text.split("### 比較資訊\n", 1)[1].split("\n### ", 1)[0]
         self.assertIn(f"| 基礎分支 | `main` | `refs/heads/main` | `{base[:8]}` |", comparison)
         self.assertIn(f"- 主要差異範圍（共同祖先 → 比較分支）：`{merge_base[:8]}` → `{head[:8]}`", comparison)
         self.assertNotIn(checkout[:8], comparison)
         self.assertNotIn("技術附錄", text)
-        self.assertNotIn(merge_base, text)
+        self.assertIn(merge_base, text)
 
     def test_publication_race_preserves_other_writer_report(self):
         context, manifest = self.capture()

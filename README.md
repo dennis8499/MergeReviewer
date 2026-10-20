@@ -1,6 +1,6 @@
 # Merge Reviewer
 
-`0.14.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
+`0.15.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
 目前 Skills root 已安裝 `output-style` 時優先使用其情境風格；沒有時沿用 [Concise 寫作規則](skills/merge-reviewer/references/report-style.md#共用-concise-規則)。必要報告欄位、證據、缺口及錯誤資訊完整保留；要求詳解時完整說明。
 
@@ -8,7 +8,7 @@
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.14.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
+從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.15.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
 在 Codex 對話輸入：
 
@@ -38,9 +38,9 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 <所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md
 ~~~
 
-標題為 `Merge Report: <Repo>`，採結論先行的繁體中文精簡風格，全數問題依原生優先程度排序。結論與問題數量後的「比較資訊」列出 Repo／本機路徑、輸入分支、實際 ref、8 碼 commit、合併方向及共同祖先到比較分支的主要差異範圍。
+標題為 `合併審查: <Repo>`，固定五章：審查結論、問題總攬、問題詳情（工程師參考）、範圍與限制、技術審查紀錄（工程師參考）。由執行 Skill 的 agent 統一依 Codex Code Review 準則判斷，不另呼叫原生審查引擎，也不設定產品預設模型。
 
-每項問題依序呈現「問題描述、重現原因、預期結果、實際結果、證據、建議改善方式」。證據只顯示能說明問題的固定版本行段，附 Repo、路徑、行號、來源及完整 ref；空檔案註明 0 行。報告省略技術附錄，逐檔覆蓋、功能鏈及搜尋紀錄仍完整參與內部驗證。
+每項問題包含名稱、影響、操作情境與建議處理；技術證據列觸發方式、證據說明、影響範圍、工程修正建議及最小固定行段。新增選填文字缺少時顯示「未提供」。技術紀錄保留已驗證的比較資訊、完整版本、覆蓋、功能鏈、契約及搜尋摘要；設定值、私鑰、認證行與原始搜尋命中內容省略或遮蔽。
 
 每次只產生一個 Markdown 檔案。時間戳為 UTC 發布時間，格式 `YYYYMMDDTHHMMSSffffffZ`（含微秒）；檔名依序使用擷取時基礎分支頂端與比較分支頂端 SHA 的固定前 8 碼，基礎分支取分支頂端而非共同祖先。同名時遞增時間戳，保留既有報告。
 
@@ -58,7 +58,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 python -m pip install -r requirements-dev.txt
 python -X utf8 -B -m unittest discover -s tests -v
 python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
-python scripts/package_release.py --tag v0.14.0
+python scripts/package_release.py --tag v0.15.0
 ~~~
 
 CI 維持 Linux／Windows × Python 3.10／3.14 矩陣；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及五個必要 helper，不包含測試及舊收據 runtime。

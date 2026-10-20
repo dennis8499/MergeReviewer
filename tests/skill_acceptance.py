@@ -70,7 +70,7 @@ def prepare(case):
         manifest = api.build_manifest(args)
         context = manifest["context_dir"]
         return {"case": case, "fixture_root": str(root), "context_dir": context,
-                "request": f"Use $merge-reviewer at {ROOT / 'skills/merge-reviewer'} to review orders-api main against feature/amount in this Group; follow the feature chain and produce JSON and Markdown.",
+                "request": f"Use $merge-reviewer at {ROOT / 'skills/merge-reviewer'} to review orders-api main against feature/amount in this Group; reuse the returned frozen context, follow the feature chain, author draft JSON with report_layout=engineering-review/v1 and complete operation_scenario, technical_trigger, technical_explanation, impact_scope and engineering_fix for every finding only inside that owned context, and publish ONE Markdown report under the selected Repo. Do not export JSON or recapture versions.",
                 "repositories": [{"id": r["id"], "name": r["name"]} for r in manifest["repositories"]]}
     except BaseException:
         if context:

@@ -1,6 +1,6 @@
 # MergeReviewer 詳細使用指南
 
-適用版本：**0.14.0**。主要讀者是使用 Codex 執行合併前審查的開發者；進階流程供工具維護者使用。
+適用版本：**0.15.0**。主要讀者是使用 Codex 執行合併前審查的開發者；進階流程供工具維護者使用。
 
 內容：安裝 → 第一次審查 → 參數 → 常見情境 → 多儲存庫判定 → 報告 → 疑難排解 → 升級 → 手動輔助程式。
 
@@ -20,7 +20,7 @@ python --version
 
 ### 安裝 ZIP 或原始碼
 
-使用 `merge-reviewer-0.14.0.zip`，解壓後得到 `merge-reviewer` 資料夾。發布套件見 [GitHub Releases](https://github.com/dennis8499/MergeReviewer/releases)；尚未發布時，可在原始碼根目錄執行 `python scripts/package_release.py --tag v0.14.0`，取得 `dist/merge-reviewer-0.14.0.zip`。
+使用 `merge-reviewer-0.15.0.zip`，解壓後得到 `merge-reviewer` 資料夾。發布套件見 [GitHub Releases](https://github.com/dennis8499/MergeReviewer/releases)；尚未發布時，可在原始碼根目錄執行 `python scripts/package_release.py --tag v0.15.0`，取得 `dist/merge-reviewer-0.15.0.zip`。
 
 以下假設目前目錄已解壓：
 
@@ -41,7 +41,7 @@ Test-Path -LiteralPath (Join-Path $skillTarget "references\usage.md")
 Get-Content -LiteralPath (Join-Path $skillTarget "VERSION")
 ~~~
 
-兩個 `Test-Path` 應為 `True`，`VERSION` 應為 0.14.0。原始碼安裝把來源換成 `.\skills\merge-reviewer`；macOS／Linux 使用相同技能目錄規則與對應檔案複製工具。
+兩個 `Test-Path` 應為 `True`，`VERSION` 應為 0.15.0。原始碼安裝把來源換成 `.\skills\merge-reviewer`；macOS／Linux 使用相同技能目錄規則與對應檔案複製工具。
 
 在 Codex 技能清單確認 **Merge Reviewer（合併審查）**。若仍未載入，重新開始工作階段，確認清單及安裝路徑。
 
@@ -179,95 +179,15 @@ $merge-reviewer VSCode工作區="C:\Work\Shop.code-workspace" 專案名稱=Order
 
 ## 6. Merge Report 解讀
 
-進度、問答及新增或更新文件使用繁體中文（zh-TW），從開始即套用[共用 Concise 規則](report-style.md#共用-concise-規則)。簡單問答一至三句，正式報告保留全部必要內容；要求詳解時完整說明。若在 Claude Code 中套用這份輸出規範，請依 [Claude Code 使用 Concise](report-style.md#claude-code-使用-concise) 指引啟用並確認內建 `Concise`，查看選單、設定檔及版本需求。此設定會影響整個 Claude Code 工作階段；MergeReviewer 的核心審查仍由 Codex 執行。
+報告標題為 `合併審查: <Repo>`，依序包含「審查結論、問題總攬、問題詳情（工程師參考）、範圍與限制、技術審查紀錄（工程師參考）」五章。完整欄位與證據規則見[報告風格](report-style.md#報告與聊天結果)。
 
-以下是**格式示意，不是本次工作的實際審查結果**：
+目前 agent 統一依 Codex Code Review 準則判斷，不另呼叫原生審查引擎，也不設定或變更執行模型。單次仍只有一組 Repo／base／head；所有其他 Repo 固定當前本機 HEAD。先選定全部 SHA，再封裝快照，全部必要快照完成後才開始語意審查。本機分支不連雲端；明確遠端分支按 remote 合併為一次精確 fetch。後續 ref 變動不自動重取或重審。
 
-~~~markdown
-# Merge Report: OrderService
+問題依 P0–P3 全數保留，包含名稱、影響、操作情境與建議處理，以及觸發、證據說明、影響範圍、工程修正建議與固定證據。新增選填文字缺少時顯示「未提供」。技術紀錄保留已驗證的完整版本、逐檔覆蓋、功能鏈、Repo 判定、契約及搜尋摘要；省略設定值、私鑰和認證內容，不複製原始搜尋命中結果。
 
-**修正後再合併**｜發現具體問題。付款請求將以分儲存的金額再次除以 100，送出的金額縮小為原值的百分之一。
+`審查未完成` 表示必要來源或覆蓋仍有缺口；`待人工確認` 表示具體疑問尚缺驗證。兩者均不能當作通過。已確認問題及固定證據仍保留。靜態推導不得聲稱已執行測試或實際重現。待確認項與 P0–P3 分開計數，人工僅編輯 `merge-confirmations:start/end` 中的 checkbox、核對人、日期、確認結果與證據。
 
-問題數量：P0 0／P1 1／P2 0／P3 0
-
-## 比較資訊
-
-- Repo：`OrderService`
-- 本機路徑：`C:\Work\OrderService`
-
-| 角色 | 輸入分支 | 實際 ref | Commit（前 8 碼） |
-| --- | --- | --- | --- |
-| 基礎分支 | `main` | `refs/heads/main` | `1234abcd` |
-| 比較分支 | `feature/payment` | `refs/heads/feature/payment` | `5678efab` |
-
-- 合併方向：`feature/payment` → `main`
-- 主要差異範圍（共同祖先 → 比較分支）：`a1b2c3d4` → `5678efab`
-
-## 問題
-
-### F-001｜[P1] 付款請求再次換算已採分儲存的金額
-
-**問題描述**
-
-訂單的 totalCents 已是以分儲存的金額，再除以 100 會讓付款請求的 amountCents 縮小為原值的百分之一。
-
-**重現原因**
-
-訂單 totalCents 為 1999 時進入付款流程；建立請求時仍沿用以元轉換的除法。
-
-依程式推導，未實際重現。
-
-**預期結果**
-
-付款請求傳送 amountCents: 1999。
-
-**實際結果**
-
-程式會傳送 amountCents: 19.99。
-
-**證據**
-
-`OrderService/src/payment.ts:18–19`（來源：`head`；固定版本：`5678efab5678efab5678efab5678efab5678efab`）
-
-```
-const amountCents = order.totalCents / 100;
-return payment.charge({ amountCents });
-```
-
-**建議改善方式**
-
-直接傳送 order.totalCents，移除重複換算，並加入 1999 分訂單的請求金額測試。（開發）
-
-## 範圍與限制
-
-- 跨 Repo 延伸：disabled；宣告工作區只有一個 Git 根目錄。
-- 已執行檢查：無
-- 未執行檢查：未執行專案測試；本次為靜態審查。
-~~~
-
-「比較資訊」取自本次擷取的固定證據：輸入分支保留原始名稱，實際 ref 顯示使用的是本機或指定遠端分支。摘要的 commit 為固定前 8 碼，問題證據附完整固定 ref。合併方向為比較分支到基礎分支；主要差異範圍則是共同祖先到比較分支。
-
-新快照在開始的準備階段將這些固定版本、完整樹狀物件、合併預覽及適用指示保存到本次 owned 暫存證據庫。報告列擷取起迄時間，結論只適用於當次 SHA；審查期間雲端或本機更新、原 Repo 清理物件、工作區宣告改變均不切換本次來源，也不自動重啟審查。需要審查新版本時另開一次任務。
-
-有問題時依原生 P0–P3 全數列出，每項依序呈現「問題描述、重現原因、預期結果、實際結果、證據、建議改善方式」。P0 為最高優先程度，P3 較低；本技能不增加定級門檻。沒有問題時直接說明「未發現具體問題」，省略問題區段。
-
-證據只選能證明問題的最小必要行段，發布器直接從指定固定版本擷取，附 Repo／路徑、行號、來源及完整 ref；固定版本為空檔案時標示「固定版本內容為空（0 行）」。報告不含技術附錄，逐檔覆蓋、跨 Repo 判定、功能鏈及搜尋仍完整參與內部驗證，必要缺口與未執行檢查留在範圍與限制。
-
-| 狀態 | 如何解讀 |
-| --- | --- |
-| 發現具體問題 | 審查完整，找到有固定證據支持的問題。 |
-| 沒有差異 | 有效範圍及預覽沒有需要審查的變更。 |
-| 未發現具體問題 | 完整範圍沒有足夠證據建立問題，不保證完全沒有錯。 |
-| 審查未完成 | 必要來源或覆蓋有缺口，不能當作通過；已有問題仍有效。 |
-| 待人工確認 | 有具體疑問尚缺驗證證據，保留已完成的審查及已確認問題，不能當作通過。 |
-
-合併建議是下一步：必要缺口需補做；P0 暫緩；P1 修正後再合併；仍有待確認項需人工確認；其他可以合併，仍需遵循專案測試與核准流程。
-
-待確認項不計入 P0–P3，會列出缺少證據、關聯變更與人工確認方式。報告的 `merge-confirmations:start/end` 區塊提供未勾選 checkbox、核對人、日期、確認結果與證據欄位；僅編輯這段人工紀錄，上方固定判斷保留。勾選不會自動重算原始結論。
-
-報告中的「跨 Repo 延伸」為 `disabled`、`complete` 或 `incomplete`。是否完成審查以「審查狀態」及檢查缺口為準；準備輔助程式的 `context_complete` 只代表證據準備情形。
-
-`code-derived` 是靜態推導；`reproduced` 才表示已執行重現。未執行的專案測試會列明，不可把靜態審查當成測試通過。
+只發布一份所選 Repo 的 `review-reports/merge-review-<UTC時間戳>-<base前8碼>-<head前8碼>.md`；內部 draft JSON 留在 owned context，並非另一份公開產出。保留歷史報告。快照結論僅適用當次 SHA；需要審查新版時另開任務。
 
 ## 7. 疑難排解
 
@@ -304,7 +224,7 @@ return payment.charge({ amountCents });
 | 儲存庫群組根目錄報告／多儲存庫明細 | 新版只在所選儲存庫發布單一 Merge Report；相關證據併入對應問題，覆蓋及搜尋紀錄供內部驗證。 |
 | 輸出 JSON／`--include-json` | 已移除；最終只發布 Markdown。 |
 
-GitlabWorkSpace **0.24.4** 整合 MergeReviewer **0.14.0** 的原生分支審查介面。仍固定 **MergeReviewer 0.11.0** 的舊版工作台須更新完整 VSIX／組合包；不要將 0.14.0 直接覆蓋到其依賴 MR／`quick`／收據的目錄。獨立技能可直接依本指南安裝完整新版。
+GitlabWorkSpace **0.24.4** 整合 MergeReviewer **0.15.0** 的原生分支審查介面。仍固定 **MergeReviewer 0.11.0** 的舊版工作台須更新完整 VSIX／組合包；不要將 0.15.0 直接覆蓋到其依賴 MR／`quick`／收據的目錄。獨立技能可直接依本指南安裝完整新版。
 
 ## 9. 進階：手動輔助程式
 

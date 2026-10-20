@@ -1,5 +1,12 @@
 # Change log
 
+## 0.15.0 — 2026-10-20
+
+- Keep one Repo/base/head request and unified agent review using Codex Code Review criteria, without a runtime model preset.
+- Pin all Repo SHAs before snapshot sealing; group explicit remote branch fetches once per remote and keep post-capture operations local.
+- Publish one Traditional Chinese report with five common sections, additive engineering details, validated technical records and sensitive evidence omission.
+- Preserve v3 drafts, all priorities, fixed citations, editable confirmations and historical reports.
+
 ## 0.14.0 — 2026-10-16
 
 - Seal starting versions, merge previews and applicable instructions in independent evidence repositories; later ref changes and source garbage collection do not change the captured review.

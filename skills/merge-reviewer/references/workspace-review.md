@@ -14,9 +14,9 @@ python "<skill-dir>/scripts/git_review_context.py" --workspace "<root>" --projec
 
 其他欄位：`workspace_roots`、`extension_reason`、`review_basis=codex-native`、`repositories`、`required_coverage`、`changed_contracts`、`searches`、`context_gaps`。所選儲存庫記錄兩個分支的固定版本、差異、合併父提交與合併預覽；其他儲存庫只擷取自身 HEAD。
 
-新 context 加上 `snapshot_policy=frozen-start/v1`、`capture_completed_at` 及 `workspace_instructions`。各成功擷取的 Repo 帶有 `snapshot`（`policy`、owned 相對 `git_dir`、`captured_at`、`object_format`）及固定 `instructions` 索引；所有來源的 `objects` 都指向該 owned Git 證據庫。普通非 thin pack 保存所需 commit、完整 tree/blob 及預覽物件，不借用原 Repo objects、不依賴原分支或後續 fetch。準備階段完成前仍需完整取得物件；完成後雲端／本機更新、force push、原 Repo GC 或工作區宣告變動不會替換或使這份快照失效。
+新 context 加上 `snapshot_policy=frozen-start/v1`、`refs_pinned_at`、`capture_completed_at` 及 `workspace_instructions`。各成功擷取的 Repo 帶有 `snapshot`（`policy`、owned 相對 `git_dir`、`captured_at`、`object_format`）及固定 `instructions` 索引；所有來源的 `objects` 都指向該 owned Git 證據庫。普通非 thin pack 保存所需 commit、完整 tree/blob 及預覽物件，不借用原 Repo objects、不依賴原分支或後續 fetch。準備階段完成前仍需完整取得物件；完成後雲端／本機更新、force push、原 Repo GC 或工作區宣告變動不會替換或使這份快照失效。
 
-快照紀錄的是準備階段選定的各個 SHA，跨 Repo 不宣稱同一瞬間的原子擷取。報告列出準備起迄時間並只適用於這次固定版本；不自動重審或補抓新版本。缺少 `snapshot_policy` 的舊 v3 context 維持原本發布前漂移驗證，不能視為自足快照。
+準備時先固定入口 base／head 與所有其他 Repo 當前本機 HEAD，再使用這些 SHA 封裝全部快照；其間 ref 移動不切換已選版本，必要物件遺失則明確失敗、不自動重取。快照紀錄的是準備階段選定的各個 SHA，跨 Repo 不宣稱同一瞬間的原子擷取。報告列出準備起迄時間並只適用於這次固定版本；不自動重審或補抓新版本。缺少 `snapshot_policy` 的舊 v3 context 維持原本發布前漂移驗證，不能視為自足快照。
 
 ~~~powershell
 python "<skill-dir>/scripts/review_workspace.py" inventory --context-dir "<context>" --repo repo-000
@@ -80,7 +80,8 @@ python "<skill-dir>/scripts/review_workspace.py" batch-register-contract --conte
 ~~~json
 {
   "schema": "merge-reviewer-workspace-result/v3",
-  "summary": "已檢查本次變更，未建立有證據的具體問題。",
+  "report_layout": "engineering-review/v1",
+  "summary": "已檢查事件欄位變更與消費端，確認一項相容性問題。",
   "coverage": [{
     "repo": "repo-000", "source": "head", "path": "src/orders.py", "status": "reviewed",
     "evidence": [{
@@ -88,13 +89,32 @@ python "<skill-dir>/scripts/review_workspace.py" batch-register-contract --conte
       "path": "src/orders.py", "line_start": 18, "line_end": 24
     }]
   }],
-  "findings": [],
+  "findings": [{
+    "id": "F-001", "priority": "P1", "title": "事件金額欄位改名導致消費端拒絕資料",
+    "impact": "既有消費端無法完成訂單結算。",
+    "trigger": "publisher 改送 amountCents，但已固定的 validator 仍要求 totalCents。",
+    "expected": "部署新 publisher 後既有消費端仍可處理事件。",
+    "actual": "validator 因缺少 totalCents 拒絕新事件。",
+    "operation_scenario": "使用者建立訂單後，背景結算服務接收 orders.created 事件並驗證金額。",
+    "technical_trigger": "執行新 publisher 產生的事件會進入仍讀 totalCents 的驗證路徑。",
+    "technical_explanation": "變更移除舊欄位，但消費端相容層尚未同步，缺值會觸發固定驗證分支。",
+    "impact_scope": "本次訂單事件 publisher 與證據鏈中仍要求舊欄位的直接消費端。",
+    "recommendation": "保留舊欄位別名並加入契約回歸測試。", "owner": "開發",
+    "engineering_fix": "先讓事件同時提供 totalCents 與 amountCents；消費端升級後再移除別名。",
+    "scenario_source": "code-derived",
+    "evidence": [{
+      "repo": "repo-000", "source": "head", "ref": "<固定完整提交 SHA>",
+      "path": "src/orders.py", "line_start": 18, "line_end": 24
+    }]
+  }],
   "next_steps": [],
   "tests_executed": [],
   "tests_not_executed": ["未執行專案測試；本次為靜態審查。"],
   "limitations": []
 }
 ~~~
+
+這是有問題時的格式示意，必須替換為實際結論與固定證據；沒有已確認問題時使用 `findings: []`。本次新草稿一律帶 `report_layout="engineering-review/v1"`，每項 finding 必填 `operation_scenario`、`technical_trigger`、`technical_explanation`、`impact_scope`、`engineering_fix`，均須為具體非空文字，不能填「未提供」。標記或欄位不完整是可修正草稿錯誤；修正後沿用原快照重試。沒有標記的舊 v3 草稿仍可發布，缺少的工程欄位顯示「未提供」，不因此重取證據。
 
 `coverage` 恰好涵蓋每個 `(repo, source, path)`，含改名舊路徑及合併預覽。`reviewed` 需固定證據；`metadata-only`／`not-reviewed` 需原因並使結果未完成。二進位檔案／子模組不能僅靠中繼資料宣稱語意審查完整。
 
@@ -105,7 +125,7 @@ python "<skill-dir>/scripts/review_workspace.py" batch-register-contract --conte
 同一份結果另加 `impact_coverage` 與 `repository_coverage`，追查必要的直接／間接影響；其他儲存庫不成為第二起點。
 
 1. 從實際變更行擷取 API、事件、資料、套件、設定或行為契約。每個已審查的變更路徑需固定契約；無法理解的路徑保留未完成。
-2. 契約 JSON 包含 `id`、`root`（一筆 `required_coverage`）、`kind=api|event|package|data|table|config|behavior`、`symbol`、`evidence`、`search_terms`（`query`／`reason`）。搜尋詞出現在固定變更證據；別名需自己的固定證據（`evidence`）。註冊後以契約 ID 搜尋。
+2. 契約 JSON 包含 `id`、`root`（一筆 `required_coverage`）、`kind=api|event|package|data|table|config|behavior`、`symbol`、`evidence`、`search_terms`（`query`／`reason`）。初次註冊即選至少兩個不同且在固定 anchor 中出現的契約詞，包含精確 symbol 與相關欄位／Topic／API 名稱，供無關 Repo 的替代詞排除。必要時擴至最小相關行段；別名需自己的固定證據（`evidence`）。註冊後以契約 ID 搜尋，所有紀錄由 helper 保存，不直接修改 manifest 或搜尋 ledger。
 3. 閱讀呼叫端／消費端，發現延伸契約時加上 `parent_ids` 並繼續查找，直到必要鏈路查清或標為 `unresolved`。預覽契約使用合併預覽來源。
 4. 每個儲存庫記錄 `seed|related|not-related|unresolved`、原因及 `search_ids`。每個跨儲存庫契約都要搜尋候選的固定主來源；排除需至少兩個不同且相關的詞，解釋符合／不符合結果。
 5. 功能鏈節點包含 `id`、`repo`、`source`、`path`、`status=reviewed|not-reviewed`、`reason`、`contract_ids`、`related_to`、`evidence`。變更覆蓋紀錄（`coverage`）的 `impact_ids` 連到自己的固定根，涵蓋直接註冊的變更契約；延伸契約在自身來源節點引用證據，不需回填成來源檔案的契約。所有節點從變更根可達，循環去重。
@@ -121,9 +141,9 @@ python "<skill-dir>/scripts/review_workspace.py" read --context-dir "<context>" 
 
 ## 問題與發布
 
-問題紀錄包含 `id`（F-001 起連續編號）、原生 `priority`（P0–P3 順序）、`title`、`impact`、`trigger`、`expected`、`actual`、`recommendation`、`owner`（開發／維運設定／QA）、`scenario_source`（`code-derived`／`reproduced`）及 `evidence`。選填 `evidence_summary`／`engineering_fix`。至少一條證據連到已閱讀的所選儲存庫變更，其餘可包含既有消費端。
+問題紀錄包含 `id`（F-001 起連續編號）、原生 `priority`（P0–P3 順序）、`title`、`impact`、`trigger`、`expected`、`actual`、`recommendation`、`owner`（開發／維運設定／QA）、`scenario_source`（`code-derived`／`reproduced`）及 `evidence`。選填非空文字 `operation_scenario`（操作情境）、`technical_trigger`（技術觸發方式）、`technical_explanation`（證據說明）、`impact_scope`（影響範圍）、`evidence_summary`（證據補充）及 `engineering_fix`（工程修正建議）。至少一條證據連到已閱讀的所選儲存庫變更，其餘可包含既有消費端。
 
-v3 輸入欄位維持上述名稱；報告的六欄依序對應 `impact`（問題描述）、`trigger` 與 `scenario_source`（重現原因）、`expected`（預期結果）、`actual`（實際結果）、`evidence` 與選填 `evidence_summary`（證據）、`recommendation`、`owner` 與選填 `engineering_fix`（建議改善方式）。`code-derived` 只能標為依程式推導，`reproduced` 須有實際執行紀錄。
+v3 必填欄位與 CLI 維持相容。新報告呈現問題名稱、影響、操作情境與建議處理，技術證據包含觸發條件、技術觸發方式、證據說明、影響範圍、工程修正建議及固定片段。新增選填文字及既有工程修正建議缺少時顯示「未提供」，不得推造內容。預期與實際結果、責任角色及證據補充仍保留。`code-derived` 只能標為依程式推導，`reproduced` 須有實際執行紀錄。
 
 每條非空文字問題證據必填 `line_start`／`line_end`，以 1 起算且包含兩端；選取能證明問題的最小必要行段，不附無關上下文。發布器依 Repo、來源、完整 ref、路徑及行號驗證並擷取固定內容，草稿不必提供程式碼片段。固定版本為空檔案時，兩個行號可同時省略，報告標示「固定版本內容為空（0 行）」；必要時另引用基礎版本的相關行段。一般覆蓋紀錄仍沿用既有證據規則。
 
@@ -131,18 +151,18 @@ v3 輸入欄位維持上述名稱；報告的六欄依序對應 `impact`（問�
 
 ### 待人工確認
 
-`pending_confirmations` 為選填陣列，省略等同 `[]`。用於具體疑問尚無足夠證據驗證的情況，不是已確認缺陷，也不接受 `priority`、`confirmed` 或草稿中的人工簽核。每項必填 `id`（Q-001 起連續編號）、`title`、`reason`、`missing_evidence`、`verification`（人工應執行的核對步驟文字）、`owner`（開發／維運設定／QA）及 `related_changes`（至少一筆恰含 `repo`、`source`、`path` 的必要變更覆蓋鍵）。例如：
+`pending_confirmations` 為選填陣列，省略等同 `[]`。只用於固定證據已指出的實際必要 caller／consumer／契約，其具體未知條件會影響本次變更判斷。僅缺任意外部消費端清單或假設 strict schema 不構成待確認／必要缺口，也不填入造成未完成的 draft `limitations`；固定工作區以外只是範圍界線。待確認不是已確認缺陷，也不接受 `priority`、`confirmed` 或草稿中的人工簽核。每項必填 `id`（Q-001 起連續編號）、`title`、`reason`、`missing_evidence`、`verification`（人工應執行的核對步驟文字）、`owner`（開發／維運設定／QA）及 `related_changes`（至少一筆恰含 `repo`、`source`、`path` 的必要變更覆蓋鍵）。以下僅為已有必要消費端證據時的格式示意：
 
 ~~~json
 {
   "id": "Q-001",
-  "title": "確認外部消費端是否支援新格式",
-  "reason": "工作區沒有部署中的外部消費端，無法確認相容性。",
-  "missing_evidence": "消費端版本與契約測試紀錄。",
-  "verification": "請服務負責人核對實際版本並提供契約測試結果。",
+  "title": "確認已登錄 BillingWorker 的實際欄位驗證模式",
+  "reason": "固定 consumer 註冊程式明列 BillingWorker 為必要消費端，且欄位驗證模式由部署值決定；本次新增欄位在 strict 模式下的處理仍缺實際部署證據。",
+  "missing_evidence": "已登錄 BillingWorker 的部署驗證模式與此變更的契約測試紀錄。",
+  "verification": "請該消費端負責人核對實際模式，並以本次固定 payload 執行契約測試。",
   "owner": "QA",
   "related_changes": [{"repo": "repo-000", "source": "head", "path": "src/orders.py"}],
-  "evidence": []
+  "evidence": [{"repo": "repo-000", "source": "head", "ref": "<固定完整提交 SHA>", "path": "src/consumer_registry.py", "line_start": 5, "line_end": 8}]
 }
 ~~~
 
@@ -156,9 +176,9 @@ v3 輸入欄位維持上述名稱；報告的六欄依序對應 `impact`（問�
 python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result "<context>/draft.json"
 ~~~
 
-只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。結論與問題數量後的「比較資訊」列出所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）。問題證據附完整固定 ref；多儲存庫延伸證據整合於同一份報告。
+只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。「技術審查紀錄（工程師參考）」中的「比較資訊」列出所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）。問題證據附完整固定 ref；多儲存庫延伸證據整合於同一份報告。
 
-Markdown 呈現 `extension_status=disabled|complete|incomplete`、`review_status`、`priority_counts` 對應的結論、問題及限制，不輸出技術附錄。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約仍完整驗證；省略顯示不改變完成程度或問題數量。發布器標準輸出只回傳完整報告路徑。
+Markdown 呈現 `extension_status=disabled|complete|incomplete`、`review_status`、`priority_counts` 對應的結論、問題及限制，並固定輸出審查結論、問題總攬、問題詳情（工程師參考）、範圍與限制、技術審查紀錄（工程師參考）五章。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約完整驗證後呈現於技術紀錄；搜尋僅列識別、來源、契約、狀態與命中數，不複製原始命中內容。設定與私鑰片段省略、認證或連線行遮蔽；仍先完整驗證 ref／行號，再保留原始內容 SHA-256，不能以遮蔽掩蓋無效證據。發布器標準輸出只回傳完整報告路徑。
 
 發布前核對快照的 owned 儲存、固定物件身分、指示、證據、覆蓋及固定搜尋。新的固定快照不再比較目前雲端／本機 refs、工作區宣告與 Repo 清單；owned 物件缺失或損壞不能回退到原 Repo。完整 Markdown 先寫入暫存，再原子發布到報告檔案；同名時遞增時間戳，不覆寫既有內容。預設成功、驗證失敗及寫入失敗均清理本次工作階段建立並由工具識別的證據目錄。
 

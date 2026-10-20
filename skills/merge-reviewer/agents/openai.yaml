@@ -1,7 +1,7 @@
 interface:
   display_name: "Merge Reviewer（合併審查）"
   short_description: "依明確的基礎與比較分支審查單一儲存庫，並追查相關契約與影響"
-  default_prompt: "使用 $merge-reviewer，指定單一儲存庫、基礎分支與比較分支，依 Codex 原生 Code Review 執行審查並發布繁體中文（zh-TW）的精簡 Merge Report。"
+  default_prompt: "使用 $merge-reviewer，指定單一儲存庫、基礎分支與比較分支，由目前 agent 依 Codex Code Review 準則統一審查並發布繁體中文（zh-TW）的精簡 Merge Report。"
 
 policy:
   allow_implicit_invocation: true

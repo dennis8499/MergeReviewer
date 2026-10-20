@@ -381,12 +381,12 @@ def instructions(context, manifest, repo_id, path, api):
     return {"instructions": entries}
 
 
-def branch_snapshot(context: Path, repo: dict, args, api, *, tree_cache=None):
+def branch_snapshot(context: Path, repo: dict, args, api, *, tree_cache=None, frozen_refs=None):
     native_args = copy.copy(args)
     native_args.workspace, native_args.workspace_file = repo["path"], None
     native_args.project = repo["path"]
     native_args.context_dir = str(safe_path(context, f"repos/{repo['id']}/native"))
-    native = api._build_manifest(native_args)
+    native = api._build_manifest(native_args, frozen_refs=frozen_refs)
     repo["native"] = native
     repo["review_source"] = "head"
     for name, reference in (("head", native["head_sha"]), ("base", native["base_sha"])):
@@ -448,8 +448,11 @@ def build(args, api) -> dict:
         "selected_repo": None, "repositories": [], "seed_repos": [], "searches": [],
         "changed_contracts": [], "context_gaps": [], "context_dir": str(context),
         "context_cleanup_required": True, "snapshot_policy": SNAPSHOT_POLICY,
-        "workspace_instructions": capture_workspace_instructions(context, roots, paths),
+        "workspace_instructions": [],
     }
+    branch_refs = None
+    # Pin every Repo before expensive tree enumeration/packing. Later phases
+    # consume these object IDs even if a branch or another Repo's HEAD moves.
     for index, candidate in enumerate(paths):
         record = {"id": f"repo-{index:03}", "name": candidate.name, "path": str(candidate),
                   "role": "seed" if candidate == seed else "candidate", "sources": {},
@@ -459,15 +462,33 @@ def build(args, api) -> dict:
             manifest["selected_repo"] = record["id"]
             manifest["seed_repos"] = [record["id"]]
         try:
-            tree_cache = CaptureTreeCache(context, api)
             actual = validate_root(candidate, api)
-            record["before"] = api.snapshot(actual)
             record["head_sha"] = api.verified_commit(actual, "HEAD")
-            safe_path(context, f"repos/{record['id']}").mkdir(parents=True)
             if candidate == seed:
-                branch_snapshot(context, record, args, api, tree_cache=tree_cache)
+                branch_refs = api.pin_branch_refs(actual, args)
             else:
                 require(record["head_sha"], "related Repo has no HEAD commit")
+            record["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
+        except (ValueError, OSError, api.ReviewContextError) as exc:
+            if candidate == seed:
+                raise
+            record["state"] = "error"
+            record["review_source"] = "head"
+            record["instructions"] = []
+            record["limitations"].append(str(exc))
+    manifest["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
+    manifest["workspace_instructions"] = capture_workspace_instructions(context, roots, paths)
+    for record in manifest["repositories"]:
+        if record["state"] == "error":
+            continue
+        candidate = actual = Path(record["path"])
+        try:
+            tree_cache = CaptureTreeCache(context, api)
+            record["before"] = api.snapshot(actual)
+            safe_path(context, f"repos/{record['id']}").mkdir(parents=True)
+            if candidate == seed:
+                branch_snapshot(context, record, args, api, tree_cache=tree_cache, frozen_refs=branch_refs)
+            else:
                 record["review_source"] = "head"
                 add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
             require(record["before"] == api.snapshot(actual), "Repo changed during capture; rebuild context")

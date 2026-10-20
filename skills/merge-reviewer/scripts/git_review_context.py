@@ -100,6 +100,8 @@ def run_git(
     if env:
         command_env.update(env)
     command_env["GIT_OPTIONAL_LOCKS"] = "0"
+    command_env["GIT_NO_LAZY_FETCH"] = "1"
+    command_env["GIT_TERMINAL_PROMPT"] = "0"
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -134,6 +136,8 @@ def run_git_capture(
     if env:
         command_env.update(env)
     command_env["GIT_OPTIONAL_LOCKS"] = "0"
+    command_env["GIT_NO_LAZY_FETCH"] = "1"
+    command_env["GIT_TERMINAL_PROMPT"] = "0"
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -159,6 +163,8 @@ def run_git_capture(
 def git_ok(repo: Path, args: Sequence[str]) -> bool:
     command_env = os.environ.copy()
     command_env["GIT_OPTIONAL_LOCKS"] = "0"
+    command_env["GIT_NO_LAZY_FETCH"] = "1"
+    command_env["GIT_TERMINAL_PROMPT"] = "0"
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -462,6 +468,7 @@ def remote_target_for_ref(repo: Path, ref: str) -> RemoteTarget | None:
 def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[str, str]]:
     actions: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
+    grouped: dict[str, list[RemoteTarget]] = {}
     for ref in refs:
         target = remote_target_for_ref(repo, ref)
         if not target:
@@ -474,27 +481,26 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
         if (target.remote, target.branch) in seen:
             continue
         seen.add((target.remote, target.branch))
+        grouped.setdefault(target.remote, []).append(target)
+    for remote, targets in grouped.items():
         try:
-            remote_ref = f"refs/heads/{target.branch}"
-            tracking_ref = f"refs/remotes/{target.remote}/{target.branch}"
             run_git(
                 repo,
                 [
                     "fetch",
                     "--no-tags",
                     "--no-prune",
-                    target.remote,
-                    f"{remote_ref}:{tracking_ref}",
+                    remote,
+                    *[f"refs/heads/{item.branch}:refs/remotes/{remote}/{item.branch}" for item in targets],
                 ],
             )
         except GitCommandError as exc:
             raise ReviewContextError(
-                f"fetch {target.remote}/{target.branch} 失敗（輸入 {target.input_ref}）：{exc.stderr}",
+                f"fetch {remote} 失敗（輸入 {', '.join(item.input_ref for item in targets)}）：{exc.stderr}",
                 hint="請確認網路、帳號權限，以及遠端是否有此分支；為避免審查過期內容，不會自動改用舊版本。",
             ) from exc
-        actions.append(
-            {"remote": target.remote, "branch": target.branch, "input_ref": target.input_ref}
-        )
+        actions.extend({"remote": remote, "branch": item.branch, "input_ref": item.input_ref}
+                       for item in targets)
     return actions
 
 
@@ -985,24 +991,14 @@ def write_context_bundle(
         raise
 
 
-def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
-    if not args.project or not args.base or not args.head:
-        raise ReviewContextError("請同時指定 --project、--base 與 --head。")
-    if args.mode != "merge":
-        raise ReviewContextError("只支援兩個分支的合併前審查。")
-
-    workspace = normalize_path(args.workspace)
-    workspace_file = normalize_path(args.workspace_file) if args.workspace_file else None
-    if workspace_file and not workspace_file.exists():
-        raise ReviewContextError(f"VS Code workspace 不存在：{workspace_file}")
-    repo, repositories = choose_repository(workspace, workspace_file, args.project)
+def pin_branch_refs(repo: Path, args: argparse.Namespace) -> dict[str, Any]:
+    """Resolve the requested branches once, before any Repo is sealed."""
     if is_shallow_repository(repo):
         raise ReviewContextError(
             "repository 是 shallow clone，無法可靠判定共同祖先；請先取得完整歷史後再審查。",
             hint="請執行 git fetch --unshallow 取得完整歷史後再重新審查。",
         )
 
-    before = snapshot(repo)
     base_input, head_input = args.base, args.head
     # Verify local branch namespaces before any remote synchronization.
     for value in (base_input, head_input):
@@ -1029,6 +1025,29 @@ def _build_manifest(args: argparse.Namespace) -> dict[str, Any]:
             f"找不到比較 ref 的 commit：{head_input}（查找來源：{ref_source_description(repo, head_input)}）",
             hint="請確認分支名稱拼字；遠端分支需加上 remote 前綴（例如 origin/feature），本機分支不需要。",
         )
+
+    return {"base_sha": base_sha, "head_sha": head_sha,
+            "base_resolved_ref": base_resolved_ref, "head_resolved_ref": head_resolved_ref,
+            "fetches": fetches}
+
+
+def _build_manifest(args: argparse.Namespace, *, frozen_refs: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    if not args.project or not args.base or not args.head:
+        raise ReviewContextError("請同時指定 --project、--base 與 --head。")
+    if args.mode != "merge":
+        raise ReviewContextError("只支援兩個分支的合併前審查。")
+
+    workspace = normalize_path(args.workspace)
+    workspace_file = normalize_path(args.workspace_file) if args.workspace_file else None
+    if workspace_file and not workspace_file.exists():
+        raise ReviewContextError(f"VS Code workspace 不存在：{workspace_file}")
+    repo, repositories = choose_repository(workspace, workspace_file, args.project)
+    before = snapshot(repo)
+    base_input, head_input = args.base, args.head
+    pinned = frozen_refs if frozen_refs is not None else pin_branch_refs(repo, args)
+    base_sha, head_sha = pinned["base_sha"], pinned["head_sha"]
+    base_resolved_ref, head_resolved_ref = pinned["base_resolved_ref"], pinned["head_resolved_ref"]
+    fetches = pinned["fetches"]
 
     merge_base_args = ["merge-base", "--all", base_sha, head_sha]
     merge_base_returncode, merge_base_output, merge_base_error = run_git_capture(repo, merge_base_args)
@@ -1280,7 +1299,7 @@ def context_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "workspace_file_sha256", "review_basis", "scope", "target", "extension_enabled",
         "extension_reason", "selected_repo", "seed_repos", "context_dir",
         "context_cleanup_required", "required_coverage", "context_complete", "context_gaps",
-        "snapshot_policy", "capture_completed_at", "workspace_instructions",
+        "snapshot_policy", "refs_pinned_at", "capture_completed_at", "workspace_instructions",
     )
     summary = {key: manifest[key] for key in fields if key in manifest}
     summary.update(schema="merge-reviewer-workspace-summary/v1",
