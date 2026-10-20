@@ -97,7 +97,21 @@ class ReviewFixture(unittest.TestCase):
                                                   contract_id=contract["id"])
                         ids += [s["id"] for s in result["searches"]]
             dispositions.append({"repo": record["id"], "status": state, "reason": reason, "search_ids": ids})
-        return {"schema": workspace.RESULT, "summary": "已完成所選範圍的固定證據檢查。",
+        seed = workspace.repository(manifest, manifest["selected_repo"])
+        final_name = "merge-preview" if "merge-preview" in seed["sources"] else "head"
+        final_ref = seed["sources"][final_name]["ref"]
+        parent_reviews = []
+        for view in manifest.get("required_merge_views", []):
+            items = []
+            for name in ("parent-" + view["parent"], final_name):
+                source = seed["sources"][name]
+                available = {entry["path"] for entry in source["files"] if entry["kind"] == "blob"}
+                path = next((path for path in view["paths"] if path in available), None)
+                if path:
+                    items.append({"repo": seed["id"], "source": name, "ref": source["ref"], "path": path})
+            parent_reviews.append({"id": view["id"], "status": "reviewed", "reason": "測試作者對照固定parent與最終版本。",
+                                   "evidence": items, "final_ref": final_ref})
+        return {"schema": workspace.RESULT, "summary": "已完成所選範圍的固定證據檢查。", "merge_parent_review": parent_reviews,
                 "coverage": coverage, "impact_coverage": nodes, "repository_coverage": dispositions,
                 "findings": [], "next_steps": [], "tests_executed": [],
                 "tests_not_executed": ["未執行專案測試；此結果為測試夾具。"], "limitations": []}

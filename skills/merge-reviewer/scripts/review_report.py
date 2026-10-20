@@ -48,7 +48,7 @@ def publish_report(context_dir: Path, result_file: Path, report_dir: Path | None
         draft_path = safe_path(context_dir, relative)
         manifest = load(context_dir)
         try:
-            draft = json.loads(draft_path.read_text(encoding="utf-8"))
+            draft = json.loads(draft_path.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError as exc:
             raise DraftValidationError(str(exc)) from exc
         published = publish(context_dir, draft, manifest, report_dir, timeout=timeout)

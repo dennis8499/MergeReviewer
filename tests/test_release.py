@@ -17,6 +17,15 @@ def load_release_module():
 
 
 class ReleasePackageTests(unittest.TestCase):
+    def test_crlf_text_payload_is_canonical_and_binary_is_exact(self):
+        release = load_release_module()
+        (self.skill / "SKILL.md").write_bytes(b"---\r\nname: merge-reviewer\r\n---\r\n")
+        (self.skill / "fixture.bin").write_bytes(b"\x00\r\n\xff")
+        archive = release.build_release(tag="v0.1.0", version_file=self.skill / "VERSION", skill_dir=self.skill, output_dir=self.output)
+        with ZipFile(archive) as packaged:
+            self.assertEqual(b"---\nname: merge-reviewer\n---\n", packaged.read("merge-reviewer/SKILL.md"))
+            self.assertEqual(b"\x00\r\n\xff", packaged.read("merge-reviewer/fixture.bin"))
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="merge-reviewer-release-test-")
         self.root = Path(self.temp.name)

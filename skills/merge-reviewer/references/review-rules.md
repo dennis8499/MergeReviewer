@@ -13,6 +13,21 @@
 - `pending_confirmations` 需先有固定程式、設定、註冊或測試證據指出實際且必要的 caller／consumer／契約，再說明哪個具體未知條件阻礙本次判斷。相關 diff 本身不是未知外部消費端存在的證據；保留已知關係、缺少證據與人工核對方式，不把疑問當成已確認問題。
 - 僅缺少任意工作區外 caller 清單，或假設可能有 strict schema consumer，屬於本次固定工作區的範圍界線，不構成必要缺口或待人工確認。已擷取消費端相容且沒有實際必要外部關係證據時，可依其餘實際覆蓋判斷完成，不添加假設性的 pending、draft `limitations`、未覆蓋節點或下一步。已知必要來源或條件缺失仍須保持未完成或待確認。
 
+## 觸發與影響分級
+
+先寫出實際觸發路徑、受影響資料／服務與必要前提，再沿用原生優先程度：
+
+- **P0**：正常啟動或一般操作就會無條件毀損整批持久業務資料，或使普遍使用者／資料立即暴露，且固定程式已證實此範圍；沒有特殊輸入、旗標或罕見狀態才會觸發的前提。不要因為還沒在正式環境執行而降為 P1。
+- **P1**：影響高但局限在某個功能、特定輸入、權限或其他必要條件；清楚寫出該條件與影響邊界。
+
+正例：服務正常啟動必經 `initialize()`，新增的無條件 `DELETE FROM invoices` 會清空既有發票，沒有租戶／批次限制或測試資料庫隔離證據，判 P0 並暫緩合併。反例：特定報價流程改送 `charge_minor`，本機結帳仍讀 `fee_minor` 而失敗，判 P1；有條件、僅針對使用者指定範圍的刪除也依實際影響判斷。SQL 的 DELETE 字樣、一般安全用詞或假設的正式環境本身都不是 P0 證據。
+
+## 確切 Repo 的 ownership 修復
+
+修復只限首次完整快照及語意分析以前的本機查核。先對使用者明確宣告的候選 Git 根目錄執行本機唯讀 ownership preflight，保存第一次 `dubious ownership` 原始診斷；核對已報錯路徑確在授權範圍，再把所有實際報錯的候選確切路徑一次傳給同一 helper 子程序的 `GIT_CONFIG_COUNT`／`GIT_CONFIG_KEY_n=safe.directory`／`GIT_CONFIG_VALUE_n=<exact-path>`，讓 capture 一次完成。原環境已有 count 時在其後追加，保留既有值。授權只限該 helper 及其 Git 子程序；不得修改全域、使用 `*` 或擴張工作區。單次直接 Git 查詢可用 `git -c safe.directory=<exact-path>`。若語意分析已開始或遠端已完成同步，維持本次固定 SHA 與缺口，不為 ownership 自動再 fetch、重取或切換快照；真正無法取得必要 HEAD／物件時仍保留必要缺口。獨立審查原有的自行同步政策不變。
+
+helper 的 stdout 接回呼叫者或寫入本次 run 的交接位置；發布器會管理 owned context，請勿將發布 stdout 重新導向到 context 內，以免檔案句柄阻擋原子清理。
+
 合併建議只適用本次固定快照：必要缺口為「需補做審查」；P0 為「暫緩合併」；P1 為「修正後再合併」；仍有待確認項為「需人工確認」；其餘為「可以合併」。這不改變原生優先程度，也不取代測試、分支保護或人工核准。後續分支更新不撤銷固定快照結果，也不代表新版本已受審。
 
 官方來源：[Codex 儲存庫審查指引](https://developers.openai.com/blog/custom-code-review-rules-for-codex)、[Codex CLI 審查指令](https://learn.chatgpt.com/docs/developer-commands?surface=cli)。本技能由目前 agent 完成審查，不另呼叫 `codex review` 或其他原生審查引擎，不設定產品預設模型。

@@ -12,6 +12,12 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 ARCHIVE_ROOT = "merge-reviewer"
+TEXT_SUFFIXES = {".md", ".py", ".yaml", ".yml", ".json", ".txt", ".toml"}
+
+
+def canonical_bytes(path: Path) -> bytes:
+    raw = path.read_bytes()
+    return raw.replace(b"\r\n", b"\n") if path.name == "VERSION" or path.suffix.lower() in TEXT_SUFFIXES else raw
 
 
 class ReleasePackageError(ValueError):
@@ -66,7 +72,7 @@ def build_release(
             info.create_system = 3
             info.external_attr = 0o100644 << 16
             info.compress_type = ZIP_STORED
-            archive.writestr(info, path.read_bytes())
+            archive.writestr(info, canonical_bytes(path))
     return archive_path
 
 

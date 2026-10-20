@@ -78,7 +78,8 @@ class ReviewUpdateTests(ReviewFixture):
             _, manifest = self.capture(base="origin/main", head="origin/feature")
         fetches = [call for call in calls.call_args_list if call.args[1][0] == "fetch"]
         self.assertEqual(1, len(fetches))
-        self.assertEqual(["fetch", "--no-tags", "--no-prune", "origin",
+        self.assertEqual(["fetch", "--no-tags", "--no-prune", "--atomic", "--no-recurse-submodules",
+                          "--no-auto-maintenance", "--no-write-fetch-head", "--jobs=1", "origin",
                           "refs/heads/main:refs/remotes/origin/main",
                           "refs/heads/feature:refs/remotes/origin/feature"], fetches[0].args[1])
         seed = workspace.repository(manifest, manifest["selected_repo"])

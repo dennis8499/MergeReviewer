@@ -12,7 +12,7 @@ from tests.support import run_git as git
 
 class OfflineCaptureTests(ReviewFixture):
     def test_all_git_wrappers_force_offline_object_reads_and_disable_prompts(self):
-        inherited = {"GIT_NO_LAZY_FETCH": "0", "GIT_TERMINAL_PROMPT": "1"}
+        inherited = {"GIT_NO_LAZY_FETCH": "0", "GIT_TERMINAL_PROMPT": "1", "GIT_ALLOW_PROTOCOL": "http:file"}
         completed = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
         with mock.patch.dict(os.environ, inherited), mock.patch.object(api.subprocess, "run", return_value=completed) as run:
             api.run_git(self.repo, ["cat-file", "-e", "HEAD"], env=inherited)
@@ -22,6 +22,7 @@ class OfflineCaptureTests(ReviewFixture):
         for call in run.call_args_list:
             self.assertEqual("1", call.kwargs["env"]["GIT_NO_LAZY_FETCH"])
             self.assertEqual("0", call.kwargs["env"]["GIT_TERMINAL_PROMPT"])
+            self.assertEqual("", call.kwargs["env"]["GIT_ALLOW_PROTOCOL"])
 
     def test_local_missing_promisor_blob_fails_capture_without_launching_fetch(self):
         self.commit()
@@ -43,13 +44,14 @@ class OfflineCaptureTests(ReviewFixture):
             with self.assertRaises(api.ReviewContextError):
                 self.capture(workspace_root=self.repo)
         events = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
-        self.assertFalse(any(event.get("event") == "child_start" and "fetch" in event.get("argv", [])
-                             for event in events), "local preparation must not launch an implicit fetch")
+        self.assertFalse(any(event.get("event") == "child_start" and any(
+            "upload-pack" in arg or "git-remote-http" in arg for arg in event.get("argv", []))
+            for event in events), "local preparation must not start an implicit transport")
         self.assertFalse(blob.exists(), "failed capture must not hydrate the missing object")
         control_trace = self.root / "control-trace.jsonl"
         control_env = dict(os.environ)
         control_env.pop("GIT_NO_LAZY_FETCH", None)
-        control_env.update(GIT_TRACE2_EVENT=str(control_trace), GIT_TERMINAL_PROMPT="0")
+        control_env.update(GIT_TRACE2_EVENT=str(control_trace), GIT_TERMINAL_PROMPT="0", GIT_ALLOW_PROTOCOL="file")
         control = subprocess.run(["git", "-C", str(self.repo), "cat-file", "-p", missing],
                                  capture_output=True, env=control_env, timeout=30)
         self.assertEqual(0, control.returncode, control.stderr.decode("utf-8", errors="replace"))

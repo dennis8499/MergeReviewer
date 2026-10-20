@@ -16,11 +16,15 @@ import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import sys
 import uuid
+from contextlib import nullcontext
 
 sys.dont_write_bytecode = True
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+import review_runtime
+import merge_parent_coverage
 
 CONTEXT = "merge-reviewer-workspace-context/v3"
 RESULT = "merge-reviewer-workspace-result/v3"
@@ -57,13 +61,7 @@ def is_link(path: Path) -> bool:
 
 
 def save(context: Path, manifest: dict):
-    # Search is sequential; atomic replacement avoids a half-written ledger.
-    temporary = context / (".manifest-" + uuid.uuid4().hex + ".json")
-    try:
-        temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, context / "manifest.json")
-    finally:
-        temporary.unlink(missing_ok=True)
+    review_runtime.save_manifest(context, manifest)
 
 
 def load(context: Path) -> dict:
@@ -115,14 +113,16 @@ def source_environment(context: Path, repo: dict, source: dict, api) -> dict:
                 "source is outside its frozen snapshot object store")
         return {"GIT_DIR": str(git_dir), "GIT_COMMON_DIR": str(git_dir),
                 "GIT_OBJECT_DIRECTORY": str(git_dir / "objects"),
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES": "", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_NO_LAZY_FETCH": "1"}
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": "", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_NO_LAZY_FETCH": "1",
+                "GIT_ALLOW_PROTOCOL": ""}
     storage = source.get("objects")
     if not storage:
-        return {}
+        return {"GIT_ALLOW_PROTOCOL": ""}
     objects = safe_path(context, storage)
     require(objects.is_dir(), "fixed object storage is missing")
     return {"GIT_OBJECT_DIRECTORY": str(objects),
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(api.git_path(Path(repo["path"]), "objects"))}
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(api.git_path(Path(repo["path"]), "objects")),
+            "GIT_ALLOW_PROTOCOL": ""}
 
 
 def fixed_bytes(context: Path, repo: dict, name: str, path: str, api) -> bytes:
@@ -180,6 +180,34 @@ class FixedSourceCache:
         if key not in self._content:
             self._content[key] = fixed_bytes(self.context, repo, source_name, path, self.api)
         return self._content[key]
+
+    def prefetch(self, manifest, requests):
+        groups = {}
+        for request in requests:
+            repo = repository(manifest, request.get("repo"))
+            name = request.get("source") or repo["review_source"]
+            path = request.get("path")
+            if repo.get("snapshot") is None or not isinstance(path, str) or "\n" in path or "\r" in path:
+                continue
+            key, source = self._source_key(repo, name, path)
+            matches = [entry for entry in source["files"] if entry["path"] == path]
+            require(len(matches) == 1 and matches[0]["kind"] == "blob", "path is not a fixed blob")
+            entry = matches[0]
+            key = json.dumps(("read", key, entry["blob_sha"], entry.get("mode"), entry["kind"]), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if key in self._content:
+                continue
+            environment = source_environment(self.context, repo, source, self.api)
+            group = groups.setdefault(repo["id"], {"repo": repo, "env": environment, "items": [], "keys": []})
+            expression = source["ref"] + ":" + path
+            group["items"].append((expression, entry["blob_sha"]))
+            group["keys"].append((key, expression))
+        for group in groups.values():
+            repo = group["repo"]
+            bodies = review_runtime.batch_blobs(lambda data: self.api.run_git(evidence_repository(self.context, repo),
+                ["cat-file", "--batch"], binary=True, input_bytes=data, env=group["env"]),
+                group["items"], repo["snapshot"]["object_format"])
+            for key, expression in group["keys"]:
+                self._content[key] = bodies[expression]
 
     def changed_patch(self, repo: dict, comparison_source_name: str, baseline: str, path: str) -> str:
         key, source = self._source_key(repo, comparison_source_name, path)
@@ -386,7 +414,7 @@ def branch_snapshot(context: Path, repo: dict, args, api, *, tree_cache=None, fr
     native_args.workspace, native_args.workspace_file = repo["path"], None
     native_args.project = repo["path"]
     native_args.context_dir = str(safe_path(context, f"repos/{repo['id']}/native"))
-    native = api._build_manifest(native_args, frozen_refs=frozen_refs)
+    native = api._build_manifest(native_args, frozen_refs=frozen_refs, before_snapshot=repo.get("before"))
     repo["native"] = native
     repo["review_source"] = "head"
     for name, reference in (("head", native["head_sha"]), ("base", native["base_sha"])):
@@ -491,7 +519,8 @@ def build(args, api) -> dict:
             else:
                 record["review_source"] = "head"
                 add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
-            require(record["before"] == api.snapshot(actual), "Repo changed during capture; rebuild context")
+            if candidate != seed:
+                require(record["before"] == api.snapshot(actual), "Repo changed during capture; rebuild context")
             seal_snapshot(context, record, api, tree_cache=tree_cache)
         except (ValueError, OSError, api.ReviewContextError) as exc:
             if candidate == seed:
@@ -507,6 +536,13 @@ def build(args, api) -> dict:
         if candidate == seed:
             manifest["context_gaps"].extend(f"{record['id']}: {gap}" for gap in record["limitations"])
     manifest["required_coverage"] = required_coverage(manifest)
+    selected = repository(manifest, manifest["selected_repo"])
+    native = selected["native"]
+    final = selected["sources"].get("merge-preview", selected["sources"]["head"])
+    effective = [] if final["tree_sha"] == selected["sources"]["base"]["tree_sha"] else selected["changed_files"]
+    manifest["merge_parent_policy"] = merge_parent_coverage.POLICY
+    manifest["required_merge_views"] = merge_parent_coverage.required(effective, native["merge_commits"],
+        {entry["path"] for entry in final["files"] if entry["kind"] == "blob"})
     manifest["context_complete"] = not manifest["context_gaps"]
     manifest["capture_completed_at"] = datetime.now(timezone.utc).isoformat()
     save(context, manifest)
@@ -674,6 +710,21 @@ def batch_read(context: Path, manifest: dict, requests: list[dict], api) -> dict
         require(isinstance(request, dict), "batch request must be an object")
         require(set(request) <= {"repo", "source", "path"}, "unknown batch-read request argument")
         require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
+    # Preserve ordered failure behavior: prefetch only the valid prefix.
+    prefix = []
+    for request in requests:
+        try:
+            repo = repository(manifest, request.get("repo"))
+            source = repo["sources"][request.get("source") or repo["review_source"]]
+            require(any(entry["path"] == request.get("path") and entry["kind"] == "blob" for entry in source["files"]), "path is not a fixed blob")
+            prefix.append(request)
+        except (ValueError, KeyError):
+            break
+    cache.prefetch(manifest, prefix)
+    for request in requests:
+        require(isinstance(request, dict), "batch request must be an object")
+        require(set(request) <= {"repo", "source", "path"}, "unknown batch-read request argument")
+        require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
         results.append(read(context, manifest, request.get("repo"), request.get("path"), api,
                             request.get("source"), cache=cache))
     return {"reads": results}
@@ -703,7 +754,7 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("read", "search", "batch-read", "batch-search", "inventory",
+    parser.add_argument("command", choices=("read", "search", "batch-read", "batch-search", "inventory", "view",
                                            "register-contract", "batch-register-contract", "instructions"))
     parser.add_argument("--context-dir", type=Path, required=True)
     parser.add_argument("--repo", action="append")
@@ -714,15 +765,38 @@ def main(argv=None):
     parser.add_argument("--contract-file", type=Path, help="One fixed-anchor contract JSON object")
     parser.add_argument("--requests-file", type=Path, help="Ordered JSON array for a batch command")
     parser.add_argument("--git-timeout", type=float, default=180.0)
+    parser.add_argument("--shared-content", action="store_true")
+    parser.add_argument("--auto-content", action="store_true")
+    parser.add_argument("--page-size", type=int)
+    parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument("--artifact")
     args = parser.parse_args(argv)
     import git_review_context as api
     context = args.context_dir.resolve()
     token = api.GIT_TIMEOUT_SECONDS.set(api.positive_timeout(str(args.git_timeout)))
     try:
+        return _execute(args, context, api)
+    except (ValueError, OSError, api.ReviewContextError) as exc:
+        print(f"workspace-review: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        api.GIT_TIMEOUT_SECONDS.reset(token)
+
+
+def _execute(args, context, api):
+    mutation = args.command in ("search", "batch-search", "register-contract", "batch-register-contract")
+    with review_runtime.writer(context, args.git_timeout) if mutation else nullcontext():
         manifest = load(context)
-        if args.command in ("batch-read", "batch-search", "batch-register-contract"):
+        if args.shared_content or args.auto_content:
+            require(args.command == "batch-read" and not (args.shared_content and args.auto_content),
+                    "content format requires batch-read and one format flag")
+        if args.command == "view":
+            require(args.artifact and args.page_size, "view needs --artifact and --page-size")
+            value = review_runtime.page(review_runtime.load_view(context, args.artifact), context,
+                                        size=args.page_size, offset=args.offset, artifact=args.artifact)
+        elif args.command in ("batch-read", "batch-search", "batch-register-contract"):
             require(args.requests_file, f"{args.command} needs --requests-file")
-            requests = json.loads(args.requests_file.read_text(encoding="utf-8"))
+            requests = json.loads(args.requests_file.read_text(encoding="utf-8-sig"))
             operation = {"batch-read": batch_read, "batch-search": batch_search,
                          "batch-register-contract": batch_register_contract}[args.command]
             value = operation(context, manifest, requests, api)
@@ -730,7 +804,7 @@ def main(argv=None):
             value = search(context, manifest, args.query, args.repo, api, args.source, args.contract)
         elif args.command == "register-contract":
             require(args.contract_file, "register-contract needs --contract-file")
-            value = register_contract(context, manifest, json.loads(args.contract_file.read_text(encoding="utf-8")), api)
+            value = register_contract(context, manifest, json.loads(args.contract_file.read_text(encoding="utf-8-sig")), api)
         elif args.command == "read":
             require(args.repo and len(args.repo) == 1 and args.path, "read needs one --repo and --path")
             value = read(context, manifest, args.repo[0], args.path, api, args.source)
@@ -741,13 +815,15 @@ def main(argv=None):
             value = {"repositories": [{"repo": r["id"], "name": r["name"], "path": r["path"], "role": r["role"],
                        "sources": {k: {"ref": v["ref"], "files": v["files"]} for k, v in r["sources"].items()}}
                       for r in manifest["repositories"] if not args.repo or r["id"] in args.repo]}
-        print(json.dumps(value, ensure_ascii=False, indent=2))
+        if args.command == "batch-read" and (args.shared_content or args.auto_content):
+            shared = review_runtime.shared_reads(value)
+            if args.shared_content or len(review_runtime.canonical(shared)) < len(review_runtime.canonical(value)):
+                value = shared
+        if args.page_size and args.command != "view":
+            value = review_runtime.page(value, context, size=args.page_size, offset=args.offset)
+        print(json.dumps(value, ensure_ascii=False, separators=(",", ":")) if args.page_size or args.shared_content or args.auto_content
+              else json.dumps(value, ensure_ascii=False, indent=2))
         return 0
-    except (ValueError, OSError, api.ReviewContextError) as exc:
-        print(f"workspace-review: {exc}", file=sys.stderr)
-        return 2
-    finally:
-        api.GIT_TIMEOUT_SECONDS.reset(token)
 
 
 if __name__ == "__main__":

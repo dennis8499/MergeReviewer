@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import importlib
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -58,14 +59,30 @@ def invoke():
 
 def normalize(value, context):
     # Capture-instance fields only; blob/tree/content hashes remain compared.
-    volatile = {"generated_at", "captured_at", "capture_completed_at", "run_id", "context_sha256"}
+    volatile = {"generated_at", "captured_at", "capture_completed_at", "refs_pinned_at", "run_id", "context_sha256", "generation"}
     if isinstance(value, dict):
-        return {k: normalize(v, context) for k, v in value.items() if k not in volatile}
+        return {k: normalize(v, context) for k, v in value.items() if k not in volatile
+                and not (k in {"required_merge_views", "merge_parent_review"} and v == [])
+                and not (k == "merge_parent_policy" and not value.get("required_merge_views"))}
     if isinstance(value, list):
         return [normalize(v, context) for v in value]
     if isinstance(value, str):
         value = value.replace(str(context), "<context>").replace(context.as_posix(), "<context>")
-        return re.sub(r"(?m)^- 快照擷取：.*（UTC）。$", "- 快照擷取：<capture-times>（UTC）。", value)
+        return re.sub(r"(?m)^(- (?:快照擷取|全部 Repo SHA 固定完成)：).*（UTC）。$",
+                      r"\1<capture-times>（UTC）。", value)
+    return value
+
+
+def restore_transport(value):
+    """Compare complete evidence, never the shortened view printed to an agent."""
+    if value.get("schema") == "ReviewEvidenceView/v1":
+        raw = Path(value["artifact_path"]).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != value["artifact"]:
+            raise ValueError("Evidence view checksum mismatch")
+        value = json.loads(raw)
+    if value.get("schema") == "MergeReviewEvidenceBatch/v1":
+        return {"reads": [{**{key: item for key, item in row.items() if key != "content_id"},
+                           "lines": value["contents"][row["content_id"]]["lines"]} for row in value["reads"]]}
     return value
 
 
@@ -92,12 +109,13 @@ def measure(source, fixture, scenario, destination, optimized):
     output, capture_time = cli("git_review_context.py", "--workspace", fixture,
                                "--project", capture.get("project", "orders-api"),
                                "--base", capture.get("base", "main"),
-                               "--head", capture.get("head", "feature/amount"), "--no-fetch", "--summary")
+                               "--head", capture.get("head", "feature/amount"), "--no-fetch", "--summary-v2" if optimized else "--summary")
     context = Path(json.loads(output)["context_dir"])
     counts = {"capture": dict(totals)}
     captured_bytes = len(output.encode("utf-8"))
     reads, searches = [], []
     read_search_time = 0.0
+    oracle_time = 0.0
     try:
         if optimized and scenario["contracts"]:
             request_file = context / "benchmark-contracts.json"
@@ -117,9 +135,13 @@ def measure(source, fixture, scenario, destination, optimized):
             request_file = context / f"benchmark-{plural}.json"
             write_json(request_file, scenario[plural])
             output, elapsed = cli("review_workspace.py", "batch-" + name, "--context-dir", context,
-                                   "--requests-file", request_file)
+                                   "--requests-file", request_file,
+                                   *(["--auto-content"] if optimized and name == "read" else
+                                     ["--page-size", "100"] if optimized else []))
             read_search_time += elapsed
-            (reads if name == "read" else searches).extend(json.loads(output)[plural])
+            oracle_started = time.perf_counter()
+            (reads if name == "read" else searches).extend(restore_transport(json.loads(output))[plural])
+            oracle_time += time.perf_counter() - oracle_started
         counts["read_search"] = dict(Counter(totals) - Counter(counts["capture"]))
         manifest = json.loads((context / "manifest.json").read_text(encoding="utf-8"))
         patches = {path.relative_to(context).as_posix(): path.read_bytes().hex()
@@ -146,6 +168,7 @@ def measure(source, fixture, scenario, destination, optimized):
         row = {"capture_seconds": capture_time, "read_search_seconds": read_search_time,
                "publish_seconds": publish_time, "helper_total_seconds": capture_time + read_search_time + publish_time,
                "capture_stdout_bytes": captured_bytes, "counts": counts, "total_counts": dict(totals)}
+        row["oracle_seconds"] = oracle_time
         write_json(destination / "metrics.json", row)
         return row, artifacts
     finally:

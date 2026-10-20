@@ -32,6 +32,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import git_network_lease
+
 SKIP_DIRECTORIES = {
     ".git",
     ".hg",
@@ -101,9 +103,14 @@ def run_git(
         command_env.update(env)
     command_env["GIT_OPTIONAL_LOCKS"] = "0"
     command_env["GIT_NO_LAZY_FETCH"] = "1"
+    command_env["GIT_NO_REPLACE_OBJECTS"] = "1"
     command_env["GIT_TERMINAL_PROMPT"] = "0"
+    if not (args and args[0] == "fetch"):
+        # Older Git ignores GIT_NO_LAZY_FETCH; deny implicit transports too.
+        command_env["GIT_ALLOW_PROTOCOL"] = ""
     try:
-        completed = subprocess.run(
+        runner = git_network_lease.run if args and args[0] == "fetch" else subprocess.run
+        completed = runner(
             ["git", "-C", str(repo), *args],
             input=input_bytes,
             stdout=subprocess.PIPE,
@@ -137,7 +144,9 @@ def run_git_capture(
         command_env.update(env)
     command_env["GIT_OPTIONAL_LOCKS"] = "0"
     command_env["GIT_NO_LAZY_FETCH"] = "1"
+    command_env["GIT_NO_REPLACE_OBJECTS"] = "1"
     command_env["GIT_TERMINAL_PROMPT"] = "0"
+    command_env["GIT_ALLOW_PROTOCOL"] = ""
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -164,7 +173,9 @@ def git_ok(repo: Path, args: Sequence[str]) -> bool:
     command_env = os.environ.copy()
     command_env["GIT_OPTIONAL_LOCKS"] = "0"
     command_env["GIT_NO_LAZY_FETCH"] = "1"
+    command_env["GIT_NO_REPLACE_OBJECTS"] = "1"
     command_env["GIT_TERMINAL_PROMPT"] = "0"
+    command_env["GIT_ALLOW_PROTOCOL"] = ""
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -490,6 +501,11 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
                     "fetch",
                     "--no-tags",
                     "--no-prune",
+                    "--atomic",
+                    "--no-recurse-submodules",
+                    "--no-auto-maintenance",
+                    "--no-write-fetch-head",
+                    "--jobs=1",
                     remote,
                     *[f"refs/heads/{item.branch}:refs/remotes/{remote}/{item.branch}" for item in targets],
                 ],
@@ -803,7 +819,9 @@ def working_tree_digest(
         if relative.startswith("review-reports/") and relative not in tracked:
             continue
         path = repo / Path(relative)
-        if path.is_dir():
+        if path.is_symlink():
+            records.append((relative, hashlib.sha256(os.readlink(path).encode("utf-8", errors="surrogateescape")).hexdigest()))
+        elif path.is_dir():
             # A gitlink is represented by its index/tree entry, not by the
             # contents of the nested repository.
             marker = str(
@@ -1031,7 +1049,7 @@ def pin_branch_refs(repo: Path, args: argparse.Namespace) -> dict[str, Any]:
             "fetches": fetches}
 
 
-def _build_manifest(args: argparse.Namespace, *, frozen_refs: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _build_manifest(args: argparse.Namespace, *, frozen_refs: Mapping[str, Any] | None = None, before_snapshot=None) -> dict[str, Any]:
     if not args.project or not args.base or not args.head:
         raise ReviewContextError("請同時指定 --project、--base 與 --head。")
     if args.mode != "merge":
@@ -1042,7 +1060,7 @@ def _build_manifest(args: argparse.Namespace, *, frozen_refs: Mapping[str, Any] 
     if workspace_file and not workspace_file.exists():
         raise ReviewContextError(f"VS Code workspace 不存在：{workspace_file}")
     repo, repositories = choose_repository(workspace, workspace_file, args.project)
-    before = snapshot(repo)
+    before = before_snapshot if before_snapshot is not None else snapshot(repo)
     base_input, head_input = args.base, args.head
     pinned = frozen_refs if frozen_refs is not None else pin_branch_refs(repo, args)
     base_sha, head_sha = pinned["base_sha"], pinned["head_sha"]
@@ -1300,6 +1318,7 @@ def context_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "extension_reason", "selected_repo", "seed_repos", "context_dir",
         "context_cleanup_required", "required_coverage", "context_complete", "context_gaps",
         "snapshot_policy", "refs_pinned_at", "capture_completed_at", "workspace_instructions",
+        "merge_parent_policy", "required_merge_views",
     )
     summary = {key: manifest[key] for key in fields if key in manifest}
     summary.update(schema="merge-reviewer-workspace-summary/v1",
@@ -1363,6 +1382,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--format", choices=("json",), default="json")
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument("--summary", action="store_true", help="Print a compact context index; persist the complete manifest as usual.")
+    parser.add_argument("--summary-v2", action="store_true", help="Print the compact v2 context index")
     parser.add_argument("--context-dir", help="Fresh evidence directory inside system temporary storage.")
     parser.add_argument("--git-timeout", type=positive_timeout, default=180.0, help="Seconds per Git command (default: 180).")
     arguments = parser.parse_args(argv)
@@ -1383,7 +1403,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"merge-reviewer: 建議：{hint}", file=sys.stderr)
         return 2
     indent = 2 if args.pretty else None
-    print(json.dumps(context_summary(manifest) if args.summary else manifest,
+    result = context_summary(manifest) if args.summary or args.summary_v2 else manifest
+    if args.summary_v2:
+        result["schema"] = "merge-reviewer-workspace-summary/v2"
+    print(json.dumps(result,
                      ensure_ascii=False, indent=indent))
     return 0
 

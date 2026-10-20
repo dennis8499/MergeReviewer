@@ -5,6 +5,7 @@ import re
 import tempfile
 import unittest
 import zipfile
+import shutil
 
 from tests.support import load_module, run_git as git, run_python, write_text
 
@@ -13,6 +14,15 @@ SKILL = ROOT / "skills/merge-reviewer"
 
 
 class DocumentationPackageTests(unittest.TestCase):
+    def test_help_does_not_write_bytecode_into_the_installed_skill(self):
+        with tempfile.TemporaryDirectory(prefix="reviewer-bytecode-") as name:
+            skill = Path(name) / "merge-reviewer"
+            shutil.copytree(SKILL, skill, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            for command in ("git_review_context.py", "review_workspace.py", "review_report.py"):
+                result = run_python(skill / "scripts" / command, "--help")
+                self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual([], list(skill.rglob("*.pyc")))
+
     def test_source_and_packaged_markdown_links_resolve(self):
         for directory in (ROOT, SKILL):
             for document in ([ROOT / "README.md"] if directory == ROOT else directory.rglob("*.md")):
@@ -35,7 +45,7 @@ class DocumentationPackageTests(unittest.TestCase):
                                  "references/workspace-review.md", "scripts/review_workspace.py", "scripts/workspace_report.py"):
                     self.assertIn("merge-reviewer/" + relative, names)
                 self.assertFalse(any("receipt_runtime/" in n or "delivery_binding" in n or "legacy_group_review" in n for n in names))
-                self.assertEqual(5, sum(n.startswith("merge-reviewer/scripts/") and n.endswith(".py") for n in names))
+                self.assertEqual(8, sum(n.startswith("merge-reviewer/scripts/") and n.endswith(".py") for n in names))
                 zipped.extractall(root / "installed")
             repo = root / "OrderService"
             git(root, "init", "-b", "main", str(repo))

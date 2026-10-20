@@ -10,6 +10,11 @@ from tests.support import run_python, run_git as git
 
 
 class BatchReviewTests(ReviewFixture):
+    def restore_fixture(self, context, manifest):
+        # Reset this isolated differential fixture, not a production writer.
+        # Production saves must reject stale generations (tested separately).
+        (context / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
     def setUp(self):
         super().setUp()
         self.commit()
@@ -93,11 +98,12 @@ class BatchReviewTests(ReviewFixture):
                                      request.get("source"), request["contract"])
             expected.extend(value["searches"])
         sequential_manifest = copy.deepcopy(manifest)
-        workspace.save(context, before)
+        self.restore_fixture(context, before)
         result = self.command(context, "batch-search", requests)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({"searches": expected}, json.loads(result.stdout))
         self.assertEqual(sequential_manifest, workspace.load(context))
+        self.restore_fixture(context, before)
         with mock.patch.object(workspace, "save", wraps=workspace.save) as save:
             workspace.batch_search(context, before, requests, api)
         self.assertEqual(len(requests), save.call_count)
@@ -107,7 +113,7 @@ class BatchReviewTests(ReviewFixture):
         repo_id = manifest["selected_repo"]
         requests = [{"repo": [repo_id], "query": "contract"}, {"query": ""}, {"query": "old"}]
         expected = workspace.search(context, copy.deepcopy(manifest), "contract", [repo_id], api)
-        workspace.save(context, manifest)
+        self.restore_fixture(context, manifest)
         result = self.command(context, "batch-search", requests)
         self.assertEqual(2, result.returncode)
         self.assertIn("search query must be nonempty", result.stderr)
@@ -180,10 +186,10 @@ class BatchReviewTests(ReviewFixture):
         request = {"repo": manifest["selected_repo"], "path": "app.py"}
         with mock.patch.object(api, "run_git", wraps=api.run_git) as calls:
             first = workspace.batch_read(context, manifest, [request, request], api)
-            self.assertEqual(2, calls.call_count)
+            self.assertEqual(1, calls.call_count)
             self.assertEqual(first["reads"][0], first["reads"][1])
             self.assertEqual(first, workspace.batch_read(context, manifest, [request, request], api))
-            self.assertEqual(4, calls.call_count)
+            self.assertEqual(2, calls.call_count)
         self.assertEqual(manifest, workspace.load(context))
 
     def test_cached_batch_read_rechecks_changed_metadata_before_next_request(self):
@@ -220,12 +226,13 @@ class BatchReviewTests(ReviewFixture):
         before = copy.deepcopy(manifest)
         expected = [workspace.register_contract(context, manifest, item, api) for item in requests]
         expected_manifest = copy.deepcopy(manifest)
-        workspace.save(context, before)
+        self.restore_fixture(context, before)
         result = self.command(context, "batch-register-contract", requests)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({"contracts": expected}, json.loads(result.stdout))
         self.assertEqual(expected_manifest, workspace.load(context))
         self.assertTrue(expected[0]["extra_metadata"]["preserved"])
+        self.restore_fixture(context, before)
         with mock.patch.object(workspace, "save", wraps=workspace.save) as saves:
             self.assertEqual({"contracts": expected}, workspace.batch_register_contract(context, before, requests, api))
         self.assertEqual(len(requests), saves.call_count)
@@ -258,7 +265,7 @@ class BatchReviewTests(ReviewFixture):
         for request in requests:
             expected.extend(workspace.search(context, manifest, request["query"], None, api,
                                               contract_id=request["contract"])["searches"])
-        workspace.save(context, before)
+        self.restore_fixture(context, before)
         with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls, \
                 mock.patch.object(workspace, "save", wraps=workspace.save) as saves:
             actual = workspace.batch_search(context, before, requests, api)

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import merge_parent_coverage
 
 from review_workspace import (CONTEXT, RESULT, FixedSourceCache, FixedSearchCache,
                               SNAPSHOT_POLICY, evidence_repository, instructions,
@@ -276,9 +277,24 @@ def _validate(draft, manifest, context, api):
         draft_require(isinstance(values, list) and (bool(values) or not required), "fixed evidence is required")
         return [evidence(e) for e in values]
 
+    parents_complete = True
+    if manifest.get("merge_parent_policy") is not None:
+        require(manifest["merge_parent_policy"] == merge_parent_coverage.POLICY, "unsupported merge-parent policy")
+        selected_repo = repos[selected]
+        final = selected_repo["sources"].get("merge-preview", selected_repo["sources"]["head"])
+        effective = [] if final["tree_sha"] == selected_repo["sources"]["base"]["tree_sha"] else selected_repo["changed_files"]
+        views = merge_parent_coverage.required(effective, selected_repo["native"]["merge_commits"],
+            {entry["path"] for entry in final["files"] if entry["kind"] == "blob"})
+        require(manifest.get("required_merge_views") == views, "necessary merge-parent views differ")
+        parents_complete = merge_parent_coverage.validate(views, draft.get("merge_parent_review", []),
+            lambda items: [evidence(item) for item in items], final_ref=final["ref"], parent_repo=selected,
+            require=draft_require)
+
     nodes = {}
-    incomplete = bool(manifest["context_gaps"] or draft["limitations"])
+    incomplete = bool(manifest["context_gaps"] or draft["limitations"] or not parents_complete)
     gaps = list(manifest["context_gaps"]) + draft["limitations"][:]
+    if not parents_complete:
+        gaps.append("必要 merge-parent 尚未對照最終版本。")
     workspace_file = Path(manifest["workspace_file"]) if manifest.get("workspace_file") else None
     try:
         # Legacy v3 contexts used the live inventory as their review boundary.
@@ -665,6 +681,10 @@ def render(result, manifest):
         repo = repository(manifest, node["repo"])
         lines.append(f"- {node['id']}：{mark(repo['name'] + '/' + node['path'])}；{node['source']}；{node['status']}；"
                      f"契約 {', '.join(node.get('contract_ids', [])) or '無'}；連線 {', '.join(node['related_to']) or '起點'}；{node['reason']}")
+    if result.get("merge_parent_review"):
+        lines.extend(["", "### 必要合併父版本對照", ""])
+        for item in result["merge_parent_review"]:
+            lines.append(f"- {mark(item['id'])}：{item['status']}；{redact(item['reason'])}")
     lines.extend(["", "### 變更與延伸契約", ""])
     for contract in result["changed_contracts"]:
         root = contract["root"]

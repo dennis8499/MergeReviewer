@@ -1,5 +1,13 @@
 # Change log
 
+## 0.16.0 — 2026-10-20 (local candidate)
+
+- Share a fail-closed Git network process-tree lease with GitLabWorkspace; fetch only explicit branches without submodule recursion or automatic maintenance.
+- Add opt-in v2 summaries, raw batched blob reads, shared-content output and checksum-addressed search views while keeping complete fixed evidence on disk.
+- Serialize manifest writers and reject stale generations; require final-version judgments for necessary merge-parent views without reviving net-zero or repaired historical changes.
+- Preserve file symlink boundaries, accept UTF-8 BOM drafts/requests and canonicalize packaged text to LF while retaining binary bytes.
+- Add isolated source-only quality canaries and latest-HEAD helper comparison preparation; model acceptance and performance claims require separate recorded runs.
+
 ## 0.15.0 — 2026-10-20
 
 - Keep one Repo/base/head request and unified agent review using Codex Code Review criteria, without a runtime model preset.
