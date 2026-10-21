@@ -1,5 +1,16 @@
 # Change log
 
+## 0.17.0 — 2026-10-21
+
+- Unify the Traditional Chinese merge review report layout while preserving validated findings, evidence and editable confirmations.
+- Record Git fetch attempt/success and requested/synced branch counts separately; branch entries do not represent HTTP request counts.
+- Keep one capture owner per review request, share frozen evidence with delegates, and repair drafts in the retained context without automatic recapture after terminal failures.
+- Treat a complete ancestor no-op merge as empty required coverage while retaining snapshots, raw patches and peer gaps.
+- Seal one fixed base-to-head commit path without historical trees, and independently verify raw commit hashes and parent edges before granting ancestor exemptions in publication and retained-draft validation.
+- Synchronize executable file mode in ancestor fixtures so Linux checkout observes the same committed state as Windows.
+- Add inclusive line ranges for fixed reads and search-ID filtering for artifact views; preserve full-content hashes, original line numbers and the search ledger.
+- Document complete contract JSON, inventory keys and raw artifact versus stdout wrapper shapes. Validation covers helper regressions; no new model-quality benchmark is claimed.
+
 ## 0.16.0 — 2026-10-20 (local candidate)
 
 - Share a fail-closed Git network process-tree lease with GitLabWorkspace; fetch only explicit branches without submodule recursion or automatic maintenance.

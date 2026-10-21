@@ -96,6 +96,10 @@ def shared_reads(value):
     contents, reads = {}, []
     for item in value["reads"]:
         identifier = item["sha256"]
+        if "line_start" in item:
+            # Different excerpts of the same full blob must not share a body.
+            identifier = hashlib.sha256(canonical({"sha256": item["sha256"],
+                "line_start": item["line_start"], "line_end": item["line_end"]})).hexdigest()
         contents.setdefault(identifier, {"lines": item["lines"]})
         reads.append({**{key: content for key, content in item.items() if key != "lines"}, "content_id": identifier})
     return {"schema": "MergeReviewEvidenceBatch/v1", "reads": reads, "contents": contents}
@@ -139,6 +143,25 @@ def load_view(context, identifier):
     if hashlib.sha256(raw).hexdigest() != identifier:
         raise ValueError("Evidence view checksum mismatch")
     return json.loads(raw)
+
+
+def select_searches(value, identifiers):
+    """Select saved logical searches before paging, without rewriting evidence."""
+    if not isinstance(value, dict) or not isinstance(value.get("searches"), list):
+        raise ValueError("--search-id requires a search artifact with a searches array")
+    if not identifiers or any(not isinstance(identifier, str) or not identifier for identifier in identifiers):
+        raise ValueError("--search-id must be a nonempty search ID")
+    rows = value["searches"]
+    if any(not isinstance(row, dict) or not isinstance(row.get("id"), str) for row in rows):
+        raise ValueError("Search artifact entries must be objects with a text id")
+    available = {row["id"] for row in rows}
+    if len(available) != len(rows):
+        raise ValueError("Search artifact contains duplicate search IDs")
+    selected = set(identifiers)
+    unknown = selected - available
+    if unknown:
+        raise ValueError("Unknown search ID in artifact: " + ", ".join(sorted(unknown)))
+    return {**value, "searches": [row for row in rows if row["id"] in selected]}
 
 
 def page(value, context, *, size, offset=0, artifact=None):

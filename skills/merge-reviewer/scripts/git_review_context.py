@@ -87,6 +87,27 @@ DEFAULT_GIT_TIMEOUT_SECONDS = 180.0
 GIT_TIMEOUT_SECONDS = contextvars.ContextVar(
     "merge_reviewer_git_timeout", default=DEFAULT_GIT_TIMEOUT_SECONDS
 )
+NETWORK_ACTIVITY = contextvars.ContextVar("merge_reviewer_network_activity", default=None)
+CAPTURE_PHASE = contextvars.ContextVar("merge_reviewer_capture_phase", default="local-preflight")
+
+
+def empty_network_activity() -> dict[str, int]:
+    return {"fetch_attempt_count": 0, "fetch_success_count": 0,
+            "requested_ref_count": 0, "synced_ref_count": 0}
+
+
+def network_activity() -> dict[str, int]:
+    """Return capture-scoped fetch command counts, never connection counts."""
+    return dict(NETWORK_ACTIVITY.get() or empty_network_activity())
+
+
+def capture_phase(value: str) -> None:
+    CAPTURE_PHASE.set(value)
+
+
+def capture_diagnostic(exc: Exception) -> dict[str, Any]:
+    return {"phase": getattr(exc, "phase", CAPTURE_PHASE.get()),
+            "network_activity": getattr(exc, "network_activity", network_activity())}
 
 
 def run_git(
@@ -484,17 +505,24 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
         target = remote_target_for_ref(repo, ref)
         if not target:
             continue
-        if not enabled:
-            raise ReviewContextError(
-                f"遠端 ref「{target.input_ref}」需要連線確認，不能搭配 --no-fetch。",
-                hint="請移除 --no-fetch；若要離線審查，請改用本機分支。",
-            )
         if (target.remote, target.branch) in seen:
             continue
         seen.add((target.remote, target.branch))
         grouped.setdefault(target.remote, []).append(target)
+    activity = NETWORK_ACTIVITY.get()
+    if activity is not None:
+        activity["requested_ref_count"] += len(seen)
+    if grouped and not enabled:
+        target = next(iter(grouped.values()))[0]
+        raise ReviewContextError(
+            f"遠端 ref「{target.input_ref}」需要連線確認，不能搭配 --no-fetch。",
+            hint="請移除 --no-fetch；若要離線審查，請改用本機分支。",
+        )
     for remote, targets in grouped.items():
         try:
+            capture_phase("fetch")
+            if activity is not None:
+                activity["fetch_attempt_count"] += 1
             run_git(
                 repo,
                 [
@@ -510,6 +538,9 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
                     *[f"refs/heads/{item.branch}:refs/remotes/{remote}/{item.branch}" for item in targets],
                 ],
             )
+            if activity is not None:
+                activity["fetch_success_count"] += 1
+                activity["synced_ref_count"] += len(targets)
         except GitCommandError as exc:
             raise ReviewContextError(
                 f"fetch {remote} 失敗（輸入 {', '.join(item.input_ref for item in targets)}）：{exc.stderr}",
@@ -1011,6 +1042,7 @@ def write_context_bundle(
 
 def pin_branch_refs(repo: Path, args: argparse.Namespace) -> dict[str, Any]:
     """Resolve the requested branches once, before any Repo is sealed."""
+    capture_phase("branch-preflight")
     if is_shallow_repository(repo):
         raise ReviewContextError(
             "repository 是 shallow clone，無法可靠判定共同祖先；請先取得完整歷史後再審查。",
@@ -1031,6 +1063,7 @@ def pin_branch_refs(repo: Path, args: argparse.Namespace) -> dict[str, Any]:
             )
     fetch_refs = [base_input, head_input]
     fetches = fetch_inputs(repo, fetch_refs, not args.no_fetch)
+    capture_phase("ref-pinning")
     base_sha, base_resolved_ref = resolve_commit_ref(repo, base_input)
     if not base_sha:
         raise ReviewContextError(
@@ -1046,7 +1079,7 @@ def pin_branch_refs(repo: Path, args: argparse.Namespace) -> dict[str, Any]:
 
     return {"base_sha": base_sha, "head_sha": head_sha,
             "base_resolved_ref": base_resolved_ref, "head_resolved_ref": head_resolved_ref,
-            "fetches": fetches}
+            "fetches": fetches, "network_activity": network_activity()}
 
 
 def _build_manifest(args: argparse.Namespace, *, frozen_refs: Mapping[str, Any] | None = None, before_snapshot=None) -> dict[str, Any]:
@@ -1199,6 +1232,7 @@ def _build_manifest(args: argparse.Namespace, *, frozen_refs: Mapping[str, Any] 
             "review_scope": review_scope,
             "review_right": review_right,
             "fetches": fetches,
+            "network_activity": network_activity(),
             "fetch_status": "completed" if fetches else ("disabled" if args.no_fetch else "not-needed"),
             "working_tree_unchanged": working_tree_unchanged,
             "working_tree_before": before,
@@ -1295,19 +1329,30 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     import review_session
     from review_workspace import build
 
-    timeout = positive_timeout(str(args.git_timeout))
-    session_dir = review_session.create_session(args.context_dir)
-    args.context_dir = str(session_dir)
-    token = GIT_TIMEOUT_SECONDS.set(timeout)
-    succeeded = False
+    activity_token = NETWORK_ACTIVITY.set(empty_network_activity())
+    phase_token = CAPTURE_PHASE.set("session-preflight")
     try:
-        result = build(args, sys.modules[__name__])
-        succeeded = True
-        return result
+        timeout = positive_timeout(str(args.git_timeout))
+        session_dir = review_session.create_session(args.context_dir)
+        args.context_dir = str(session_dir)
+        token = GIT_TIMEOUT_SECONDS.set(timeout)
+        succeeded = False
+        try:
+            capture_phase("local-preflight")
+            result = build(args, sys.modules[__name__])
+            succeeded = True
+            return result
+        finally:
+            GIT_TIMEOUT_SECONDS.reset(token)
+            if not succeeded:
+                review_session.cleanup_session(session_dir)
+    except (ReviewContextError, OSError, ValueError) as exc:
+        exc.phase = CAPTURE_PHASE.get()
+        exc.network_activity = network_activity()
+        raise
     finally:
-        GIT_TIMEOUT_SECONDS.reset(token)
-        if not succeeded:
-            review_session.cleanup_session(session_dir)
+        NETWORK_ACTIVITY.reset(activity_token)
+        CAPTURE_PHASE.reset(phase_token)
 
 
 def context_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -1318,7 +1363,7 @@ def context_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "extension_reason", "selected_repo", "seed_repos", "context_dir",
         "context_cleanup_required", "required_coverage", "context_complete", "context_gaps",
         "snapshot_policy", "refs_pinned_at", "capture_completed_at", "workspace_instructions",
-        "merge_parent_policy", "required_merge_views",
+        "merge_parent_policy", "required_merge_views", "network_activity", "coverage_policy",
     )
     summary = {key: manifest[key] for key in fields if key in manifest}
     summary.update(schema="merge-reviewer-workspace-summary/v1",
@@ -1328,7 +1373,7 @@ def context_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
     native_fields = (
         "base_input", "head_input", "base_resolved_ref", "head_resolved_ref", "base_sha",
         "head_sha", "mode", "merge_base", "diff_base", "review_scope", "review_right",
-        "fetches", "fetch_status", "working_tree_unchanged", "dirty_submodule_paths",
+        "fetches", "fetch_status", "network_activity", "working_tree_unchanged", "dirty_submodule_paths",
         "review_limitations", "context_complete", "context_gaps", "review_complete",
         "changed_file_count", "commit_count", "diff_patch_bytes", "diff_check", "diff_stat",
         "binary_or_submodule_paths", "submodule_paths",
@@ -1401,6 +1446,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         hint = getattr(exc, "hint", None)
         if hint:
             print(f"merge-reviewer: 建議：{hint}", file=sys.stderr)
+        print("merge-reviewer: diagnostic: " + json.dumps(capture_diagnostic(exc), ensure_ascii=False),
+              file=sys.stderr)
         return 2
     indent = 2 if args.pretty else None
     result = context_summary(manifest) if args.summary or args.summary_v2 else manifest

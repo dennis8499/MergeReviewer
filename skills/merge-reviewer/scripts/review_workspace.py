@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from collections import deque
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -29,6 +30,7 @@ import merge_parent_coverage
 CONTEXT = "merge-reviewer-workspace-context/v3"
 RESULT = "merge-reviewer-workspace-result/v3"
 SNAPSHOT_POLICY = "frozen-start/v1"
+COVERAGE_POLICY = "ancestor-noop/v1"
 
 
 def require(condition, message):
@@ -69,6 +71,8 @@ def load(context: Path) -> dict:
     context = validate_session(context)
     manifest = json.loads(safe_path(context, "manifest.json").read_text(encoding="utf-8"))
     require(manifest.get("schema") == CONTEXT, "not a portable workspace context")
+    require("coverage_policy" not in manifest or manifest["coverage_policy"] == COVERAGE_POLICY,
+            "unsupported coverage policy")
     if manifest.get("snapshot_policy") is not None:
         require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
         require(all(repo.get("snapshot") is not None for repo in manifest["repositories"] if repo["state"] != "error"),
@@ -302,7 +306,68 @@ def add_source(context: Path, repo: dict, name: str, reference: str, api, *, env
                              "objects": Path(storage).relative_to(context).as_posix() if storage else None}
 
 
-def seal_snapshot(context: Path, repo: dict, api, *, tree_cache=None):
+def validate_commit_path(raw: bytes, path: list[str], object_format: str):
+    """Verify raw commit identities and the direct parent edges of one path."""
+    require(object_format in ("sha1", "sha256"), "ancestor proof object format is invalid")
+    length = 40 if object_format == "sha1" else 64
+    require(isinstance(raw, bytes) and isinstance(path, list) and path
+            and all(isinstance(reference, str) and re.fullmatch(r"[0-9a-f]{" + str(length) + r"}", reference)
+                    for reference in path) and len(path) == len(set(path)),
+            "ancestor proof batch identity is invalid")
+    offset = 0
+    for index, reference in enumerate(path):
+        boundary = raw.find(b"\n", offset)
+        require(boundary >= 0, "ancestor proof commit header is incomplete")
+        header = raw[offset:boundary].split()
+        require(len(header) == 3 and header[0] == reference.encode("ascii")
+                and header[1] == b"commit" and header[2].isdigit(), "ancestor proof commit identity differs")
+        size = int(header[2])
+        offset = boundary + 1
+        body = raw[offset:offset + size]
+        offset += size
+        require(len(body) == size and raw[offset:offset + 1] == b"\n", "ancestor proof commit body is incomplete")
+        offset += 1
+        digest = hashlib.new(object_format, b"commit " + str(size).encode("ascii") + b"\0" + body).hexdigest()
+        require(digest == reference, "ancestor proof commit checksum differs")
+        if index + 1 < len(path):
+            parents = [line[7:] for line in body.partition(b"\n\n")[0].split(b"\n")
+                       if line.startswith(b"parent ")]
+            require(path[index + 1].encode("ascii") in parents, "ancestor proof parent link differs")
+    require(offset == len(raw), "ancestor proof has unexpected trailing bytes")
+
+
+def capture_ancestor_path(repo: Path, base: str, head: str, api) -> list[str]:
+    """Find one fixed parent path without retaining its historical trees."""
+    if base == head:
+        path = [base]
+    else:
+        graph = {}
+        raw = str(api.run_git(repo, ["rev-list", "--ancestry-path", "--parents", f"{head}..{base}"]))
+        for line in raw.splitlines():
+            row = line.split()
+            require(row and all(re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", item) for item in row)
+                    and row[0] not in graph, "ancestor proof commit graph is invalid")
+            graph[row[0]] = row[1:]
+        queue, child = deque([base]), {base: None}
+        while queue and head not in child:
+            current = queue.popleft()
+            for parent in graph.get(current, []):
+                if parent not in child and (parent == head or parent in graph):
+                    child[parent] = current
+                    queue.append(parent)
+        require(head in child, "ancestor proof cannot connect the fixed base and head")
+        path, current = [], head
+        while current is not None:
+            path.append(current)
+            current = child[current]
+        path.reverse()
+    bodies = api.run_git(repo, ["cat-file", "--batch"], binary=True,
+                         input_bytes=("\n".join(path) + "\n").encode("ascii"))
+    validate_commit_path(bodies, path, "sha1" if len(base) == 40 else "sha256")
+    return path
+
+
+def seal_snapshot(context: Path, repo: dict, api, *, tree_cache=None, extra_commit_objects=()):
     """Pack complete captured trees, without copying unrelated commit history."""
     source_repo = Path(repo["path"])
     relative = f"repos/{repo['id']}/snapshot.git"
@@ -321,6 +386,12 @@ def seal_snapshot(context: Path, repo: dict, api, *, tree_cache=None):
         object_ids.update((source["ref"], source["tree_sha"]))
         _, objects = cache.inventory(repo, source["tree_sha"], environment)
         object_ids.update(objects)
+    extra = list(extra_commit_objects)
+    if extra:
+        bodies = api.run_git(source_repo, ["cat-file", "--batch"], binary=True,
+                             input_bytes=("\n".join(extra) + "\n").encode("ascii"), env=pack_environment)
+        validate_commit_path(bodies, extra, object_format)
+        object_ids.update(extra)
     # A normal pack includes its delta bases; no thin pack, alternates or hardlinks.
     api.run_git(source_repo, ["pack-objects", str(destination / "objects/pack/snapshot")],
                 input_bytes=("\n".join(sorted(object_ids)) + "\n").encode("ascii"), env=pack_environment)
@@ -343,6 +414,11 @@ def seal_snapshot(context: Path, repo: dict, api, *, tree_cache=None):
                               env=source_environment(context, repo, next(iter(repo["sources"].values())), api)))
     require(len(checked.splitlines()) == len(object_ids) and all(len(line.split()) == 3 for line in checked.splitlines()),
             "frozen snapshot object closure is incomplete")
+    if extra:
+        bodies = api.run_git(destination, ["cat-file", "--batch"], binary=True,
+                             input_bytes=("\n".join(extra) + "\n").encode("ascii"),
+                             env=source_environment(context, repo, next(iter(repo["sources"].values())), api))
+        validate_commit_path(bodies, extra, object_format)
     primary = repo["sources"][repo["review_source"]]
     repo["instructions"] = []
     for entry in primary["files"]:
@@ -450,6 +526,7 @@ def validate_root(path: Path, api) -> Path:
 
 
 def build(args, api) -> dict:
+    api.capture_phase("local-preflight")
     declared_root = Path(args.workspace).expanduser().absolute()
     require(not is_link(declared_root), "workspace root cannot be a link or junction")
     root = api.normalize_path(declared_root)
@@ -476,11 +553,12 @@ def build(args, api) -> dict:
         "selected_repo": None, "repositories": [], "seed_repos": [], "searches": [],
         "changed_contracts": [], "context_gaps": [], "context_dir": str(context),
         "context_cleanup_required": True, "snapshot_policy": SNAPSHOT_POLICY,
-        "workspace_instructions": [],
+        "workspace_instructions": [], "coverage_policy": "ancestor-noop/v1",
+        "network_activity": api.network_activity(),
     }
     branch_refs = None
-    # Pin every Repo before expensive tree enumeration/packing. Later phases
-    # consume these object IDs even if a branch or another Repo's HEAD moves.
+    # Check every local root before the selected Repo is allowed to fetch.
+    # Peer failures stay visible without changing ownership configuration.
     for index, candidate in enumerate(paths):
         record = {"id": f"repo-{index:03}", "name": candidate.name, "path": str(candidate),
                   "role": "seed" if candidate == seed else "candidate", "sources": {},
@@ -492,10 +570,10 @@ def build(args, api) -> dict:
         try:
             actual = validate_root(candidate, api)
             record["head_sha"] = api.verified_commit(actual, "HEAD")
-            if candidate == seed:
-                branch_refs = api.pin_branch_refs(actual, args)
-            else:
+            if candidate != seed:
                 require(record["head_sha"], "related Repo has no HEAD commit")
+            object_format = str(api.run_git(actual, ["rev-parse", "--show-object-format"])).strip()
+            require(object_format in ("sha1", "sha256"), "unsupported Git object format")
             record["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
         except (ValueError, OSError, api.ReviewContextError) as exc:
             if candidate == seed:
@@ -504,24 +582,57 @@ def build(args, api) -> dict:
             record["review_source"] = "head"
             record["instructions"] = []
             record["limitations"].append(str(exc))
-    manifest["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
+    api.capture_phase("output-preflight")
+    require(not any(context.resolve().is_relative_to(path.resolve()) for path in paths),
+            "--context-dir must be outside every repository")
     manifest["workspace_instructions"] = capture_workspace_instructions(context, roots, paths)
+    for record in manifest["repositories"]:
+        if record["state"] == "error":
+            continue
+        try:
+            safe_path(context, f"repos/{record['id']}").mkdir(parents=True)
+            if record["id"] == manifest["selected_repo"]:
+                safe_path(context, f"repos/{record['id']}/native").mkdir()
+                record["before"] = api.snapshot(Path(record["path"]))
+        except (ValueError, OSError, api.ReviewContextError) as exc:
+            if record["id"] == manifest["selected_repo"]:
+                raise
+            record["state"] = "error"
+            record["review_source"] = "head"
+            record["instructions"] = []
+            record["limitations"].append(str(exc))
+    branch_refs = api.pin_branch_refs(seed, args)
+    manifest["network_activity"] = api.network_activity()
+    selected = next(record for record in manifest["repositories"] if record["id"] == manifest["selected_repo"])
+    selected["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
+    manifest["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
+    # All branch/peer object IDs are now fixed; sealing stays offline.
+    api.capture_phase("snapshot-capture")
     for record in manifest["repositories"]:
         if record["state"] == "error":
             continue
         candidate = actual = Path(record["path"])
         try:
             tree_cache = CaptureTreeCache(context, api)
-            record["before"] = api.snapshot(actual)
-            safe_path(context, f"repos/{record['id']}").mkdir(parents=True)
+            if candidate != seed:
+                record["before"] = api.snapshot(actual)
             if candidate == seed:
                 branch_snapshot(context, record, args, api, tree_cache=tree_cache, frozen_refs=branch_refs)
+                native = record["native"]
+                preview = native.get("merge_preview", {})
+                if (native["head_sha"] == native["merge_base"] and not native["changed_files"]
+                        and preview.get("status") == "clean"
+                        and preview.get("tree_sha") == record["sources"]["base"]["tree_sha"]):
+                    api.capture_phase("ancestor-proof")
+                    record["ancestor_path"] = capture_ancestor_path(actual, native["base_sha"], native["head_sha"], api)
+                    api.capture_phase("snapshot-capture")
             else:
                 record["review_source"] = "head"
                 add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
             if candidate != seed:
                 require(record["before"] == api.snapshot(actual), "Repo changed during capture; rebuild context")
-            seal_snapshot(context, record, api, tree_cache=tree_cache)
+            seal_snapshot(context, record, api, tree_cache=tree_cache,
+                          extra_commit_objects=record.get("ancestor_path", ()))
         except (ValueError, OSError, api.ReviewContextError) as exc:
             if candidate == seed:
                 raise
@@ -535,6 +646,7 @@ def build(args, api) -> dict:
             record["limitations"].append(str(exc))
         if candidate == seed:
             manifest["context_gaps"].extend(f"{record['id']}: {gap}" for gap in record["limitations"])
+    api.capture_phase("manifest-finalize")
     manifest["required_coverage"] = required_coverage(manifest)
     selected = repository(manifest, manifest["selected_repo"])
     native = selected["native"]
@@ -548,7 +660,66 @@ def build(args, api) -> dict:
     save(context, manifest)
     return manifest
 
+def ancestor_noop(manifest: dict) -> bool:
+    """Recognize an already-contained head without trusting an authored flag."""
+    if "coverage_policy" not in manifest:
+        return False  # Existing v3 contexts keep their original coverage contract.
+    policy = manifest["coverage_policy"]
+    require(policy == COVERAGE_POLICY, "unsupported coverage policy")
+    selected = [repo for repo in manifest["repositories"] if repo["id"] == manifest["selected_repo"]]
+    require(len(selected) == 1, "coverage policy needs one selected Repo")
+    repo = selected[0]
+    require(repo.get("state") == "captured", "coverage policy needs a captured selected Repo")
+    native, sources = repo.get("native"), repo.get("sources")
+    require(isinstance(native, dict) and isinstance(sources, dict), "coverage policy needs captured branch metadata")
+    for name, key in (("base", "base_sha"), ("head", "head_sha"), ("merge-base", "merge_base")):
+        source = sources.get(name)
+        reference = native.get(key)
+        require(isinstance(reference, str) and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", reference)
+                and isinstance(source, dict) and source.get("ref") == reference,
+                "coverage policy branch identity differs: " + name)
+    require(repo.get("diff_base") == native.get("diff_base") == native["merge_base"],
+            "coverage policy comparison baseline differs")
+    preview = native.get("merge_preview")
+    require(isinstance(preview, dict) and preview.get("status") in ("clean", "conflicts", "unavailable"),
+            "coverage policy needs a merge preview outcome")
+    status, tree = preview["status"], preview.get("tree_sha")
+    if status in ("clean", "conflicts"):
+        require(type(preview.get("exit_code")) is int and preview["exit_code"] == (0 if status == "clean" else 1),
+                "coverage policy preview outcome differs")
+        source = sources.get("merge-preview")
+        require(isinstance(tree, str) and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", tree)
+                and isinstance(source, dict) and source.get("ref") == source.get("tree_sha") == tree,
+                "coverage policy preview tree identity differs")
+    else:
+        require(tree is None and "merge-preview" not in sources,
+                "unavailable merge preview exposes a tree")
+    if native["head_sha"] != native["merge_base"]:
+        return False
+    require(native.get("changed_files") == [], "ancestor head has inconsistent committed changes")
+    require(isinstance(repo.get("changed_files"), list)
+            and all(isinstance(change, dict) and change.get("source") == "merge-preview"
+                    for change in repo["changed_files"]),
+            "ancestor coverage exposes inconsistent head changes")
+    if status != "clean":
+        return False
+    require(tree == sources["base"].get("tree_sha"), "ancestor preview differs from the base tree")
+    if not (native.get("context_complete") is True and native.get("review_complete") is True
+            and not (repo.get("limitations") or native.get("context_gaps") or native.get("review_limitations")
+                     or manifest.get("context_gaps"))):
+        return False
+    path = repo.get("ancestor_path")
+    require(isinstance(path, list) and path
+            and all(isinstance(reference, str) and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", reference)
+                    for reference in path) and len(path) == len(set(path))
+            and path[0] == native["base_sha"] and path[-1] == native["head_sha"],
+            "ancestor coverage needs a fixed base-to-head commit path")
+    return True
+
+
 def required_coverage(manifest: dict) -> list[dict]:
+    if ancestor_noop(manifest):
+        return []
     required = []
     for repo in manifest["repositories"]:
         if repo["id"] not in manifest["seed_repos"]:
@@ -585,7 +756,7 @@ def validate_contract(context, manifest, item, api, *, cache=None):
             "parent contracts must already be registered")
     require(all(contracts[p]["root"] == root for p in parents), "propagated contract root differs from its parents")
     evidence = item.get("evidence")
-    require(isinstance(evidence, dict), "contract needs one frozen evidence anchor")
+    require(isinstance(evidence, dict), "contract needs one frozen evidence anchor; evidence must be an object, not an array")
     repo = repository(manifest, evidence.get("repo"))
     source, path = evidence.get("source"), evidence.get("path")
     require(source in repo["sources"] and evidence.get("ref") == repo["sources"][source]["ref"], "contract source identity differs")
@@ -690,16 +861,46 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
     return {"searches": results}
 
 
-def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_name=None, *, cache=None) -> dict:
+def read_bounds(line_start, line_end):
+    if line_start is None and line_end is None:
+        return
+    require(type(line_start) is int and type(line_end) is int,
+            "line_start and line_end must be supplied together as integers")
+    require(1 <= line_start <= line_end,
+            "line range must satisfy 1 <= line_start <= line_end")
+
+
+def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_name=None, *, cache=None,
+         line_start=None, line_end=None) -> dict:
     require(isinstance(repo_id, str) and bool(repo_id) and path, "read needs one --repo and --path")
+    read_bounds(line_start, line_end)
     repo = repository(manifest, repo_id)
     name = source_name or repo["review_source"]
     content = cache.read(repo, name, path) if cache is not None else fixed_bytes(context, repo, name, path, api)
     require(b"\0" not in content, "binary blob; record a coverage limitation")
-    return {"repo": repo["id"], "source": name, "ref": repo["sources"][name]["ref"], "path": path,
-            "sha256": hashlib.sha256(content).hexdigest(),
-            "lines": [{"line": i, "text": s} for i, s in enumerate(
-                content.decode("utf-8", errors="replace").splitlines(), 1)]}
+    lines = content.decode("utf-8", errors="replace").splitlines()
+    result = {"repo": repo["id"], "source": name, "ref": repo["sources"][name]["ref"], "path": path,
+              "sha256": hashlib.sha256(content).hexdigest()}
+    if line_start is not None:
+        require(line_end <= len(lines), f"line_end exceeds fixed file line count ({len(lines)})")
+        result.update(line_start=line_start, line_end=line_end, total_lines=len(lines))
+        result["lines"] = [{"line": i, "text": lines[i - 1]} for i in range(line_start, line_end + 1)]
+    else:
+        result["lines"] = [{"line": i, "text": text} for i, text in enumerate(lines, 1)]
+    return result
+
+
+def validate_read_request(request):
+    require(isinstance(request, dict), "batch request must be an object")
+    require(set(request) <= {"repo", "source", "path", "line_start", "line_end"},
+            "unknown batch-read request argument")
+    require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
+    require(("line_start" in request) == ("line_end" in request),
+            "line_start and line_end must be supplied together as integers")
+    if "line_start" in request:
+        require(type(request["line_start"]) is int and type(request["line_end"]) is int,
+                "line_start and line_end must be supplied together as integers")
+        read_bounds(request["line_start"], request["line_end"])
 
 
 def batch_read(context: Path, manifest: dict, requests: list[dict], api) -> dict:
@@ -707,9 +908,7 @@ def batch_read(context: Path, manifest: dict, requests: list[dict], api) -> dict
     results = []
     cache = FixedSourceCache(context, api)
     for request in requests:
-        require(isinstance(request, dict), "batch request must be an object")
-        require(set(request) <= {"repo", "source", "path"}, "unknown batch-read request argument")
-        require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
+        validate_read_request(request)
     # Preserve ordered failure behavior: prefetch only the valid prefix.
     prefix = []
     for request in requests:
@@ -722,11 +921,9 @@ def batch_read(context: Path, manifest: dict, requests: list[dict], api) -> dict
             break
     cache.prefetch(manifest, prefix)
     for request in requests:
-        require(isinstance(request, dict), "batch request must be an object")
-        require(set(request) <= {"repo", "source", "path"}, "unknown batch-read request argument")
-        require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
         results.append(read(context, manifest, request.get("repo"), request.get("path"), api,
-                            request.get("source"), cache=cache))
+                            request.get("source"), cache=cache,
+                            line_start=request.get("line_start"), line_end=request.get("line_end")))
     return {"reads": results}
 
 
@@ -760,6 +957,8 @@ def main(argv=None):
     parser.add_argument("--repo", action="append")
     parser.add_argument("--source")
     parser.add_argument("--path")
+    parser.add_argument("--line-start", type=int, help="First fixed file line (1-based; requires --line-end)")
+    parser.add_argument("--line-end", type=int, help="Last fixed file line (inclusive; requires --line-start)")
     parser.add_argument("--query")
     parser.add_argument("--contract", help="Previously registered changed/propagated contract ID")
     parser.add_argument("--contract-file", type=Path, help="One fixed-anchor contract JSON object")
@@ -770,6 +969,7 @@ def main(argv=None):
     parser.add_argument("--page-size", type=int)
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--artifact")
+    parser.add_argument("--search-id", action="append", help="Select a saved search ID for view; repeatable")
     args = parser.parse_args(argv)
     import git_review_context as api
     context = args.context_dir.resolve()
@@ -787,12 +987,19 @@ def _execute(args, context, api):
     mutation = args.command in ("search", "batch-search", "register-contract", "batch-register-contract")
     with review_runtime.writer(context, args.git_timeout) if mutation else nullcontext():
         manifest = load(context)
+        if args.line_start is not None or args.line_end is not None:
+            require(args.command == "read", "line arguments require read; use JSON fields for batch-read")
+            read_bounds(args.line_start, args.line_end)
+        require(args.search_id is None or args.command == "view", "--search-id requires view")
         if args.shared_content or args.auto_content:
             require(args.command == "batch-read" and not (args.shared_content and args.auto_content),
                     "content format requires batch-read and one format flag")
         if args.command == "view":
             require(args.artifact and args.page_size, "view needs --artifact and --page-size")
-            value = review_runtime.page(review_runtime.load_view(context, args.artifact), context,
+            saved = review_runtime.load_view(context, args.artifact)
+            if args.search_id is not None:
+                saved = review_runtime.select_searches(saved, args.search_id)
+            value = review_runtime.page(saved, context,
                                         size=args.page_size, offset=args.offset, artifact=args.artifact)
         elif args.command in ("batch-read", "batch-search", "batch-register-contract"):
             require(args.requests_file, f"{args.command} needs --requests-file")
@@ -807,7 +1014,8 @@ def _execute(args, context, api):
             value = register_contract(context, manifest, json.loads(args.contract_file.read_text(encoding="utf-8-sig")), api)
         elif args.command == "read":
             require(args.repo and len(args.repo) == 1 and args.path, "read needs one --repo and --path")
-            value = read(context, manifest, args.repo[0], args.path, api, args.source)
+            value = read(context, manifest, args.repo[0], args.path, api, args.source,
+                         line_start=args.line_start, line_end=args.line_end)
         elif args.command == "instructions":
             require(args.repo and len(args.repo) == 1, "instructions needs one --repo")
             value = instructions(context, manifest, args.repo[0], args.path, api)

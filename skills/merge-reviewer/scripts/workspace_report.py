@@ -10,10 +10,10 @@ import re
 import tempfile
 import merge_parent_coverage
 
-from review_workspace import (CONTEXT, RESULT, FixedSourceCache, FixedSearchCache,
+from review_workspace import (CONTEXT, RESULT, FixedSourceCache, FixedSearchCache, ancestor_noop,
                               SNAPSHOT_POLICY, evidence_repository, instructions,
                               repository, required_coverage, require, safe_path, source_environment,
-                              validate_contract)
+                              validate_commit_path, validate_contract)
 
 PRIORITIES = ("P0", "P1", "P2", "P3")
 ENGINEERING_FIELDS = ("operation_scenario", "technical_trigger", "technical_explanation", "impact_scope", "engineering_fix")
@@ -86,6 +86,26 @@ def validate(draft: dict, manifest: dict, context: Path, *, timeout=180.0) -> di
         api.GIT_TIMEOUT_SECONDS.reset(token)
 
 
+def validate_coverage_policy(manifest, context, api):
+    """Empty coverage needs independently verified owned commit ancestry and trees."""
+    if not ancestor_noop(manifest):
+        return False
+    repo = repository(manifest, manifest["selected_repo"])
+    require(isinstance(repo.get("snapshot"), dict), "ancestor proof needs an owned snapshot")
+    git_repo = evidence_repository(context, repo)
+    path = repo["ancestor_path"]
+    bodies = api.run_git(git_repo, ["cat-file", "--batch"], binary=True,
+                         input_bytes=("\n".join(path) + "\n").encode("ascii"),
+                         env=source_environment(context, repo, repo["sources"]["base"], api))
+    validate_commit_path(bodies, path, repo["snapshot"].get("object_format"))
+    for name in ("base", "head", "merge-base", "merge-preview"):
+        source = repo["sources"][name]
+        actual = str(api.run_git(git_repo, ["rev-parse", f"{source['ref']}^{{tree}}"],
+                                 env=source_environment(context, repo, source, api))).strip()
+        require(actual == source["tree_sha"], "ancestor coverage fixed tree identity mismatch: " + name)
+    return True
+
+
 def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
     """Before retaining a broken draft, independently reject damaged evidence.
 
@@ -111,6 +131,7 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
         require(repos[selected].get("state") == "captured", "selected Repo snapshot was not captured")
         require(all(repo.get("role") == ("seed" if repo["id"] == selected else "candidate")
                     for repo in repos.values()), "Repo roles differ from the single selected Repo")
+        validate_coverage_policy(manifest, context, api)
         require(manifest.get("required_coverage") == required_coverage(manifest), "changed-path contract differs from captured changes")
         frozen = manifest.get("snapshot_policy") is not None
         if frozen:
@@ -237,6 +258,7 @@ def _validate(draft, manifest, context, api):
                 require(repo.get("snapshot") is not None, "frozen context needs an owned snapshot for every captured Repo")
                 evidence_repository(context, repo)
                 instructions(context, manifest, repo["id"], None, api)
+    validate_coverage_policy(manifest, context, api)
     require(manifest.get("required_coverage") == required_coverage(manifest), "changed-path contract differs from captured changes")
     expected = {location(c) for c in manifest["required_coverage"]}
     contracts = {}
@@ -589,6 +611,8 @@ def render(result, manifest):
     lines.extend(["", f"- 合併方向：{mark(native['head_input'])} → {mark(native['base_input'])}",
                   f"- 主要差異範圍（共同祖先 → 比較分支）：{mark(native['diff_base'][:8])} → "
                   f"{mark(native['review_right'][:8])}", ""])
+    if ancestor_noop(manifest):
+        lines.extend(["- 比較分支已包含於基礎分支；合併預覽與基礎版本相同，沒有新增程式碼差異。", ""])
     if manifest.get("snapshot_policy") == SNAPSHOT_POLICY:
         lines.extend([f"- 快照擷取：{manifest['generated_at']} → {manifest['capture_completed_at']}（UTC）。",
                       f"- 全部 Repo SHA 固定完成：{manifest.get('refs_pinned_at', '未提供')}（UTC）。",

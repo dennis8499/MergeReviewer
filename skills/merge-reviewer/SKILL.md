@@ -29,13 +29,15 @@ metadata:
 python "<skill-dir>/scripts/git_review_context.py" --workspace "<declared-root>" --project "<Repo-name-or-path>" --base "<base-branch>" --head "<comparison-branch>" --summary-v2
 ~~~
 
-已宣告 VS Code 工作區加 `--workspace-file <file.code-workspace>`。`--no-fetch` 僅用於本機分支；遠端分支按 remote 合併為一次精確同步，失敗即停止，不退回舊 ref。保留原始檔案、HEAD 與索引。
+已宣告 VS Code 工作區加 `--workspace-file <file.code-workspace>`。`--no-fetch` 僅用於本機分支；只有入口明確指定的遠端 base／head 按 remote 合併為一次精確同步，其他 Repo 使用擷取時本機 HEAD。同步失敗即停止並回報，不退回舊 ref，也不自動重跑 capture。保留原始檔案、HEAD 與索引。
+
+主 agent 是本次請求唯一的 capture 擁有者；子 agent 接收並共用同一 `context_dir`、固定 SHA 與索引，只做分配的固定證據讀取與判斷。所有 agent 的契約／搜尋寫入由主 agent 依序處理。
 
 首次完整快照及語意分析以前，對明確宣告候選先做本機唯讀 ownership 查核；若出現 `dubious ownership`，依[確切 Repo 的 ownership 修復](references/review-rules.md#確切-repo-的-ownership-修復)保存診斷並在單一 helper 程序內授權已報錯的確切 Repo，讓擷取一次完成。
 
 Git 網路操作共用本機單一程序樹配額；等待、取消或隔離錯誤依 helper 診斷處理，保留不確定的鎖。擷取／查閱的精簡格式、完整落盤與必要 parent 完成紀錄見[操作與負載](references/runtime-controls.md)。
 
-記下摘要的 `context_dir`、Repo／來源索引、必要覆蓋與缺口；完整 `manifest.json` 仍是 v3 固定證據依據。主要差異為 `merge-base(base, head) → head`，另查 merge-parent 與合併預覽。`selected_repo` 是唯一審查起點；至少兩個宣告範圍內的不同 Git 根目錄才啟用 `extension_enabled`。其他 Repo 使用擷取時的 HEAD，不套用入口分支或工作檔。
+記下摘要的 `context_dir`、Repo／來源索引、必要覆蓋、缺口及 `network_activity`；四項計數的單位見[操作與負載](references/runtime-controls.md)。完整 `manifest.json` 仍是 v3 固定證據依據。主要差異為 `merge-base(base, head) → head`，另查 merge-parent 與合併預覽。`selected_repo` 是唯一審查起點；至少兩個宣告範圍內的不同 Git 根目錄才啟用 `extension_enabled`。
 
 先固定所選 Repo 的 base／head SHA 及所有其他 Repo 的當前本機 HEAD，再依固定 SHA 建立差異、預覽並封裝完整樹狀物件至 owned 暫存 Git 證據庫。全部必要快照完成後才開始語意審查；跨 Repo 不宣稱同一瞬間的原子擷取。後續只讀這份快照；雲端更新、本機分支移動或原 Repo 清理物件均不切換本次證據，也不觸發重審。以 `review_workspace.py instructions --context-dir <context_dir> --repo <Repo-ID>` 讀取擷取的工作區與 Repo 指示；需要單一路徑適用指示時加 `--path <相對路徑>`。
 
@@ -45,7 +47,9 @@ Git 網路操作共用本機單一程序樹配額；等待、取消或隔離錯�
 
 已知且無相依性的固定讀取／搜尋使用 `batch-read`／`batch-search`，依契約文件建立本次 context 內的請求 JSON。保留 Repo／來源索引，只有需要檔案清單時才查對應 Repo 的 `inventory`。同輪已知契約使用 `batch-register-contract`，父契約在前；先註冊再批次搜尋，新發現的消費端與延伸契約分輪追查。共用 manifest 的寫入操作保持單一寫入者，依序執行。
 
-`batch-read --auto-content` 共用相同全文；大量搜尋加 `--page-size 100`，從回傳的固定 artifact 分頁續讀。分頁僅限制畫面輸出，已落盤的完整命中、逐來源覆蓋及必要語意追查均須完成。逐項完成 manifest 的 `required_merge_views`：`merge_parent_review` 填 reviewed／not-reviewed、最終判斷及 parent／最終版本證據；已修復的歷史問題以最終版本結案，無有效差異時清單可空白。
+已知必要行段用 `read --line-start/--line-end` 或批次的 `line_start`／`line_end`；`batch-read --auto-content` 共用相同內容。大量搜尋加 `--page-size 100`，從原 artifact 分頁續讀；只看部分搜尋時用 `view --search-id`，不重跑搜尋。參數與輸出形狀見[證據與 v3 結果契約](references/workspace-review.md)。分頁僅限制畫面輸出，已落盤的完整命中、逐來源覆蓋及必要語意追查均須完成。逐項完成 manifest 的 `required_merge_views`：`merge_parent_review` 填 reviewed／not-reviewed、最終判斷及 parent／最終版本證據；已修復的歷史問題以最終版本結案。
+
+新 context 的 `coverage_policy="ancestor-noop/v1"` 表示套用祖先分支判定規則；依 helper 實際列出的必要覆蓋／parent 清單審查。完整條件成立而 `required_coverage` 為空時，不將 base 既有內容另建契約或搜尋；條件與缺口保留規則見結果契約，不能只憑政策標記或主要 diff 為空自行結案。
 
 初次註冊每個契約時，先選至少兩個不同、具有契約意義且出現在固定 anchor 的查詢詞，包含精確 symbol 及相關欄位／Topic／API 名稱，讓無關 Repo 能完成替代詞排除。必要時擴至最小相關行段或提供固定 alias 證據；透過註冊與搜尋 helper 保存，不直接修改 manifest／搜尋 ledger。
 
@@ -73,7 +77,7 @@ python "<skill-dir>/scripts/review_report.py" --context-dir "<context_dir>" --re
 
 成功回覆須含繁體中文結論、重要問題／缺口與待確認項、必要下一步及可點擊報告連結。沒有有證據的問題時直說；未完成或仍待人工確認不能當作通過。人工僅編輯報告 `merge-confirmations:start/end` 內的 checkbox、核對人、日期、確認結果與證據；固定判斷保留。
 
-發布成功只完整驗證一次。exit 3 表示可修正的草稿錯誤，依診斷修正後沿用同一份固定證據重試；exit 2 表示終止錯誤，context 不再沿用。未帶保留旗標的舊呼叫維持失敗後清理。
+發布成功只完整驗證一次。exit 3 表示可修正的草稿錯誤，依診斷修正後沿用同一 `context_dir` 與固定證據重試。exit 2 表示終止錯誤，停止本次審查並回報，context 不再沿用，也不自動 capture 重跑。未帶保留旗標的舊呼叫維持失敗後清理。
 
 允許的副作用僅為指定遠端分支同步、owned 系統暫存證據及報告。原始碼、設定、分支、index 與提交維持原狀；不推送或發布留言。成功、終止錯誤、中止及最終放棄均清理本次 context，修稿保留的 context 也須於任務結束清理：
 
