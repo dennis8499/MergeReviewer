@@ -10,7 +10,7 @@ from tests.fixtures import ReviewFixture, api, workspace, workspace_report, revi
 from tests.support import run_git as git
 
 
-HEADINGS = ["審查結論", "問題總攬", "問題詳情（工程師參考）", "範圍與限制", "技術審查紀錄（工程師參考）"]
+HEADINGS = ["比較資訊", "問題", "範圍與限制", "下一步", "技術審查紀錄"]
 
 
 class ReviewUpdateTests(ReviewFixture):
@@ -89,19 +89,29 @@ class ReviewUpdateTests(ReviewFixture):
         self.assertEqual(1, len(actions))
         self.assertEqual(1, len([call for call in calls.call_args_list if call.args[1][0] == "fetch"]))
 
-    def test_five_sections_linked_overview_and_legacy_optional_fields(self):
+    def test_conclusion_first_sections_collapsed_audit_and_legacy_optional_fields(self):
         self.commit()
         context, manifest = self.capture()
         draft = self.draft(context, manifest)
         draft["findings"] = [self.finding(draft)]
         text = workspace_report.render(workspace_report.validate(draft, manifest, context), manifest)
         self.assertEqual(HEADINGS, re.findall(r"^## (.+)$", text, re.MULTILINE))
-        self.assertTrue(text.startswith("# 合併審查: api\n"))
-        self.assertIn("[F-001](#finding-F-001)", text)
+        self.assertTrue(text.startswith("**修正後再合併**｜發現具體問題。"))
+        self.assertNotRegex(text, r"(?m)^# ")
+        self.assertNotIn("## 審查結論", text)
+        self.assertNotIn("## 問題總攬", text)
         self.assertIn('<a id="finding-F-001"></a>', text)
-        for label in ("操作情境", "證據說明", "影響範圍", "工程修正建議"):
-            self.assertIn(f"**{label}**\n\n未提供", text)
-        self.assertIn("待人工確認：0 項", text)
+        for label, following in (("問題描述", "重現原因"), ("重現原因", "預期結果"), ("證據", "建議改善方式")):
+            self.assertIn("未提供", text.split(f"**{label}**", 1)[1].split(f"**{following}**", 1)[0])
+        self.assertNotIn("待人工確認：0 項", text)
+        self.assertIn("## 下一步\n\n無額外下一步。", text)
+        self.assertEqual(1, text.count("<details>"))
+        self.assertTrue(text.endswith("</details>\n"))
+        expanded, audit = text.split("<details>", 1)
+        self.assertIn("## 比較資訊", expanded)
+        for heading in ("固定版本", "逐檔覆蓋", "功能鏈與 Repo 判定", "變更與延伸契約", "固定版本搜尋紀錄"):
+            self.assertIn(f"### {heading}", audit)
+            self.assertNotIn(f"### {heading}", expanded)
         for key in ("operation_scenario", "technical_trigger", "technical_explanation", "impact_scope", "engineering_fix"):
             invalid = copy.deepcopy(draft)
             invalid["findings"][0][key] = []
@@ -140,3 +150,29 @@ class ReviewUpdateTests(ReviewFixture):
         invalid["findings"][0]["evidence"][0]["line_end"] = 900
         with self.assertRaisesRegex(ValueError, "interval"):
             workspace_report.validate(invalid, manifest, context)
+
+    def test_six_blocks_preserve_distinct_engineering_facts_without_repeated_paragraphs(self):
+        self.commit()
+        context, manifest = self.capture()
+        draft = self.draft(context, manifest)
+        draft["report_layout"] = "engineering-review/v1"
+        item = self.finding(draft)
+        item.update(impact="唯一影響。\n\n重複影響段落。", impact_scope="重複影響段落。\n\n唯一影響範圍。",
+                    operation_scenario="唯一操作情境。\n\n依程式推導，未實際重現。",
+                    trigger="唯一觸發條件。", technical_trigger="唯一觸發條件。\n\n唯一技術觸發。",
+                    technical_explanation="唯一證據說明。", evidence_summary="唯一證據說明。\n\n唯一證據補充。",
+                    recommendation="唯一改善建議。", engineering_fix="唯一改善建議。\n\n唯一工程修正。")
+        draft["findings"] = [item]
+        before = copy.deepcopy(draft)
+        result = workspace_report.validate(draft, manifest, context)
+        text = workspace_report.render(result, manifest)
+        self.assertEqual(before, draft)
+        section = text.split("### F-001｜", 1)[1].split("## 範圍與限制", 1)[0]
+        self.assertEqual(["問題描述", "重現原因", "預期結果", "實際結果", "證據", "建議改善方式"],
+                         re.findall(r"^\*\*([^*]+)\*\*$", section, re.MULTILINE))
+        for fact in ("唯一影響。", "重複影響段落。", "唯一影響範圍。", "唯一操作情境。", "唯一觸發條件。",
+                     "唯一技術觸發。", "唯一證據說明。", "唯一證據補充。", "唯一改善建議。", "唯一工程修正。",
+                     "依程式推導，未實際重現", item["title"], item["expected"], item["actual"]):
+            self.assertEqual(1, section.count(fact), fact)
+        self.assertIn("唯一工程修正。（開發）", section)
+        self.assertIn("contract = 'new'", section)

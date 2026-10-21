@@ -11,7 +11,7 @@ metadata:
 
 本次新建草稿使用 `report_layout="engineering-review/v1"`。每項已確認問題必須填齊實際操作情境、技術觸發方式、證據說明、影響範圍與工程修正建議；欄位對應及完整 JSON 範例見結果契約。缺少資料或以「未提供」占位不能完成新報告；相容 fallback 僅供沒有此標記的舊 v3 草稿。
 
-開始時在同一次工具呼叫讀取[原生審查規則](references/review-rules.md)及[證據與 v3 結果契約](references/workspace-review.md)。同層 `../output-style/SKILL.md` 存在時讀取並依情境選擇呈現風格；不存在時使用[原有報告風格](references/report-style.md)。風格套用於進度、問答及人類可讀文件，不改變五章報告、固定證據與人工核對契約。
+開始時在同一次工具呼叫讀取[原生審查規則](references/review-rules.md)及[證據與 v3 結果契約](references/workspace-review.md)。同層 `../output-style/SKILL.md` 存在時讀取並依情境選擇呈現風格；不存在時使用[報告風格](references/report-style.md)。報告以結論與數量開頭，依序列比較資訊、六區塊問題、範圍與限制、下一步及收合的完整技術紀錄；固定證據與人工核對契約保留。
 
 審查啟動／初始化的資料破壞或安全暴露時，先按[觸發與影響分級](references/review-rules.md#觸發與影響分級)核對正常操作、影響範圍與是否需要特殊前提，再決定 P0／P1；證據可靜態證實，不要求真的執行破壞操作。
 

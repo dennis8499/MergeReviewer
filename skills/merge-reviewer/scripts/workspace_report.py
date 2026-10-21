@@ -561,40 +561,53 @@ def render(result, manifest):
     def optional(finding, field):
         return finding.get(field) or "未提供"
 
+    def paragraphs(*values, marker=None):
+        """Keep distinct authored facts while omitting exact repeated paragraphs."""
+        seen, output = set(), []
+        for value in values:
+            for paragraph in re.split(r"\n[ \t]*\n", value.strip()):
+                if marker and paragraph.rstrip("。.") == marker:
+                    continue
+                if paragraph and paragraph not in seen:
+                    seen.add(paragraph)
+                    output.extend([paragraph, ""])
+        if marker:
+            output.extend([marker + "。", ""])
+        return output
+
     seed = repository(manifest, manifest["selected_repo"])
     native = seed["native"]
-    lines = [f"# 合併審查: {seed['name']}", "", "## 審查結論", "",
-             f"**{result['recommendation']}**｜{result['review_status']}。{result['summary']}", "",
-             "問題數量：" + "／".join(f"{p} {result['priority_counts'][p]}" for p in PRIORITIES), "",
-             f"待人工確認：{result['pending_confirmation_count']} 項。", "",
-             "## 問題總攬", ""]
-    if result["findings"]:
-        lines.extend(["| 編號 | 優先程度 | 問題名稱 | 影響 | 建議行動 |", "| --- | --- | --- | --- | --- |"])
-        for finding in result["findings"]:
-            lines.append("| " + f"[{finding['id']}](#finding-{finding['id']}) | " +
-                         " | ".join(cell(finding[field]) for field in
-                         ("priority", "title", "impact", "recommendation")) + " |")
-        lines.append("")
-    else:
-        lines.extend(["未發現有固定證據支持的具體問題。", ""])
-    lines.extend(["## 問題詳情（工程師參考）", ""])
+    lines = [f"**{result['recommendation']}**｜{result['review_status']}。{result['summary']}", "",
+             "問題數量：" + "／".join(f"{p} {result['priority_counts'][p]}" for p in PRIORITIES), ""]
+    if result["pending_confirmation_count"]:
+        lines.extend([f"待人工確認：{result['pending_confirmation_count']} 項。", ""])
+    lines.extend(["## 比較資訊", "", f"- Repo：{mark(seed['name'])}", f"- 本機路徑：{mark(seed['path'])}", "",
+                  "| 角色 | 輸入分支 | 實際 ref | Commit（前 8 碼） |", "| --- | --- | --- | --- |"])
+    for role, label in (("base", "基礎分支"), ("head", "比較分支")):
+        lines.append(f"| {label} | {cell(mark(native[f'{role}_input']))} | "
+                     f"{cell(mark(native[f'{role}_resolved_ref']))} | {mark(seed['sources'][role]['ref'][:8])} |")
+    lines.extend(["", f"- 合併方向：{mark(native['head_input'])} → {mark(native['base_input'])}",
+                  f"- 主要差異範圍（共同祖先 → 比較分支）：{mark(native['diff_base'][:8])} → "
+                  f"{mark(native['review_right'][:8])}", ""])
+    if manifest.get("snapshot_policy") == SNAPSHOT_POLICY:
+        lines.extend([f"- 快照擷取：{manifest['generated_at']} → {manifest['capture_completed_at']}（UTC）。",
+                      f"- 全部 Repo SHA 固定完成：{manifest.get('refs_pinned_at', '未提供')}（UTC）。",
+                      "- 適用版本：本報告僅適用於上述固定 SHA 及本次擷取的相關 Repo；後續分支更新不改變本次結論。", ""])
+    lines.extend(["## 問題", ""])
     if not result["findings"]:
         lines.extend(["無已確認問題。", ""])
     for finding in result["findings"]:
         label = "依程式推導，未實際重現" if finding["scenario_source"] == "code-derived" else "已實際重現"
         lines.extend([f"<a id=\"finding-{finding['id']}\"></a>", "",
                       f"### {finding['id']}｜[{finding['priority']}] {finding['title']}", "",
-                      "**問題名稱**", "", finding["title"], "", "**影響說明**", "", finding["impact"], "",
-                      "**操作情境**", "", optional(finding, "operation_scenario"), "", f"{label}。", "",
-                      f"預期結果：{finding['expected']}", "", f"實際結果：{finding['actual']}", "",
-                      "**建議處理**", "", f"{finding['recommendation']}（{finding['owner']}）", "",
-                      "#### 技術證據", "", "**觸發條件**", "", finding["trigger"], "",
-                      "技術觸發方式：" + optional(finding, "technical_trigger"), "",
-                      "**證據說明**", "", optional(finding, "technical_explanation"), "",
-                      "**影響範圍**", "", optional(finding, "impact_scope"), "",
-                      "**工程修正建議**", "", optional(finding, "engineering_fix"), "", "**證據**", ""])
-        if finding.get("evidence_summary"):
-            lines.extend([finding["evidence_summary"], ""])
+                      "**問題描述**", "",
+                      *paragraphs(finding["impact"], optional(finding, "impact_scope")),
+                      "**重現原因**", "",
+                      *paragraphs(optional(finding, "operation_scenario"), finding["trigger"],
+                                  optional(finding, "technical_trigger"), marker=label),
+                      "**預期結果**", "", finding["expected"], "",
+                      "**實際結果**", "", finding["actual"], "", "**證據**", "",
+                      *paragraphs(optional(finding, "technical_explanation"), finding.get("evidence_summary", ""))])
         for evidence in finding["evidence"]:
             span = "" if evidence.get("line_start") is None else f":{evidence['line_start']}–{evidence['line_end']}"
             name = repository(manifest, evidence["repo"])["name"]
@@ -611,6 +624,9 @@ def render(result, manifest):
                 lines.extend([fence, excerpt, fence, ""])
                 if evidence.get("excerpt_replaced_bytes"):
                     lines.extend(["片段以 UTF-8 顯示；無法解碼的位元組以 � 取代。", ""])
+        fixes = paragraphs(finding["recommendation"], optional(finding, "engineering_fix"))
+        fixes[-2] += f"（{finding['owner']}）"
+        lines.extend(["**建議改善方式**", "", *fixes])
     lines.extend(["## 範圍與限制", "",
                   "- 審查起點：所選 Repo 的分支差異；延伸僅追查這些變更的契約與消費端。",
                   f"- 跨 Repo 延伸：{result['extension_status']}；{manifest['extension_reason']}",
@@ -618,10 +634,6 @@ def render(result, manifest):
                   "- 未執行檢查：" + ("；".join(result["tests_not_executed"]) or "未記錄其他檢查")])
     lines.extend(f"- 檢查缺口：{gap}" for gap in result["limitations"])
     lines.append("")
-    if result["next_steps"]:
-        lines.extend(["### 下一步", ""])
-        lines.extend(f"- {step['action']}（{step['owner']}）" for step in result["next_steps"])
-        lines.append("")
     if result.get("pending_confirmations"):
         lines.extend(["### 待人工確認", "",
                       f"共 {result['pending_confirmation_count']} 項，未列為已確認問題或計入 P0–P3；完成核對前不視為通過。", ""])
@@ -642,19 +654,12 @@ def render(result, manifest):
         for item in result["pending_confirmations"]:
             lines.extend([f"- [ ] {item['id']} 已完成核對", "", "核對人：＿＿；日期：＿＿；確認結果與證據：＿＿", ""])
         lines.extend(["<!-- merge-confirmations:end -->", ""])
-    lines.extend(["## 技術審查紀錄（工程師參考）", "", "### 比較資訊", "",
-                  f"- Repo：{mark(seed['name'])}", f"- 本機路徑：{mark(seed['path'])}", "",
-                  "| 角色 | 輸入分支 | 實際 ref | Commit（前 8 碼） |", "| --- | --- | --- | --- |"])
-    for role, label in (("base", "基礎分支"), ("head", "比較分支")):
-        lines.append(f"| {label} | {cell(mark(native[f'{role}_input']))} | "
-                     f"{cell(mark(native[f'{role}_resolved_ref']))} | {mark(seed['sources'][role]['ref'][:8])} |")
-    lines.extend(["", f"- 合併方向：{mark(native['head_input'])} → {mark(native['base_input'])}",
-                  f"- 主要差異範圍（共同祖先 → 比較分支）：{mark(native['diff_base'][:8])} → "
-                  f"{mark(native['review_right'][:8])}", ""])
-    if manifest.get("snapshot_policy") == SNAPSHOT_POLICY:
-        lines.extend([f"- 快照擷取：{manifest['generated_at']} → {manifest['capture_completed_at']}（UTC）。",
-                      f"- 全部 Repo SHA 固定完成：{manifest.get('refs_pinned_at', '未提供')}（UTC）。",
-                      "- 適用版本：本報告僅適用於上述固定 SHA 及本次擷取的相關 Repo；後續分支更新不改變本次結論。", ""])
+    lines.extend(["## 下一步", ""])
+    if result["next_steps"]:
+        lines.extend(f"- {step['action']}（{step['owner']}）" for step in result["next_steps"])
+    else:
+        lines.append("無額外下一步。")
+    lines.extend(["", "## 技術審查紀錄", "", "<details>", "<summary>展開完整技術審查紀錄</summary>", ""])
     lines.extend(["### 固定版本", "", "| Repo | 角色 | 來源 | 完整 SHA |", "| --- | --- | --- | --- |"])
     for version in result["versions"]:
         repo = repository(manifest, version["repo"])
@@ -703,6 +708,7 @@ def render(result, manifest):
                       row["status"], len(row.get("matches", [])))) + " |")
     if not result["searches"]:
         lines.append("| 無搜尋紀錄 | — | — | — | — | 0 |")
+    lines.extend(["", "</details>"])
     return redact("\n".join(lines)) + "\n"
 
 

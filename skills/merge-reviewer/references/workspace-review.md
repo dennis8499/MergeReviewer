@@ -143,7 +143,7 @@ python "<skill-dir>/scripts/review_workspace.py" read --context-dir "<context>" 
 
 問題紀錄包含 `id`（F-001 起連續編號）、原生 `priority`（P0–P3 順序）、`title`、`impact`、`trigger`、`expected`、`actual`、`recommendation`、`owner`（開發／維運設定／QA）、`scenario_source`（`code-derived`／`reproduced`）及 `evidence`。選填非空文字 `operation_scenario`（操作情境）、`technical_trigger`（技術觸發方式）、`technical_explanation`（證據說明）、`impact_scope`（影響範圍）、`evidence_summary`（證據補充）及 `engineering_fix`（工程修正建議）。至少一條證據連到已閱讀的所選儲存庫變更，其餘可包含既有消費端。
 
-v3 必填欄位與 CLI 維持相容。新報告呈現問題名稱、影響、操作情境與建議處理，技術證據包含觸發條件、技術觸發方式、證據說明、影響範圍、工程修正建議及固定片段。新增選填文字及既有工程修正建議缺少時顯示「未提供」，不得推造內容。預期與實際結果、責任角色及證據補充仍保留。`code-derived` 只能標為依程式推導，`reproduced` 須有實際執行紀錄。
+v3 必填欄位、`engineering-review/v1` 完整性驗證與 CLI 維持相容。新舊草稿均使用[報告風格](report-style.md#報告與聊天結果)的六區塊版面，整合既有影響、操作情境、觸發、證據說明、影響範圍、工程修正建議及固定片段。無標記的舊草稿缺少工程欄位時仍顯示「未提供」，不得推造內容。預期與實際結果、責任角色及證據補充保留。`code-derived` 只能標為依程式推導，`reproduced` 須有實際執行紀錄；每項只列一次重現狀態標示。
 
 每條非空文字問題證據必填 `line_start`／`line_end`，以 1 起算且包含兩端；選取能證明問題的最小必要行段，不附無關上下文。發布器依 Repo、來源、完整 ref、路徑及行號驗證並擷取固定內容，草稿不必提供程式碼片段。固定版本為空檔案時，兩個行號可同時省略，報告標示「固定版本內容為空（0 行）」；必要時另引用基礎版本的相關行段。一般覆蓋紀錄仍沿用既有證據規則。
 
@@ -176,9 +176,9 @@ v3 必填欄位與 CLI 維持相容。新報告呈現問題名稱、影響、操
 python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result "<context>/draft.json"
 ~~~
 
-只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。「技術審查紀錄（工程師參考）」中的「比較資訊」列出所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）。問題證據附完整固定 ref；多儲存庫延伸證據整合於同一份報告。
+只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。正文前段的「比較資訊」列出所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）。問題證據附完整固定 ref；多儲存庫延伸證據整合於同一份報告。
 
-Markdown 呈現 `extension_status=disabled|complete|incomplete`、`review_status`、`priority_counts` 對應的結論、問題及限制，並固定輸出審查結論、問題總攬、問題詳情（工程師參考）、範圍與限制、技術審查紀錄（工程師參考）五章。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約完整驗證後呈現於技術紀錄；搜尋僅列識別、來源、契約、狀態與命中數，不複製原始命中內容。設定與私鑰片段省略、認證或連線行遮蔽；仍先完整驗證 ref／行號，再保留原始內容 SHA-256，不能以遮蔽掩蓋無效證據。發布器標準輸出只回傳完整報告路徑。
+Markdown 以 `review_status`、`priority_counts` 對應的結論與問題數量開頭，依序輸出比較資訊、問題、範圍與限制、下一步、技術審查紀錄；限制中呈現 `extension_status=disabled|complete|incomplete`。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約完整驗證後保留於同一份報告末尾的 `<details>` 技術紀錄；必要缺口與人工核對區維持展開。下一步為空時明確顯示無額外行動。搜尋僅列識別、來源、契約、狀態與命中數，不複製原始命中內容。設定與私鑰片段省略、認證或連線行遮蔽；仍先完整驗證 ref／行號，再保留原始內容 SHA-256，不能以遮蔽掩蓋無效證據。發布器標準輸出只回傳完整報告路徑。
 
 發布前核對快照的 owned 儲存、固定物件身分、指示、證據、覆蓋及固定搜尋。新的固定快照不再比較目前雲端／本機 refs、工作區宣告與 Repo 清單；owned 物件缺失或損壞不能回退到原 Repo。完整 Markdown 先寫入暫存，再原子發布到報告檔案；同名時遞增時間戳，不覆寫既有內容。預設成功、驗證失敗及寫入失敗均清理本次工作階段建立並由工具識別的證據目錄。
 

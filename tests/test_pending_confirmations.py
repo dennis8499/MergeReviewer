@@ -39,6 +39,12 @@ class PendingConfirmationTests(ReviewFixture):
         self.assertEqual(1, text.count("<!-- merge-confirmations:start -->"))
         self.assertEqual(1, text.count("<!-- merge-confirmations:end -->"))
         self.assertNotIn("可以合併", text)
+        expanded, audit = text.split("<details>", 1)
+        self.assertIn("待人工確認：1 項。", expanded)
+        self.assertIn("<!-- merge-confirmations:start -->", expanded)
+        self.assertIn("<!-- merge-confirmations:end -->", expanded)
+        self.assertNotIn("merge-confirmations:", audit)
+        self.assertLess(text.index("<!-- merge-confirmations:end -->"), text.index("## 下一步"))
 
     def test_confirmed_findings_keep_priority_and_evidence_when_pending_is_present(self):
         context, manifest = self.capture()

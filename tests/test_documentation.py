@@ -115,7 +115,7 @@ class DocumentationPackageTests(unittest.TestCase):
                 self.assertNotIn("技術附錄", text)
                 self.assertIn("逐檔覆蓋", text)
                 self.assertIn("### F-001｜[P1] 就緒狀態過早開啟", text)
-                self.assertEqual(["問題名稱", "影響說明", "操作情境", "建議處理", "觸發條件", "證據說明", "影響範圍", "工程修正建議", "證據"],
+                self.assertEqual(["問題描述", "重現原因", "預期結果", "實際結果", "證據", "建議改善方式"],
                                  re.findall(r"^\*\*([^*]+)\*\*$", text, flags=re.MULTILINE))
                 self.assertIn(f"`OrderService/app.py:1–1`（來源：`head`；固定版本：`{head}`）", text)
                 self.assertIn("\n```\nready = True\n```\n", text)

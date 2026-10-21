@@ -103,7 +103,7 @@ def publish_finding(context):
 @then("the report is in the selected Repo")
 def selected_output(context):
     assert context.markdown.parent == context.branch_fixture.repo / "review-reports"
-    assert context.markdown.read_text(encoding="utf-8").startswith("# 合併審查: api")
+    assert context.markdown.read_text(encoding="utf-8").startswith("**")
 
 
 @then("the filename contains the timestamp and 8 character branch commits")
@@ -118,7 +118,7 @@ def comparison_details(context):
     seed = workspace.repository(context.manifest, context.manifest["selected_repo"])
     native = seed["native"]
     text = context.markdown.read_text(encoding="utf-8")
-    comparison = text.split("### 比較資訊\n", 1)[1].split("\n### ", 1)[0]
+    comparison = text.split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
     assert f"- Repo：`{seed['name']}`" in comparison
     assert f"- 本機路徑：`{seed['path']}`" in comparison
     for role, label in (("base", "基礎分支"), ("head", "比較分支")):
@@ -138,7 +138,7 @@ def no_appendix(context):
 @then("the finding has the common fields and only its frozen code excerpt")
 def finding_details(context):
     text = context.markdown.read_text(encoding="utf-8")
-    assert ["問題名稱", "影響說明", "操作情境", "建議處理", "觸發條件", "證據說明", "影響範圍", "工程修正建議", "證據"] == re.findall(
+    assert ["問題描述", "重現原因", "預期結果", "實際結果", "證據", "建議改善方式"] == re.findall(
         r"^\*\*([^*]+)\*\*$", text, flags=re.MULTILINE)
     item = context.finding
     assert f"### {item['id']}｜[{item['priority']}] {item['title']}" in text

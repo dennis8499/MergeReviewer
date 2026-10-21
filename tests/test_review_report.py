@@ -27,8 +27,8 @@ class ReviewReportTests(ReviewFixture):
         self.assertEqual([markdown], list(markdown.parent.iterdir()))
         self.assertFalse(context.exists())
         text = markdown.read_text(encoding="utf-8")
-        self.assertIn("# 合併審查: api", text)
-        comparison = text.split("### 比較資訊\n", 1)[1].split("\n### ", 1)[0]
+        self.assertTrue(text.startswith("**可以合併**｜未發現具體問題。"))
+        comparison = text.split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
         self.assertIn("- Repo：`api`", comparison)
         self.assertIn(f"- 本機路徑：`{self.repo}`", comparison)
         self.assertIn(f"| 基礎分支 | `main` | `refs/heads/main` | `{base[:8]}` |", comparison)
@@ -40,9 +40,9 @@ class ReviewReportTests(ReviewFixture):
         self.assertNotIn("技術附錄", text)
         self.assertIn(base, text)
         self.assertIn(head, text)
-        self.assertLess(text.index("問題數量："), text.index("### 比較資訊"))
-        self.assertNotIn("## 問題\n", text)
-        self.assertNotIn("## 下一步\n", text)
+        self.assertLess(text.index("問題數量："), text.index("## 比較資訊"))
+        self.assertIn("## 問題\n", text)
+        self.assertIn("## 下一步\n\n無額外下一步。", text)
 
     def test_report_shows_remote_branch_inputs_and_resolved_refs(self):
         remote = self.root / "origin.git"
@@ -54,7 +54,7 @@ class ReviewReportTests(ReviewFixture):
         base, head = seed["sources"]["base"]["ref"], seed["sources"]["head"]["ref"]
         (context / "draft.json").write_text(json.dumps(self.draft(context, manifest)), encoding="utf-8")
         markdown = review_report.publish_report(context, context / "draft.json")
-        comparison = markdown.read_text(encoding="utf-8").split("### 比較資訊\n", 1)[1].split("\n### ", 1)[0]
+        comparison = markdown.read_text(encoding="utf-8").split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
         self.assertIn(f"| 基礎分支 | `origin/main` | `refs/remotes/origin/main` | `{base[:8]}` |", comparison)
         self.assertIn(f"| 比較分支 | `origin/feature` | `refs/remotes/origin/feature` | `{head[:8]}` |", comparison)
         self.assertIn("- 合併方向：`origin/feature` → `origin/main`", comparison)
@@ -70,7 +70,7 @@ class ReviewReportTests(ReviewFixture):
         self.assertFalse((self.root / "review-reports").exists())
         self.assertFalse((consumer / "review-reports").exists())
         self.assertEqual([markdown], list(markdown.parent.iterdir()))
-        comparison = markdown.read_text(encoding="utf-8").split("### 比較資訊\n", 1)[1].split("\n### ", 1)[0]
+        comparison = markdown.read_text(encoding="utf-8").split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
         self.assertIn(f"- 本機路徑：`{self.repo}`", comparison)
         self.assertNotIn(str(consumer), comparison)
 
@@ -88,19 +88,19 @@ class ReviewReportTests(ReviewFixture):
         markdown = review_report.publish_report(context, context / "draft.json")
         text = markdown.read_text(encoding="utf-8")
         self.assertIn("問題數量：P0 1／P1 1／P2 1／P3 1", text)
-        self.assertLess(text.index("## 問題詳情（工程師參考）\n"), text.index("### 比較資訊"))
-        self.assertLess(text.index("## 問題詳情（工程師參考）\n"), text.index("## 範圍與限制"))
-        self.assertLess(text.index("## 範圍與限制"), text.index("### 下一步"))
+        self.assertLess(text.index("## 比較資訊"), text.index("## 問題\n"))
+        self.assertLess(text.index("## 問題\n"), text.index("## 範圍與限制"))
+        self.assertLess(text.index("## 範圍與限制"), text.index("## 下一步"))
         sections = re.split(r"^### F-\d{3}｜", text, flags=re.MULTILINE)[1:]
         self.assertEqual(4, len(sections))
-        labels = ["問題名稱", "影響說明", "操作情境", "建議處理", "觸發條件", "證據說明", "影響範圍", "工程修正建議", "證據"]
+        labels = ["問題描述", "重現原因", "預期結果", "實際結果", "證據", "建議改善方式"]
         for item, section in zip(draft["findings"], sections):
             self.assertIn(f"### {item['id']}｜[{item['priority']}] {item['title']}", text)
             self.assertEqual(labels, re.findall(r"^\*\*([^*]+)\*\*$", section, flags=re.MULTILINE))
-            for label, field in (("影響說明", "impact"), ("觸發條件", "trigger")):
+            for label, field in (("問題描述", "impact"), ("重現原因", "trigger"), ("預期結果", "expected"), ("實際結果", "actual")):
                 body = section.split(f"**{label}**", 1)[1].split("\n**", 1)[0]
                 self.assertIn(item[field], body)
-            reason = section.split("**操作情境**", 1)[1].split("**建議處理**", 1)[0]
+            reason = section.split("**重現原因**", 1)[1].split("**預期結果**", 1)[0]
             marker = "依程式推導，未實際重現" if item["scenario_source"] == "code-derived" else "已實際重現"
             self.assertIn(marker, reason)
             evidence = section.split("**證據**", 1)[1]
@@ -416,7 +416,7 @@ class ReviewReportTests(ReviewFixture):
             markdown = review_report.publish_report(context, context / "draft.json")
         self.assertEqual(f"merge-review-20261014T091530123456Z-{base[:8]}-{head[:8]}.md", markdown.name)
         text = markdown.read_text(encoding="utf-8")
-        comparison = text.split("### 比較資訊\n", 1)[1].split("\n### ", 1)[0]
+        comparison = text.split("## 比較資訊\n", 1)[1].split("\n## ", 1)[0]
         self.assertIn(f"| 基礎分支 | `main` | `refs/heads/main` | `{base[:8]}` |", comparison)
         self.assertIn(f"- 主要差異範圍（共同祖先 → 比較分支）：`{merge_base[:8]}` → `{head[:8]}`", comparison)
         self.assertNotIn(checkout[:8], comparison)
