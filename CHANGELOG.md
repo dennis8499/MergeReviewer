@@ -1,5 +1,16 @@
 # Change log
 
+## 0.18.0 — 2026-10-22 (local candidate)
+
+- Add request-ID start/step/finish/status/cancel orchestration over the existing helpers, with owned evidence outside source Repos and permission preflight before transport.
+- Share in-flight precise fetches and completed receipts for 300 seconds without sliding expiry; keep 30-second failure cooldown, explicit refresh, private refs and credential/remote invalidation.
+- Reuse verified immutable peer packs with two local packing slots and a 2-GiB LRU; copy independent evidence into every session.
+- Capture coordinated peers directly at their pinned commits without redundant worktree/index scans; later local HEAD changes affect only new requests.
+- Batch ordered reads, contract registration and searches with one manifest commit, durable prefix checkpoints, operation-ID replay and bounded 24-KiB output with complete artifacts.
+- Prepare honest unreviewed drafts, retain repairable JSON/field errors, and save publication before cleanup. Retry returns the existing report.
+- Render the workbench's five H2 sections directly for engineering-review drafts; preserve legacy CLI, v3 and exit 0/2/3 compatibility.
+- Record helper phase durations separately. Local helper validation and model-quality acceptance are documented independently.
+
 ## 0.17.0 — 2026-10-21
 
 - Unify the Traditional Chinese merge review report layout while preserving validated findings, evidence and editable confirmations.

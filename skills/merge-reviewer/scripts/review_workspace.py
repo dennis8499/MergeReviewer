@@ -103,11 +103,29 @@ def evidence_repository(context: Path, repo: dict) -> Path:
     objects = safe_path(context, expected + "/objects")
     require(path.is_dir() and safe_path(context, expected + "/HEAD").is_file() and objects.is_dir(),
             "frozen snapshot repository is missing")
+    require(safe_path(context, expected + "/refs").is_dir(), "frozen snapshot refs directory is missing")
+    if snapshot.get("head_policy") == "fixed-head/v1":
+        require((path / "HEAD").read_text(encoding="ascii").strip() == snapshot.get("head_ref"),
+                "frozen snapshot HEAD identity differs")
     safe_path(context, expected + "/config")
     pack = safe_path(context, expected + "/objects/pack")
     require(pack.is_dir() and all(not is_link(item) for item in pack.iterdir()), "linked frozen object storage")
     require(not (path / "objects/info/alternates").exists(), "frozen snapshot cannot borrow alternate objects")
     return path
+
+
+def write_snapshot_refs(context, repo):
+    """Initialize refs in the new, exclusively owned bare store before delivery."""
+    relative = repo["snapshot"]["git_dir"]
+    for name, source in repo["sources"].items():
+        require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name), "invalid fixed source ref name")
+        require(re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", source["ref"]), "invalid fixed source object ID")
+        target = safe_path(context, relative + "/refs/merge-reviewer/sources/" + name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source["ref"] + "\n", encoding="ascii", newline="\n")
+    safe_path(context, relative + "/HEAD").write_text(repo["sources"]["head"]["ref"] + "\n", encoding="ascii", newline="\n")
+    repo["snapshot"]["head_policy"] = "fixed-head/v1"
+    repo["snapshot"]["head_ref"] = repo["sources"]["head"]["ref"]
 
 
 def source_environment(context: Path, repo: dict, source: dict, api) -> dict:
@@ -368,6 +386,14 @@ def capture_ancestor_path(repo: Path, base: str, head: str, api) -> list[str]:
 
 
 def seal_snapshot(context: Path, repo: dict, api, *, tree_cache=None, extra_commit_objects=()):
+    import review_coordinator
+    active = review_coordinator.ACTIVE.get()
+    with active.packing() if active else nullcontext():
+        return _seal_snapshot(context, repo, api, tree_cache=tree_cache,
+                              extra_commit_objects=extra_commit_objects)
+
+
+def _seal_snapshot(context: Path, repo: dict, api, *, tree_cache=None, extra_commit_objects=()):
     """Pack complete captured trees, without copying unrelated commit history."""
     source_repo = Path(repo["path"])
     relative = f"repos/{repo['id']}/snapshot.git"
@@ -397,6 +423,7 @@ def seal_snapshot(context: Path, repo: dict, api, *, tree_cache=None, extra_comm
                 input_bytes=("\n".join(sorted(object_ids)) + "\n").encode("ascii"), env=pack_environment)
     repo["snapshot"] = {"policy": SNAPSHOT_POLICY, "git_dir": relative,
                         "captured_at": datetime.now(timezone.utc).isoformat(), "object_format": object_format}
+    write_snapshot_refs(context, repo)
     verified_trees = {}
     for source in repo["sources"].values():
         source["objects"] = relative + "/objects"
@@ -556,6 +583,10 @@ def build(args, api) -> dict:
         "workspace_instructions": [], "coverage_policy": "ancestor-noop/v1",
         "network_activity": api.network_activity(),
     }
+    import review_coordinator
+    active = review_coordinator.ACTIVE.get()
+    if active:
+        manifest.update(request_id=active.request_id, runtime_root=str(active.root))
     branch_refs = None
     # Check every local root before the selected Repo is allowed to fetch.
     # Peer failures stay visible without changing ownership configuration.
@@ -603,6 +634,9 @@ def build(args, api) -> dict:
             record["limitations"].append(str(exc))
     branch_refs = api.pin_branch_refs(seed, args)
     manifest["network_activity"] = api.network_activity()
+    if active:
+        manifest["sync_activity"] = [{k: v for k, v in item.items() if k != "receipt"}
+                                     for item in active.syncs]
     selected = next(record for record in manifest["repositories"] if record["id"] == manifest["selected_repo"])
     selected["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
     manifest["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
@@ -614,7 +648,7 @@ def build(args, api) -> dict:
         candidate = actual = Path(record["path"])
         try:
             tree_cache = CaptureTreeCache(context, api)
-            if candidate != seed:
+            if candidate != seed and not active:
                 record["before"] = api.snapshot(actual)
             if candidate == seed:
                 branch_snapshot(context, record, args, api, tree_cache=tree_cache, frozen_refs=branch_refs)
@@ -628,11 +662,22 @@ def build(args, api) -> dict:
                     api.capture_phase("snapshot-capture")
             else:
                 record["review_source"] = "head"
-                add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
-            if candidate != seed:
+                def build_peer():
+                    add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
+                    seal_snapshot(context, record, api, tree_cache=tree_cache)
+                if active:
+                    active.peer(context, record, api, build_peer)
+                else:
+                    add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
+            # Coordinated peers are read exclusively by their already pinned
+            # commit. Their working tree/index and later HEAD cannot select
+            # evidence; sealing independently checks the copied object closure.
+            # Keep the original live-tree drift checks for the legacy CLI.
+            if candidate != seed and not active:
                 require(record["before"] == api.snapshot(actual), "Repo changed during capture; rebuild context")
-            seal_snapshot(context, record, api, tree_cache=tree_cache,
-                          extra_commit_objects=record.get("ancestor_path", ()))
+            if candidate == seed or not active:
+                seal_snapshot(context, record, api, tree_cache=tree_cache,
+                              extra_commit_objects=record.get("ancestor_path", ()))
         except (ValueError, OSError, api.ReviewContextError) as exc:
             if candidate == seed:
                 raise
@@ -808,8 +853,8 @@ def validate_contract(context, manifest, item, api, *, cache=None):
     return value
 
 
-def register_contract(context, manifest, item, api):
-    value = validate_contract(context, manifest, item, api)
+def register_contract(context, manifest, item, api, *, cache=None):
+    value = validate_contract(context, manifest, item, api, cache=cache)
     manifest["changed_contracts"].append(value)
     save(context, manifest)
     return value
@@ -836,6 +881,10 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
     require(len(selected) == len(set(selected)), "duplicate search Repo IDs")
     results = []
     for repo_id in selected:
+        import review_coordinator
+        active = review_coordinator.ACTIVE.get()
+        if active:
+            active.check()
         repo = repository(manifest, repo_id)
         name = source_name or repo.get("review_source")
         record = {"id": f"S-{len(manifest['searches']) + 1:04}", "repo": repo_id, "source": name,
@@ -871,7 +920,7 @@ def read_bounds(line_start, line_end):
 
 
 def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_name=None, *, cache=None,
-         line_start=None, line_end=None) -> dict:
+         line_start=None, line_end=None, around_line=None, context_lines=20) -> dict:
     require(isinstance(repo_id, str) and bool(repo_id) and path, "read needs one --repo and --path")
     read_bounds(line_start, line_end)
     repo = repository(manifest, repo_id)
@@ -881,6 +930,14 @@ def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_nam
     lines = content.decode("utf-8", errors="replace").splitlines()
     result = {"repo": repo["id"], "source": name, "ref": repo["sources"][name]["ref"], "path": path,
               "sha256": hashlib.sha256(content).hexdigest()}
+    if around_line is not None:
+        require(line_start is None and line_end is None, "around_line cannot accompany exact bounds")
+        require(type(around_line) is int and around_line >= 1 and type(context_lines) is int
+                and context_lines >= 0, "around_line/context_lines must be nonnegative integer bounds")
+        result.update(requested_line=around_line, total_lines=len(lines))
+        if lines:
+            center = min(around_line, len(lines))
+            line_start, line_end = max(1, center - context_lines), min(len(lines), center + context_lines)
     if line_start is not None:
         require(line_end <= len(lines), f"line_end exceeds fixed file line count ({len(lines)})")
         result.update(line_start=line_start, line_end=line_end, total_lines=len(lines))
@@ -892,7 +949,7 @@ def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_nam
 
 def validate_read_request(request):
     require(isinstance(request, dict), "batch request must be an object")
-    require(set(request) <= {"repo", "source", "path", "line_start", "line_end"},
+    require(set(request) <= {"repo", "source", "path", "line_start", "line_end", "around_line", "context_lines"},
             "unknown batch-read request argument")
     require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
     require(("line_start" in request) == ("line_end" in request),
@@ -923,7 +980,8 @@ def batch_read(context: Path, manifest: dict, requests: list[dict], api) -> dict
     for request in requests:
         results.append(read(context, manifest, request.get("repo"), request.get("path"), api,
                             request.get("source"), cache=cache,
-                            line_start=request.get("line_start"), line_end=request.get("line_end")))
+                            line_start=request.get("line_start"), line_end=request.get("line_end"),
+                            around_line=request.get("around_line"), context_lines=request.get("context_lines", 20)))
     return {"reads": results}
 
 
@@ -944,6 +1002,109 @@ def batch_search(context: Path, manifest: dict, requests: list[dict], api) -> di
                        request.get("source"), request.get("contract"), cache=cache)
         results.extend(value["searches"])
     return {"searches": results}
+
+
+def ordered_step(context, manifest, operations, api):
+    """Allowlisted composition of existing handlers, with idempotent checkpoints."""
+    if not isinstance(operations, list) or not operations:
+        return {"operations": [], "complete": False, "next_index": 0,
+                "error": "operations must be a nonempty array"}
+    content, searches = FixedSourceCache(context, api), FixedSearchCache(context, api)
+    results = []
+    # Speculatively batch known fixed reads. Errors are evaluated again at their
+    # ordered position, so a later malformed read cannot discard a valid prefix.
+    requests = []
+    for operation in operations:
+        if isinstance(operation, dict) and operation.get("op") == "read":
+            args = {k: v for k, v in operation.items() if k not in ("id", "op")}
+            try:
+                validate_read_request(args)
+                item = repository(manifest, args.get("repo"))
+                content._source_key(item, args.get("source") or item["review_source"], args["path"])
+                requests.append(args)
+            except (ValueError, KeyError, TypeError, OSError):
+                pass
+    try:
+        content.prefetch(manifest, requests)
+    except (ValueError, KeyError, TypeError, OSError, api.ReviewContextError):
+        content = FixedSourceCache(context, api)
+    with review_runtime.batch_manifest(context, manifest):
+        for index, operation in enumerate(operations):
+            contracts_before, searches_before = len(manifest["changed_contracts"]), len(manifest["searches"])
+            new_operation, identifier = False, None
+            try:
+                import review_coordinator
+                active = review_coordinator.ACTIVE.get()
+                if active:
+                    active.check()
+                require(isinstance(operation, dict), "operation must be an object")
+                identifier = operation.get("id")
+                require(isinstance(identifier, str) and bool(re.fullmatch(r"[A-Za-z0-9_-]{1,100}", identifier)),
+                        "operation needs a unique id (letters, digits, underscore or hyphen)")
+                fingerprint = review_coordinator.digest(operation)
+                checkpoint = manifest.setdefault("operations", {}).get(identifier)
+                if checkpoint:
+                    legacy = hashlib.sha256(review_runtime.canonical(operation)).hexdigest()
+                    require(checkpoint["fingerprint"] in (fingerprint, legacy), "operation id already has different input")
+                    result = review_runtime.load_view(context, checkpoint["artifact"])
+                    results.append({"id": identifier, "reused": True, "result": result})
+                    continue
+                new_operation = True
+                kind = operation.get("op")
+                args = {k: v for k, v in operation.items() if k not in ("id", "op")}
+                if kind == "read":
+                    validate_read_request(args)
+                    content.prefetch(manifest, [args])
+                    result = read(context, manifest, args.get("repo"), args.get("path"), api,
+                                  args.get("source"), cache=content,
+                                  line_start=args.get("line_start"), line_end=args.get("line_end"),
+                                  around_line=args.get("around_line"), context_lines=args.get("context_lines", 20))
+                elif kind == "register-contract":
+                    require(set(args) == {"contract"}, "register-contract needs contract")
+                    result = register_contract(context, manifest, args["contract"], api, cache=content)
+                elif kind == "search":
+                    require(set(args) <= {"query", "repo", "source", "contract"}, "unknown search argument")
+                    require(args.get("repo") is None or isinstance(args["repo"], list), "search repo must be an array")
+                    result = search(context, manifest, args.get("query"), args.get("repo"), api,
+                                    args.get("source"), args.get("contract"), cache=searches)
+                elif kind == "instructions":
+                    require(set(args) <= {"repo", "path"}, "unknown instructions argument")
+                    result = instructions(context, manifest, args.get("repo"), args.get("path"), api)
+                elif kind == "inventory":
+                    require(set(args) <= {"repo", "source"}, "unknown inventory argument")
+                    selected = [repository(manifest, args["repo"])] if args.get("repo") else manifest["repositories"]
+                    result = {"repositories": [{"repo": item["id"], "name": item["name"],
+                              "sources": {name: value for name, value in item["sources"].items()
+                                          if not args.get("source") or name == args["source"]}} for item in selected]}
+                elif kind == "patch":
+                    require(set(args) <= {"repo", "path", "line_start", "line_end"}, "unknown patch argument")
+                    item = repository(manifest, args.get("repo"))
+                    paths = set(item["patches"])
+                    prefix = f"repos/{item['id']}/native"
+                    paths.update(f"{prefix}/{path.name}" for path in safe_path(context, prefix).glob("*.patch"))
+                    require(args.get("path") in paths, "patch must be in the captured patch index")
+                    lines = safe_path(context, args["path"]).read_text(encoding="utf-8").splitlines()
+                    first, last = args.get("line_start", 1), args.get("line_end", len(lines))
+                    require(type(first) is int and type(last) is int and 1 <= first <= last <= len(lines)
+                            or not lines and first == 1 and last == 0, "invalid patch bounds")
+                    result = {"path": args["path"], "total_lines": len(lines),
+                              "lines": [{"line": i, "text": lines[i-1]} for i in range(first, last+1)]}
+                elif kind == "view":
+                    from review_flow import artifact_view
+                    result = artifact_view(context, **args)
+                else:
+                    raise ValueError(f"Unsupported step operation: {kind}")
+                artifact = review_runtime.store_view(context, result)
+                manifest["operations"][identifier] = {"fingerprint": fingerprint, "artifact": artifact}
+                save(context, manifest)
+                results.append({"id": identifier, "artifact": artifact, "result": result})
+            except (ValueError, KeyError, TypeError, OSError, api.ReviewContextError) as exc:
+                if new_operation:
+                    del manifest["changed_contracts"][contracts_before:]
+                    del manifest["searches"][searches_before:]
+                    manifest["operations"].pop(identifier, None)
+                return {"operations": results, "complete": False, "next_index": index, "error": str(exc)}
+    return {"operations": results, "complete": True, "next_index": len(operations)}
 
 
 def main(argv=None):

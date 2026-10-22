@@ -1,3 +1,7 @@
+# 0.18.0 三階段入口
+
+新審查使用 [start／step／finish](session-workflow.md)。舊獨立命令維持相容；以下舊命令範例不啟用跨請求同步快取。群組工作區預設使用 Repo 外的 `.review-runtime/`，單 Repo 另設外部 runtime。同一 VSCode 工作區陸續啟動可重用 300 秒同步及 peer pack；已啟動的審查沿原 SHA，不定時重新連線。
+
 # MergeReviewer 詳細使用指南
 
 適用版本：**0.15.0**。主要讀者是使用 Codex 執行合併前審查的開發者；進階流程供工具維護者使用。

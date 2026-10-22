@@ -1,6 +1,6 @@
 # Merge Reviewer
 
-`0.17.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
+`0.18.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
 目前 Skills root 已安裝 `output-style` 時優先使用其情境風格；沒有時沿用 [Concise 寫作規則](skills/merge-reviewer/references/report-style.md#共用-concise-規則)。必要報告欄位、證據、缺口及錯誤資訊完整保留；要求詳解時完整說明。
 
@@ -8,7 +8,7 @@
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.17.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
+從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.18.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
 在 Codex 對話輸入：
 
@@ -27,10 +27,10 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 - 開始前將固定版本及相關來源保存至自足 Git 證據庫；後續分支更新、force push 或原 Repo 清理不撤銷本次審查，也不自動重審。報告列出擷取時間，結論僅適用固定 SHA。
 - 一個 Git 根目錄或只有一個 Repo 的容器停用跨 Repo 檢核；至少兩個宣告範圍內的不同根目錄才啟用。
 - 永遠只有一個受審 Repo；其他 Repo 使用擷取時的 HEAD，不套用同名分支或本機修改。
-- 不修改原始檔案、index 或目前分支；只同步指定遠端、建立系統暫存證據及寫報告。
+- 不修改原始檔案、index 或目前分支；只同步指定遠端、建立 Repo 外的受管理證據及寫報告。
 - 必要來源、預覽或影響鏈缺失時保持未完成，保留已有證據的問題。
 
-擷取可用 `--summary` 減少回傳內容，完整 manifest 與證據仍保存；已知的固定讀取及搜尋可批次執行，保留完整審查與發布前驗證。介面見[批次操作](skills/merge-reviewer/references/workspace-review.md#批次固定讀取與搜尋)。
+新版使用一次 `review_session.py start`、必要輪數 `step`、一次 `finish`。成功同步結果共用 300 秒，相同需求進行中合併；peer pack 共用後複製至獨立 context。群組工作區使用 `.review-runtime/`，單 Repo 設外部 runtime。以 request ID 查詢／取消，草稿與清理互不影響。完整 [流程、批次及恢復範例](skills/merge-reviewer/references/session-workflow.md)。
 
 ## 報告
 
@@ -38,7 +38,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 <所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md
 ~~~
 
-首行直接呈現合併建議、狀態與摘要，接著列 P0–P3 數量；依序為比較資訊、問題、範圍與限制、下一步、技術審查紀錄。由執行 Skill 的 agent 統一依 Codex Code Review 準則判斷，不另呼叫原生審查引擎，也不設定產品預設模型。
+新報告直接產生工作台五個 H2：審查結論、問題總攬、問題詳情（工程師參考）、範圍與限制、技術審查紀錄（工程師參考）。由執行 Skill 的 agent 統一依 Codex Code Review 準則判斷，不另呼叫原生審查引擎，也不設定產品預設模型。
 
 每項問題以編號、優先程度與名稱為標題，正文為問題描述、重現原因、預期結果、實際結果、證據、建議改善方式六區塊。完整工程內容與最小固定證據保留；新草稿工程欄位必填，舊草稿缺少時顯示「未提供」。完整版本、覆蓋、功能鏈、契約及搜尋摘要收合於同一份報告末尾；人工核對維持展開。設定值、私鑰、認證行與原始搜尋命中內容省略或遮蔽。
 
@@ -50,7 +50,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 
 不支援 Stage、未提交、quick、直接比較、tag／commit／HEAD、多起點、MR task 或 Megin 收據。舊參數直接拒絕，不自動轉成其他審查。
 
-公開 context/result 為 v3，見[證據與結果契約](skills/merge-reviewer/references/workspace-review.md)。GitlabWorkSpace 0.25.0 整合本版的原生分支審查介面；仍固定 MergeReviewer 0.11.0 的舊版工作台須更新完整 VSIX／組合包，不能直接替換其依賴 MR、Group quick 及收據 adapter 的技能目錄。
+公開 context/result 為 v3，見[證據與結果契約](skills/merge-reviewer/references/workspace-review.md)。GitlabWorkSpace 0.31.0 整合本版三階段入口與本機任務狀態；仍固定 MergeReviewer 0.11.0 的舊版工作台須更新完整 VSIX／組合包，不能直接替換其依賴 MR、Group quick 及收據 adapter 的技能目錄。
 
 ## 開發驗證與套件
 
@@ -58,16 +58,18 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 python -m pip install -r requirements-dev.txt
 python -X utf8 -B -m unittest discover -s tests -v
 python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
-python scripts/package_release.py --tag v0.17.0
+python scripts/package_release.py --tag v0.18.0
 ~~~
 
-CI 維持 Linux／Windows × Python 3.10／3.14 矩陣；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及五個必要 helper，不包含測試及舊收據 runtime。
+CI 維持 Linux／Windows × Python 3.10／3.14 矩陣；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及必要 Python helpers，不包含測試及舊收據 runtime。
 
 main 與手動驗證會保存完整矩陣證據及 Linux／Python 3.14 的正式 ZIP，附件保留十四天。推送版本 tag 時，CI 只重用七天內、同一個最終 commit、工作流程及依賴識別均相同的 main 證據；證據或附件缺漏就重跑完整矩陣。發布直接使用已驗證的 ZIP，已有相同 tag／附件可安全重試，內容不同則停止。PR 與本機測試紀錄不能取代正式 CI 證據。
 
 自動測試驗證介面、證據、延伸、報告及清理；[語意品質案例](tests/review_quality_cases.md)與[實際技能紀錄](tests/skill_acceptance_results.md)另行驗收。Helper 通過不代表模型審查品質已通過。
 
 [效能重播工具](tests/benchmark_review.py)以相同固定提交與實際審查草稿比較舊新版，預設各量測五次並比對完整證據及報告。輸出分階段耗時與 Python／Git 命令數；這是 helper 效能量測，模型分析時間與語意品質另行記錄。參數見 `python -X utf8 -B tests/benchmark_review.py --help`。
+
+[三階段效能重播](tests/benchmark_flow.py)比較 0.17.0 批次 CLI 與新入口的冷啟動、暖快取及陸續啟動，逐次核對完整固定證據與問題內容。新流程的本機驗證、逐次量測及模型品質限制見 [0.18.0 驗收紀錄](tests/flow-acceptance-results.md)。
 
 同輪契約可用 `review_workspace.py batch-register-contract --requests-file <契約陣列.json>` 按序註冊，保留逐筆驗證與 checkpoint；單筆入口及既有結果格式維持。批次讀取與搜尋快取只存在同次操作，發布仍從固定物件重新驗證搜尋紀錄。
 
@@ -81,4 +83,4 @@ main 與手動驗證會保存完整矩陣證據及 Linux／Python 3.14 的正式
 - [報告風格](skills/merge-reviewer/references/report-style.md)
 - [分支證據與 v3 契約](skills/merge-reviewer/references/workspace-review.md)
 
-????????????????????[????](skills/merge-reviewer/references/runtime-controls.md)?[????](docs/runtime-optimization.md)??????? ZIP ???????
+執行配額、快取及相容入口見 [操作與負載](skills/merge-reviewer/references/runtime-controls.md)；設計背景見 [執行最佳化](docs/runtime-optimization.md)。升級時使用完整 ZIP，避免混合不同版本的 helper。

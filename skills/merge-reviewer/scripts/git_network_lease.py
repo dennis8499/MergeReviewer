@@ -50,7 +50,8 @@ def runtime_root():
 
 
 def _atomic_json(path, value):
-    temporary = path.with_name("." + path.name + "-" + uuid.uuid4().hex)
+    # Do not repeat long cache keys: Windows may still enforce MAX_PATH.
+    temporary = path.with_name(".tmp-" + uuid.uuid4().hex)
     try:
         with temporary.open("x", encoding="utf-8") as stream:
             json.dump(value, stream, separators=(",", ":"))
@@ -164,18 +165,21 @@ def _windows_job():
     return kernel, handle, active
 
 
-def run(command, *, input=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, env=None, timeout=180.0):
+def run(command, *, input=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, env=None,
+        timeout=180.0, cancelled=None, observer=None):
     """Run a network command under one shared slot; preserve ambiguous crashes.
 
     The supervisor waits for a stdin handshake before starting Git. On Windows
     it is assigned to a kill-on-close Job before that handshake, closing the
     spawn/child-assignment race for Git and all of its descendants.
     """
-    lease = DirectoryLease(timeout=timeout).acquire()
+    lease = DirectoryLease(timeout=timeout, cancelled=cancelled).acquire()
     process = None
     job = None
     confirmed = False
     try:
+        if observer:
+            observer("fetch")
         lease.update(state="starting")
         if os.name == "nt":
             job = _windows_job()
@@ -192,7 +196,22 @@ def run(command, *, input=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
                      childStartedAt=datetime.now(timezone.utc).isoformat())
         specification = json.dumps({"command": list(command), "input": base64.b64encode(input).decode() if input is not None else None}).encode()
         try:
-            output, error = process.communicate(specification, timeout=timeout)
+            if cancelled is None:
+                output, error = process.communicate(specification, timeout=timeout)
+            else:
+                deadline = time.monotonic() + timeout
+                pending = specification
+                while True:
+                    if cancelled():
+                        raise LeaseError("Git network operation cancelled.")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    try:
+                        output, error = process.communicate(pending, timeout=min(.1, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        pending = None
         except BaseException:
             if job:
                 job[0].TerminateJobObject(job[1], 1)

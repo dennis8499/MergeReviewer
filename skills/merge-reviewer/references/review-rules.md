@@ -24,7 +24,7 @@
 
 ## 確切 Repo 的 ownership 修復
 
-修復只限首次完整快照及語意分析以前的本機查核。先對使用者明確宣告的候選 Git 根目錄執行本機唯讀 ownership preflight，保存第一次 `dubious ownership` 原始診斷；核對已報錯路徑確在授權範圍，再把所有實際報錯的候選確切路徑一次傳給同一 helper 子程序的 `GIT_CONFIG_COUNT`／`GIT_CONFIG_KEY_n=safe.directory`／`GIT_CONFIG_VALUE_n=<exact-path>`，讓 capture 一次完成。原環境已有 count 時在其後追加，保留既有值。授權只限該 helper 及其 Git 子程序；不得修改全域、使用 `*` 或擴張工作區。單次直接 Git 查詢可用 `git -c safe.directory=<exact-path>`。若語意分析已開始或遠端已完成同步，維持本次固定 SHA 與缺口，不為 ownership 自動再 fetch、重取或切換快照；真正無法取得必要 HEAD／物件時仍保留必要缺口。獨立審查原有的自行同步政策不變。
+修復只限首次完整快照及語意分析以前的本機查核。先對使用者明確宣告的候選 Git 根目錄執行本機唯讀 ownership preflight，保存第一次 `dubious ownership` 原始診斷；核對已報錯路徑確在授權範圍，再把所有實際報錯的候選確切路徑一次傳給同一 helper 子程序的 `GIT_CONFIG_COUNT`／`GIT_CONFIG_KEY_n=safe.directory`／`GIT_CONFIG_VALUE_n=<exact-path>`，讓 capture 一次完成。原環境已有 count 時在其後追加，保留既有值。授權只限該 helper 及其 Git 子程序；不得修改全域、使用 `*` 或擴張工作區。單次直接 Git 查詢可用 `git -c safe.directory=<exact-path>`。若語意分析已開始或遠端已完成同步，維持本次固定 SHA 與缺口，不為 ownership 自動再 fetch、重取或切換快照；真正無法取得必要 HEAD／物件時仍保留必要缺口。新獨立審查依 start 的共用同步政策取得必要版本；本次已固定的證據維持原 SHA。
 
 helper 的 stdout 接回呼叫者或寫入本次 run 的交接位置；發布器會管理 owned context，請勿將發布 stdout 重新導向到 context 內，以免檔案句柄阻擋原子清理。
 

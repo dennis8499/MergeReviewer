@@ -12,6 +12,20 @@ import uuid
 from git_network_lease import DirectoryLease
 
 _WRITERS = ContextVar("review_context_writers", default=frozenset())
+_DEFERRED = ContextVar("review_deferred_manifest", default=None)
+
+
+@contextmanager
+def batch_manifest(context, manifest):
+    """One generation commit for a new ordered batch, including a valid prefix."""
+    state = {"context": str(Path(context).resolve()), "dirty": False}
+    token = _DEFERRED.set(state)
+    try:
+        yield
+    finally:
+        _DEFERRED.reset(token)
+        if state["dirty"]:
+            save_manifest(context, manifest)
 
 
 @contextmanager
@@ -21,7 +35,16 @@ def writer(context, timeout=180.0):
     if key in _WRITERS.get():
         yield
         return
-    lease = DirectoryLease(context, name="manifest-writer.lock", kind="manifest", timeout=timeout).acquire()
+    marker = context / ".merge-reviewer-owned.json"
+    ownership = json.loads(marker.read_text(encoding="utf-8")) if marker.is_file() else {}
+    if isinstance(ownership, dict) and ownership.get("schema") == "merge-reviewer-session/v2":
+        import review_coordinator
+        import review_session
+        review_session.validate_session(context)
+        lease = review_coordinator.FileLock(Path(ownership["runtime"]) / "jobs" /
+            (ownership["request_id"] + ".manifest.lock"), timeout=timeout).acquire()
+    else:
+        lease = DirectoryLease(context, name="manifest-writer.lock", kind="manifest", timeout=timeout).acquire()
     token = _WRITERS.set(_WRITERS.get() | {key})
     try:
         yield
@@ -32,6 +55,10 @@ def writer(context, timeout=180.0):
 
 def save_manifest(context, manifest):
     context = Path(context).resolve()
+    deferred = _DEFERRED.get()
+    if deferred and deferred["context"] == str(context):
+        deferred["dirty"] = True
+        return
     with writer(context):
         target = context / "manifest.json"
         if target.is_symlink():

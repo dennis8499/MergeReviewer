@@ -45,7 +45,10 @@ class DocumentationPackageTests(unittest.TestCase):
                                  "references/workspace-review.md", "scripts/review_workspace.py", "scripts/workspace_report.py"):
                     self.assertIn("merge-reviewer/" + relative, names)
                 self.assertFalse(any("receipt_runtime/" in n or "delivery_binding" in n or "legacy_group_review" in n for n in names))
-                self.assertEqual(8, sum(n.startswith("merge-reviewer/scripts/") and n.endswith(".py") for n in names))
+                self.assertEqual(10, sum(n.startswith("merge-reviewer/scripts/") and n.endswith(".py") for n in names))
+                for module in ("review_flow.py", "review_coordinator.py"):
+                    self.assertIn("merge-reviewer/scripts/" + module, names)
+                self.assertIn("merge-reviewer/references/session-workflow.md", names)
                 zipped.extractall(root / "installed")
             repo = root / "OrderService"
             git(root, "init", "-b", "main", str(repo))

@@ -4,9 +4,23 @@ import unittest
 
 from tests import benchmark_review as benchmark
 from tests import create_benchmark_fixture as fixture
+from tests import benchmark_flow as flow_benchmark
 
 
 class BenchmarkOracleTests(unittest.TestCase):
+    def test_flow_signature_keeps_frozen_objects_inventories_contracts_and_gates(self):
+        manifest = {"repositories": [{"id": "repo-000", "sources": {"head": {
+            "ref": "commit", "tree_sha": "tree", "files": [{"path": "source.py", "blob_sha": "blob"}]}}}],
+            "required_coverage": [{"path": "source.py"}], "changed_contracts": [{"id": "C-001"}]}
+        first = flow_benchmark.source_signature(manifest)
+        for field in ("ref", "tree_sha", "files"):
+            original = manifest["repositories"][0]["sources"]["head"][field]
+            manifest["repositories"][0]["sources"]["head"][field] = "different"
+            self.assertNotEqual(first, flow_benchmark.source_signature(manifest))
+            manifest["repositories"][0]["sources"]["head"][field] = original
+        manifest["required_coverage"] = []
+        self.assertNotEqual(first, flow_benchmark.source_signature(manifest))
+
     def test_capture_instance_fields_are_ignored_but_source_identities_are_not(self):
         first = {"generated_at": "one", "captured_at": "one", "capture_completed_at": "one",
                  "run_id": "one", "context_sha256": "one", "objects": "C:/first/objects",

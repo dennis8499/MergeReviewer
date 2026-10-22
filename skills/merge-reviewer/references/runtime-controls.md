@@ -1,5 +1,13 @@
 # 操作與負載
 
+新請求使用 [start／step／finish](session-workflow.md)，以下獨立 CLI 為相容入口。共用協定集中在 `review_coordinator.py`；現有讀取、搜尋及發布仍各一份實作。
+
+新流程的同步以 Git common directory、remote URL、有效認證設定／使用者範圍及必要 refs 識別。成功完成起 300 秒有效、命中不延長；失敗冷卻 30 秒。相同需求進行中共用，完整涵蓋子集合也可重用。快取命中不呼叫 ls-remote／GitLab API；實際 fetch 使用唯一私人 refs，保留 atomic、無 tags／prune／submodule／maintenance。遠端、帳號或工作台已知 fetch／push／pull 變動使後續請求失效；已固定快照繼續離線。
+
+網路只占用既有共用 Git lease（配額 1），Git 程序樹結束後立即釋放；本機封裝另以 OS 鎖限全 runtime 2 份。peer pack 依 Repo／SHA／object format／policy 共用單一 producer，驗證後複製進各自 context；LRU 上限 2 GiB。所有需協作的審查使用同一 runtime。成功重用者的 fetch 計數為 0，`sync_activity.mode` 記錄 owner／joined／cached，避免重複加總。
+
+新 runtime 的 owner／state／同步／封裝鎖由 OS 檔案鎖維持，程序死亡即釋放；共用網路 lease 的未知 Git 程序樹仍隔離。草稿、manifest、artifact、報告及清理獨立；終止紀錄保留 24 小時。既有獨立 CLI 維持原本同步語意，只有新 start 啟用跨請求快取。
+
 `--summary-v2` 回傳 `merge-reviewer-workspace-summary/v2`，保留固定版本及必要覆蓋索引。完整 manifest／樹清單留在 owned context。舊 `--summary` 與預設輸出保持原格式。
 
 一次請求由主 agent capture 一次並保存 `context_dir`；子 agent 共用固定 context，契約／搜尋寫入保持單一寫入者。只有明確遠端 base／head 按 remote 合併為一次同步；其他 Repo 使用本機 HEAD。草稿驗證 exit 3 沿原 context 修正，終止錯誤回報後停止，不自動重新 capture。
@@ -22,6 +30,6 @@ python "<skill-dir>/scripts/review_workspace.py" view --context-dir "<context>" 
 
 新 context 的 `merge_parent_policy=necessary-merge-parents/v1` 只要求與有效差異路徑相關的 parent views。`merge_parent_review` 每筆含 `id`、`status`、`reason`、`evidence`；reviewed 引用最終固定版本，parent 有文字內容時另引用該 parent。not-reviewed 保留原因及未完成。與最終內容無關的歷史變更不擴大審查；無有效差異可空集合。此紀錄是完成對帳，不證明模型判斷正確。
 
-manifest 寫入持有 `manifest-writer.lock` 並核對 `generation`；generation 過期時重新載入，再依新狀態操作，不能覆寫 ledger。程序中斷而遺留不確定鎖時，回報路徑並等待人工查明；不按 PID 或時間自行解鎖。
+新 v2 owner context 的 manifest 寫入使用 runtime/jobs 下的 OS 檔案鎖；程序中斷即釋放。舊 context 仍持有 `manifest-writer.lock`。兩者皆核對 `generation`；generation 過期時重新載入，再依新狀態操作，不能覆寫 ledger。程序中斷而遺留不確定鎖時，回報路徑並等待人工查明；不按 PID 或時間自行解鎖。
 
-遠端同步使用單一 `git-network.lock`；兩 Reviewer 與工作台共用 `GitLabWorkspaceLease/v1`。Runtime 使用 `GITLAB_WORKSPACE_RUNTIME_DIR`，否則 Windows `%LOCALAPPDATA%/GitLabWorkspace/runtime-v1`；POSIX 為 `$XDG_RUNTIME_DIR/gitlab-workspace/runtime-v1` 或 `~/.cache/gitlab-workspace/runtime-v1`。每個獨立請求都重新同步，無跨請求 freshness 快取。Git 程序樹終止後才釋放 nonce 所有權；不確定時隔離並保留鎖。鎖只限制同一 runtime 使用者，不能代表整台 GitLab 的容量保證。
+遠端同步使用單一 `git-network.lock`；兩 Reviewer 與工作台共用 `GitLabWorkspaceLease/v1`。網路 runtime 使用 `GITLAB_WORKSPACE_RUNTIME_DIR`，否則 Windows `%LOCALAPPDATA%/GitLabWorkspace/runtime-v1`；POSIX 為 `$XDG_RUNTIME_DIR/gitlab-workspace/runtime-v1` 或 `~/.cache/gitlab-workspace/runtime-v1`。Git 程序樹終止後才釋放 nonce 所有權；不確定時隔離並保留鎖。配額適用同一 runtime 使用者。

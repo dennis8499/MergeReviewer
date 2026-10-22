@@ -599,11 +599,15 @@ def render(result, manifest):
 
     seed = repository(manifest, manifest["selected_repo"])
     native = seed["native"]
+    engineering = result.get("report_layout") == REPORT_LAYOUT
     lines = [f"**{result['recommendation']}**｜{result['review_status']}。{result['summary']}", "",
              "問題數量：" + "／".join(f"{p} {result['priority_counts'][p]}" for p in PRIORITIES), ""]
+    if engineering:
+        lines[:0] = [f"# 合併審查: {seed['name']}", "", "## 審查結論", ""]
     if result["pending_confirmation_count"]:
         lines.extend([f"待人工確認：{result['pending_confirmation_count']} 項。", ""])
-    lines.extend(["## 比較資訊", "", f"- Repo：{mark(seed['name'])}", f"- 本機路徑：{mark(seed['path'])}", "",
+    comparison_start = len(lines)
+    lines.extend(["### 比較資訊" if engineering else "## 比較資訊", "", f"- Repo：{mark(seed['name'])}", f"- 本機路徑：{mark(seed['path'])}", "",
                   "| 角色 | 輸入分支 | 實際 ref | Commit（前 8 碼） |", "| --- | --- | --- | --- |"])
     for role, label in (("base", "基礎分支"), ("head", "比較分支")):
         lines.append(f"| {label} | {cell(mark(native[f'{role}_input']))} | "
@@ -617,7 +621,18 @@ def render(result, manifest):
         lines.extend([f"- 快照擷取：{manifest['generated_at']} → {manifest['capture_completed_at']}（UTC）。",
                       f"- 全部 Repo SHA 固定完成：{manifest.get('refs_pinned_at', '未提供')}（UTC）。",
                       "- 適用版本：本報告僅適用於上述固定 SHA 及本次擷取的相關 Repo；後續分支更新不改變本次結論。", ""])
-    lines.extend(["## 問題", ""])
+    comparison = []
+    if engineering:
+        comparison, lines = lines[comparison_start:], lines[:comparison_start]
+        lines.extend(["## 問題總攬", "", "| 問題 | 優先程度 | 名稱 | 影響 |",
+                      "| --- | --- | --- | --- |"])
+        lines.extend(f"| {cell(f['id'])} | {cell(f['priority'])} | {cell(f['title'])} | {cell(f['impact'])} |"
+                     for f in result["findings"])
+        if not result["findings"]:
+            lines.append("| 無已確認問題 | — | — | — |")
+        lines.extend(["", "## 問題詳情（工程師參考）", ""])
+    else:
+        lines.extend(["## 問題", ""])
     if not result["findings"]:
         lines.extend(["無已確認問題。", ""])
     for finding in result["findings"]:
@@ -678,12 +693,13 @@ def render(result, manifest):
         for item in result["pending_confirmations"]:
             lines.extend([f"- [ ] {item['id']} 已完成核對", "", "核對人：＿＿；日期：＿＿；確認結果與證據：＿＿", ""])
         lines.extend(["<!-- merge-confirmations:end -->", ""])
-    lines.extend(["## 下一步", ""])
+    lines.extend(["### 下一步" if engineering else "## 下一步", ""])
     if result["next_steps"]:
         lines.extend(f"- {step['action']}（{step['owner']}）" for step in result["next_steps"])
     else:
         lines.append("無額外下一步。")
-    lines.extend(["", "## 技術審查紀錄", "", "<details>", "<summary>展開完整技術審查紀錄</summary>", ""])
+    lines.extend(["", "## 技術審查紀錄（工程師參考）" if engineering else "## 技術審查紀錄",
+                  "", "<details>", "<summary>展開完整技術審查紀錄</summary>", "", *comparison])
     lines.extend(["### 固定版本", "", "| Repo | 角色 | 來源 | 完整 SHA |", "| --- | --- | --- | --- |"])
     for version in result["versions"]:
         repo = repository(manifest, version["repo"])
@@ -736,7 +752,7 @@ def render(result, manifest):
     return redact("\n".join(lines)) + "\n"
 
 
-def publish(context, draft, manifest, report_dir, *, timeout=180.0):
+def publish(context, draft, manifest, report_dir, *, timeout=180.0, on_stage=None):
     result = validate(draft, manifest, context, timeout=timeout)
     seed = repository(manifest, manifest["selected_repo"])
     base = seed["sources"]["base"]["ref"]
@@ -753,6 +769,8 @@ def publish(context, draft, manifest, report_dir, *, timeout=180.0):
         for offset in range(1000):
             timestamp = (published_at + timedelta(microseconds=offset)).strftime("%Y%m%dT%H%M%S%fZ")
             output = report_dir / f"merge-review-{timestamp}-{base[:8]}-{head[:8]}.md"
+            if on_stage:
+                on_stage(output, hashlib.sha256(stage.read_bytes()).hexdigest())
             try:
                 # Link the complete file atomically; an existing destination is never replaced.
                 os.link(stage, output)

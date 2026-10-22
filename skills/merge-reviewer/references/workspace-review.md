@@ -1,6 +1,6 @@
 # 分支證據與 v3 結果契約
 
-讀取此參考文件來準備固定來源、記錄實際覆蓋並發布報告。它不提供替代的語意審查判斷。
+此文件集中定義 v3 證據、契約及草稿。新審查依 [start／step／finish](session-workflow.md)，下列獨立 CLI 保留相容；它不提供替代的語意審查判斷。新 context 可附加 request_id、runtime_root、sync_activity、operations，context/result 維持 v3。
 
 ## 證據目錄與固定讀取
 
@@ -233,7 +233,7 @@ python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result
 
 只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。正文前段的「比較資訊」列出所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）。問題證據附完整固定 ref；多儲存庫延伸證據整合於同一份報告。
 
-Markdown 以 `review_status`、`priority_counts` 對應的結論與問題數量開頭，依序輸出比較資訊、問題、範圍與限制、下一步、技術審查紀錄；限制中呈現 `extension_status=disabled|complete|incomplete`。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約完整驗證後保留於同一份報告末尾的 `<details>` 技術紀錄；必要缺口與人工核對區維持展開。下一步為空時明確顯示無額外行動。搜尋僅列識別、來源、契約、狀態與命中數，不複製原始命中內容。設定與私鑰片段省略、認證或連線行遮蔽；仍先完整驗證 ref／行號，再保留原始內容 SHA-256，不能以遮蔽掩蓋無效證據。發布器標準輸出只回傳完整報告路徑。
+新草稿的 Markdown 使用 engineering-review/v1 五個 H2，結論呈現 `review_status`、`priority_counts`；比較資訊與版本放技術紀錄、下一步放範圍下的 H3。舊無標記草稿保留原版面；限制中呈現 `extension_status=disabled|complete|incomplete`。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約完整驗證後保留於同一份報告末尾的 `<details>` 技術紀錄；必要缺口與人工核對區維持展開。下一步為空時明確顯示無額外行動。搜尋僅列識別、來源、契約、狀態與命中數，不複製原始命中內容。設定與私鑰片段省略、認證或連線行遮蔽；仍先完整驗證 ref／行號，再保留原始內容 SHA-256，不能以遮蔽掩蓋無效證據。發布器標準輸出只回傳完整報告路徑。
 
 發布前核對快照的 owned 儲存、固定物件身分、指示、證據、覆蓋及固定搜尋。新的固定快照不再比較目前雲端／本機 refs、工作區宣告與 Repo 清單；owned 物件缺失或損壞不能回退到原 Repo。完整 Markdown 先寫入暫存，再原子發布到報告檔案；同名時遞增時間戳，不覆寫既有內容。預設成功、驗證失敗及寫入失敗均清理本次工作階段建立並由工具識別的證據目錄。
 

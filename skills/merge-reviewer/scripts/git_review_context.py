@@ -49,6 +49,7 @@ SKIP_DIRECTORIES = {
     "venv",
     "__pycache__",
     ".idea",
+    ".review-runtime",
 }
 
 
@@ -103,6 +104,10 @@ def network_activity() -> dict[str, int]:
 
 def capture_phase(value: str) -> None:
     CAPTURE_PHASE.set(value)
+    import review_coordinator
+    active = review_coordinator.ACTIVE.get()
+    if active:
+        active.phase(value)
 
 
 def capture_diagnostic(exc: Exception) -> dict[str, Any]:
@@ -131,6 +136,14 @@ def run_git(
         command_env["GIT_ALLOW_PROTOCOL"] = ""
     try:
         runner = git_network_lease.run if args and args[0] == "fetch" else subprocess.run
+        options = {}
+        if runner is git_network_lease.run:
+            import review_coordinator
+            active = review_coordinator.ACTIVE.get()
+            if active:
+                options["cancelled"] = active.network_cancelled
+                active.phase("waiting-network")
+                options["observer"] = active.phase
         completed = runner(
             ["git", "-C", str(repo), *args],
             input=input_bytes,
@@ -139,6 +152,7 @@ def run_git(
             check=False,
             env=command_env,
             timeout=GIT_TIMEOUT_SECONDS.get(),
+            **options,
         )
     except subprocess.TimeoutExpired as exc:
         raise ReviewContextError(
@@ -519,28 +533,23 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
             hint="請移除 --no-fetch；若要離線審查，請改用本機分支。",
         )
     for remote, targets in grouped.items():
-        try:
+        def fetch(refspecs):
             capture_phase("fetch")
             if activity is not None:
                 activity["fetch_attempt_count"] += 1
-            run_git(
-                repo,
-                [
-                    "fetch",
-                    "--no-tags",
-                    "--no-prune",
-                    "--atomic",
-                    "--no-recurse-submodules",
-                    "--no-auto-maintenance",
-                    "--no-write-fetch-head",
-                    "--jobs=1",
-                    remote,
-                    *[f"refs/heads/{item.branch}:refs/remotes/{remote}/{item.branch}" for item in targets],
-                ],
-            )
+            run_git(repo, ["fetch", "--no-tags", "--no-prune", "--atomic",
+                           "--no-recurse-submodules", "--no-auto-maintenance",
+                           "--no-write-fetch-head", "--jobs=1", remote, *refspecs])
             if activity is not None:
                 activity["fetch_success_count"] += 1
                 activity["synced_ref_count"] += len(targets)
+        try:
+            import review_coordinator
+            active = review_coordinator.ACTIVE.get()
+            if active:
+                active.sync(repo, remote, targets, sys.modules[__name__], fetch)
+            else:
+                fetch([f"refs/heads/{item.branch}:refs/remotes/{remote}/{item.branch}" for item in targets])
         except GitCommandError as exc:
             raise ReviewContextError(
                 f"fetch {remote} 失敗（輸入 {', '.join(item.input_ref for item in targets)}）：{exc.stderr}",
@@ -1064,13 +1073,20 @@ def pin_branch_refs(repo: Path, args: argparse.Namespace) -> dict[str, Any]:
     fetch_refs = [base_input, head_input]
     fetches = fetch_inputs(repo, fetch_refs, not args.no_fetch)
     capture_phase("ref-pinning")
-    base_sha, base_resolved_ref = resolve_commit_ref(repo, base_input)
+    import review_coordinator
+    active = review_coordinator.ACTIVE.get()
+    def resolved(value):
+        if active and value in active.pins:
+            pin = active.pins[value]
+            return pin["sha"], pin["ref"]
+        return resolve_commit_ref(repo, value)
+    base_sha, base_resolved_ref = resolved(base_input)
     if not base_sha:
         raise ReviewContextError(
             f"找不到基礎 ref 的 commit：{base_input}（查找來源：{ref_source_description(repo, base_input)}）",
             hint="請確認分支名稱拼字；遠端分支需加上 remote 前綴（例如 origin/main），本機分支不需要。",
         )
-    head_sha, head_resolved_ref = resolve_commit_ref(repo, head_input)
+    head_sha, head_resolved_ref = resolved(head_input)
     if not head_sha:
         raise ReviewContextError(
             f"找不到比較 ref 的 commit：{head_input}（查找來源：{ref_source_description(repo, head_input)}）",
@@ -1333,7 +1349,9 @@ def build_manifest(args: argparse.Namespace) -> dict[str, Any]:
     phase_token = CAPTURE_PHASE.set("session-preflight")
     try:
         timeout = positive_timeout(str(args.git_timeout))
-        session_dir = review_session.create_session(args.context_dir)
+        session_dir = (review_session.validate_session(args._prepared_context)
+                       if getattr(args, "_prepared_context", None)
+                       else review_session.create_session(args.context_dir))
         args.context_dir = str(session_dir)
         token = GIT_TIMEOUT_SECONDS.set(timeout)
         succeeded = False
