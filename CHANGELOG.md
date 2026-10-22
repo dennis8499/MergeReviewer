@@ -1,5 +1,17 @@
 # Change log
 
+## 0.19.0 — 2026-10-22 (local candidate)
+
+- Add optional v3 `boundary-contracts/v1`: review repo-local use/output paths explicitly and search exported child contracts across peers. Legacy contexts retain their original matrix obligations.
+- Require local exact-symbol searches, fixed boundary evidence, registered workspace descendants and connected impact anchors. Unresolved boundary judgments remain incomplete.
+- Reuse immutable searches across ordered steps with context/source/tree/options keys and checksum-checked transport files; finish independently replays the ledger from frozen Git objects.
+- Add zero-Git `check` and status diagnostics with stable error codes, JSON pointers, boundary/search gaps and `evidence_verified=false`.
+- Diagnose reviewed impact nodes without valid evidence for their own fixed Repo/source/path before publication; additional cross-source evidence remains allowed.
+- Keep missing, unreadable or malformed editable operations/draft files recoverable with exit 3 while independently rejecting damaged owned capture evidence as terminal.
+- Verify publication receipts against the fixed report body on status/retry while permitting only marked human-confirmation edits. Keep publication recoverable after cleanup or completion-callback failure.
+- Persist the same validation's redacted semantic review outcome before linking the report; published status/check retain incomplete coverage and pending confirmations after cleanup. Older publications without an outcome remain unknown rather than reporting a false complete review.
+- Disclose detailed contract examples and result fields when needed. Automated tests do not constitute model-quality or performance acceptance.
+
 ## 0.18.0 — 2026-10-22 (local candidate)
 
 - Add request-ID start/step/finish/status/cancel orchestration over the existing helpers, with owned evidence outside source Repos and permission preflight before transport.

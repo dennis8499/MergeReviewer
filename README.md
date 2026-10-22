@@ -1,6 +1,6 @@
 # Merge Reviewer
 
-`0.18.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
+`0.19.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
 目前 Skills root 已安裝 `output-style` 時優先使用其情境風格；沒有時沿用 [Concise 寫作規則](skills/merge-reviewer/references/report-style.md#共用-concise-規則)。必要報告欄位、證據、缺口及錯誤資訊完整保留；要求詳解時完整說明。
 
@@ -8,7 +8,7 @@
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.18.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
+從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.19.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
 在 Codex 對話輸入：
 
@@ -58,7 +58,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 python -m pip install -r requirements-dev.txt
 python -X utf8 -B -m unittest discover -s tests -v
 python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
-python scripts/package_release.py --tag v0.18.0
+python scripts/package_release.py --tag v0.19.0
 ~~~
 
 CI 維持 Linux／Windows × Python 3.10／3.14 矩陣；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及必要 Python helpers，不包含測試及舊收據 runtime。
@@ -69,9 +69,9 @@ main 與手動驗證會保存完整矩陣證據及 Linux／Python 3.14 的正式
 
 [效能重播工具](tests/benchmark_review.py)以相同固定提交與實際審查草稿比較舊新版，預設各量測五次並比對完整證據及報告。輸出分階段耗時與 Python／Git 命令數；這是 helper 效能量測，模型分析時間與語意品質另行記錄。參數見 `python -X utf8 -B tests/benchmark_review.py --help`。
 
-[三階段效能重播](tests/benchmark_flow.py)比較 0.17.0 批次 CLI 與新入口的冷啟動、暖快取及陸續啟動，逐次核對完整固定證據與問題內容。新流程的本機驗證、逐次量測及模型品質限制見 [0.18.0 驗收紀錄](tests/flow-acceptance-results.md)。
+[三階段效能重播](tests/benchmark_flow.py)比較凍結 baseline 與候選入口的冷啟動、暖快取及陸續啟動，逐次核對完整固定證據與問題內容。已有 facade 的 baseline 走相同入口；更舊版本才走相容批次 CLI。歷史量測與品質限制保留在 [0.18.0 驗收紀錄](tests/flow-acceptance-results.md)，不能代替新版驗收。
 
-同輪契約可用 `review_workspace.py batch-register-contract --requests-file <契約陣列.json>` 按序註冊，保留逐筆驗證與 checkpoint；單筆入口及既有結果格式維持。批次讀取與搜尋快取只存在同次操作，發布仍從固定物件重新驗證搜尋紀錄。
+同輪契約可用 `review_workspace.py batch-register-contract --requests-file <契約陣列.json>` 按序註冊，保留逐筆驗證與 checkpoint；單筆入口及既有結果格式維持。0.19.0 的 ordered step 可跨輪重用相同固定來源搜尋；finish 仍從固定物件重新驗證搜尋紀錄。多 Repo 先讀[契約邊界](skills/merge-reviewer/references/contract-boundaries.md)，用 check 集中修稿後再 finish；check 不執行 Git，也不宣告證據已驗證。
 
 `review_report.py --retain-on-validation-error` 是選用的修稿模式：可修草稿錯誤回傳 exit 3 與診斷並保留 owned context，修正後重試；來源損毀、終止錯誤與發布失敗仍清理。舊呼叫預設的退出碼、報告格式及失敗清理行為保留，成功或最終放棄時須清理 context。
 

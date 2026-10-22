@@ -33,7 +33,7 @@ def render_markdown(result, manifest):
 
 def publish_report(context_dir: Path, result_file: Path, report_dir: Path | None = None, *,
                    timeout: float = 180.0, retain_on_validation_error: bool = False,
-                   on_stage=None, on_published=None, cleanup_context=True) -> Path:
+                   on_stage=None, on_published=None, cleanup_context=True, on_stage_receipt=None) -> Path:
     import review_session
     from review_workspace import load, safe_path
     from workspace_report import publish, validate_captured_evidence
@@ -53,6 +53,8 @@ def publish_report(context_dir: Path, result_file: Path, report_dir: Path | None
         except json.JSONDecodeError as exc:
             raise DraftValidationError(str(exc)) from exc
         options = {"on_stage": on_stage} if on_stage else {}
+        if on_stage_receipt:
+            options["on_stage_receipt"] = on_stage_receipt
         published = publish(context_dir, draft, manifest, report_dir, timeout=timeout, **options)
         if on_published:
             on_published(published)

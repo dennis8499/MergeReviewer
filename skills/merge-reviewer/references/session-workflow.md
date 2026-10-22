@@ -1,6 +1,6 @@
 # 三階段操作
 
-`review_session.py start／step／finish` 編排既有 Git、固定讀取、契約、搜尋及發布實作。以下 runtime、id、context 沿用 start；Repo ID、來源、path 及 SHA 使用實際固定索引。JSON 以 UTF-8 寫檔。PowerShell 管線傳 Python 前設定 `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)`。
+`review_session.py start／step／check／finish` 編排固定讀取、契約與發布。以下 runtime、id、context 沿用 start；Repo ID、來源、path 及 SHA 使用實際固定索引。JSON 以 UTF-8 寫檔。PowerShell 管線傳 Python 前設定 `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)`。
 
 ## 開始與恢復
 
@@ -50,6 +50,8 @@ start 回傳 `MergeReviewStart/v1`，含固定 Repo／source ref、必要覆蓋�
 
 同輪註冊後搜尋，再閱讀 consumer；實際發現間接輸出契約才建立下一輪。單 Repo 搜尋可省略 contract，跨 Repo 須先註冊。
 
+新 Group context 可填 `search_scope=repo-local|workspace`；省略時為 workspace。local 搜尋預設只用 evidence Repo，精確 source 使用 anchor 的 source。判定及 contained／propagates／unresolved 草稿例子見[契約邊界](contract-boundaries.md)。ordered step 的相同 raw query 可跨輪重用成功結果，各契約仍建立自己的 ledger 紀錄；快取按 context、Repo、固定 source/ref/tree、flags、環境及 query 隔離，失敗不保存。損壞快取丟棄後重搜，finish 忽略此快取並重新驗證搜尋。
+
 ## artifact 續讀
 
 ~~~json
@@ -65,13 +67,22 @@ JSON pointer 的 `/`、`~` 以 `~1`、`~0` 轉義。陣列回傳 items／total�
 
 ## 完成、取消與錯誤
 
-草稿初始 summary 空、必要覆蓋與 parent 為 not-reviewed，其他 Repo 為 unresolved。agent 依實際工作補齊，不能直接批次改為 reviewed。finish 使用同一套 v3 驗證器；exit 3 保留 context，exit 2 終止。JSON 格式錯誤可修，固定快照損毀屬終止。
+草稿初始 summary 空、必要覆蓋與 parent 為 not-reviewed，其他 Repo 為 unresolved。agent 依實際工作補齊，不能直接批次改為 reviewed。先用 check 取得 `errors[].code/pointer/message` 與 `gaps`；pointer 指向草稿欄位，manifest 問題以 `/manifest/...` 指出。check 只讀已保存 JSON 與固定索引，不執行 Git，`evidence_verified=false`。無欄位錯誤且無未完成項時 exit 0，否則 exit 3；finish 仍須完整驗證來源、引用及搜尋。finish 的可修錯誤 exit 3 保留 context，快照損毀 exit 2 終止。
+
+每個 reviewed impact 至少有一份合法 evidence 與節點自身 `repo/source/path` 相同，其他版本的輔助證據可一併保留。刪檔的 coverage 沿用 `required_coverage` 的比較來源，impact 的 source 則採實際引用得到的固定版本，例如 `merge-base`；將 coverage 的 `head` 直接複製到已刪檔節點會在 `/impact_coverage/<index>/evidence` 回報錯誤。
+
+`--requests-file` 遺失、不可讀、編碼或 JSON 錯誤回傳 exit 3、`terminal=false/recoverable=true`；status 保持 `state=reviewing/phase=input-repair`。寫好 UTF-8 操作陣列後沿同一 request ID 重送，已完成的操作前綴保留。草稿遺失或不可讀也沿同一 ID 修復；helper 仍檢查已保存證據，損毀的 manifest、pack 或收據維持終止錯誤。
 
 ~~~powershell
+python "<skill-dir>/scripts/review_session.py" check --runtime-root "<runtime>" --request-id "<id>"
 python "<skill-dir>/scripts/review_session.py" finish --runtime-root "<runtime>" --request-id "<id>"
 python "<skill-dir>/scripts/review_session.py" cancel --runtime-root "<runtime>" --request-id "<id>"
 ~~~
 
-發布先保存預定路徑／hash，再原子建立報告，保存完成紀錄後清理。輸出遺失可重試 finish，回傳同一報告。取消等待者不影響其他請求；仍有等待者時先完成共用同步再取消自己的擷取。已發布不可取消。終止摘要保留 24 小時，之後新 start 清除；報告歷史保留。
+發布先保存預定路徑、全文與固定正文 hash，以及同一次完整驗證產生的 `review_outcome`，再原子建立報告，保存完成紀錄後清理。摘要的 `schema=MergeReviewOutcome/v1`、`review_complete`、`review_status`、`recommendation`、`extension_status`、`pending_confirmation_count`、`gaps` 及 `remaining` 保留首次判斷；remaining 只含未完成的檔案、parent、impact、Repo、boundary 識別與理由，摘要套用敏感內容遮蔽，不保存原始來源片段。gaps 包含驗證後的 context／覆蓋／影響鏈／邊界缺口與待確認項。
+
+status 與重試 finish 確認報告存在且正文符合收據；發布後 status／check 從持久摘要回報 `review_complete`、`gaps`、`remaining`，不重新執行 Git 或完整驗證。`state=published`／`phase=complete` 表示發布流程完成，審查完整性另看 `review_outcome.review_complete`。發布後 check 的 `publication_complete=true`、`ready_for_finish=false`（已無待發布操作）、`evidence_verified=false`；已知審查完整時 exit 0，未完整或未知時 exit 3。舊 job 沒有摘要時回傳 `outcome_available=false`、`review_complete=null`、`review_status=unknown` 及說明缺口，不從 Markdown 猜出通過。
+
+人工核對標記區內的編輯可保留，但不改寫首次語意摘要；區外修改或遺失不回報成功。清理失敗仍回傳已發布路徑及 `cleanup_pending=true`；沿同一 ID 重試只清理，保留相同審查摘要，不重做 Git 驗證或建立另一份報告。取消等待者不影響其他請求；仍有等待者時先完成共用同步再取消自己的擷取。已發布不可取消。終止摘要保留 24 小時，之後新 start 清除；報告歷史保留。
 
 相同需求失敗 30 秒內回報既有錯誤；明確 start --refresh 可重試。缺 refs 或同步失敗不採舊 tracking refs。固定證據交付後不回讀原 Repo 補救；capture 階段壞 peer 快取可從同一固定 SHA 本機重建。

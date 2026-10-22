@@ -8,6 +8,18 @@ from tests import benchmark_flow as flow_benchmark
 
 
 class BenchmarkOracleTests(unittest.TestCase):
+    def test_flow_normalization_removes_only_empty_additive_boundary_fields(self):
+        original = {"changed_contracts": [{"id": "C-001"}], "searches": [{"query": "amount", "matches": ["fixed"]}]}
+        added = {**original, "contract_scope_policy": "boundary-contracts/v1", "boundary_reviews": []}
+        root = Path("unused")
+        expected = flow_benchmark.comparable_artifacts(original, root)
+        self.assertEqual(expected, flow_benchmark.comparable_artifacts(added, root))
+        for changed in ({**added, "boundary_reviews": [{"outcome": "contained"}]},
+                        {**added, "contract_scope_policy": "unknown"},
+                        {**added, "searches": []},
+                        {**added, "changed_contracts": [{"id": "C-001", "search_scope": "repo-local"}]}):
+            self.assertNotEqual(expected, flow_benchmark.comparable_artifacts(changed, root))
+
     def test_flow_signature_keeps_frozen_objects_inventories_contracts_and_gates(self):
         manifest = {"repositories": [{"id": "repo-000", "sources": {"head": {
             "ref": "commit", "tree_sha": "tree", "files": [{"path": "source.py", "blob_sha": "blob"}]}}}],

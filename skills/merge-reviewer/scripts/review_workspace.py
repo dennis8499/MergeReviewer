@@ -26,6 +26,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import review_runtime
 import merge_parent_coverage
+import contract_boundary
 
 CONTEXT = "merge-reviewer-workspace-context/v3"
 RESULT = "merge-reviewer-workspace-result/v3"
@@ -73,6 +74,7 @@ def load(context: Path) -> dict:
     require(manifest.get("schema") == CONTEXT, "not a portable workspace context")
     require("coverage_policy" not in manifest or manifest["coverage_policy"] == COVERAGE_POLICY,
             "unsupported coverage policy")
+    contract_boundary.enabled(manifest, require)
     if manifest.get("snapshot_policy") is not None:
         require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
         require(all(repo.get("snapshot") is not None for repo in manifest["repositories"] if repo["state"] != "error"),
@@ -255,28 +257,54 @@ class FixedSearchCache:
     contexts and unsuccessful commands are always executed again.
     """
 
-    def __init__(self, context: Path, api):
+    def __init__(self, context: Path, api, *, persistent=False):
         self.context = Path(context).resolve()
         self.api = api
         self._results = {}
+        self.persistent = persistent
 
     def run(self, repo: dict, source_name: str, query: str) -> tuple[int, str, str]:
         source = repo["sources"][source_name]
         environment = source_environment(self.context, repo, source, self.api)
         git_repo = evidence_repository(self.context, repo)
         inherited = {key: value for key, value in os.environ.items() if key.startswith("GIT_")}
+        environment_identity = hashlib.sha256(json.dumps((inherited, environment), ensure_ascii=False,
+                                                        sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         key = json.dumps((str(self.context), repo["id"], str(Path(repo["path"]).resolve()),
                           str(git_repo), source_name, source["ref"], source["tree_sha"],
-                          source.get("objects"), repo.get("snapshot"), inherited, environment,
+                          source.get("objects"), repo.get("snapshot"), environment_identity,
                           SEARCH_FLAGS, query), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         snapshot = repo.get("snapshot")
         frozen = isinstance(snapshot, dict) and snapshot.get("policy") == SNAPSHOT_POLICY
+        cache_path = (safe_path(self.context, "search-cache/" + hashlib.sha256(key.encode("utf-8")).hexdigest() + ".json")
+                      if self.persistent and frozen else None)
+        if frozen and self.persistent and key not in self._results and cache_path.is_file():
+            try:
+                saved = json.loads(cache_path.read_text(encoding="utf-8"))
+                payload = saved["payload"]
+                cached_result = payload["result"]
+                require(saved["sha256"] == hashlib.sha256(review_runtime.canonical(payload)).hexdigest()
+                        and payload["key"] == key and isinstance(cached_result, list) and len(cached_result) == 3
+                        and type(cached_result[0]) is int and cached_result[0] in (0, 1)
+                        and all(isinstance(value, str) for value in cached_result[1:]), "invalid persistent search cache")
+                self._results[key] = tuple(cached_result)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass  # Disposable transport cache; final publication always replays Git.
         if not frozen or key not in self._results:
             result = self.api.run_git_capture(
                 git_repo, [*SEARCH_FLAGS, query, source["ref"], "--"], env=environment)
             if not frozen or result[0] not in (0, 1):
                 return result
             self._results[key] = result
+            if self.persistent:
+                import review_coordinator
+                payload = {"key": key, "result": result}
+                try:
+                    cache_path.parent.mkdir(exist_ok=True)
+                    review_coordinator.atomic(cache_path, {"payload": payload,
+                        "sha256": hashlib.sha256(review_runtime.canonical(payload)).hexdigest()})
+                except OSError:
+                    pass  # A disposable optimization cannot discard a fresh Git result.
         return self._results[key]
 
 
@@ -578,7 +606,8 @@ def build(args, api) -> dict:
         "extension_enabled": enabled,
         "extension_reason": f"宣告工作區包含 {len(paths)} 個不同的 Git 根目錄。" if enabled else "宣告工作區只有一個 Git 根目錄。",
         "selected_repo": None, "repositories": [], "seed_repos": [], "searches": [],
-        "changed_contracts": [], "context_gaps": [], "context_dir": str(context),
+        "changed_contracts": [], "contract_scope_policy": contract_boundary.POLICY,
+        "context_gaps": [], "context_dir": str(context),
         "context_cleanup_required": True, "snapshot_policy": SNAPSHOT_POLICY,
         "workspace_instructions": [], "coverage_policy": "ancestor-noop/v1",
         "network_activity": api.network_activity(),
@@ -789,6 +818,10 @@ def validate_contract(context, manifest, item, api, *, cache=None):
     require(manifest.get("schema") == CONTEXT, "contract registration needs context v3")
     require(manifest.get("extension_enabled") is True, "contract registration applies only to multi-Repo extension")
     require(isinstance(item, dict), "contract must be an object")
+    active_boundary = contract_boundary.enabled(manifest, require)
+    if active_boundary:
+        require(isinstance(item.get("search_scope", "workspace"), str)
+                and item.get("search_scope", "workspace") in contract_boundary.SCOPES, "invalid contract search_scope")
     contracts = contract_rows(manifest)
     identifier = item.get("id")
     require(isinstance(identifier, str) and identifier and identifier not in contracts, "duplicate/empty contract ID")
@@ -873,11 +906,15 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
     require(bool(query), "search query must be nonempty")
     if manifest.get("extension_enabled") is True:
         require(contract_id in contract_rows(manifest), "Group searches require a registered --contract")
+    contract = None
     if contract_id is not None:
         contract = contract_rows(manifest).get(contract_id)
         require(contract and query in {t["query"] for t in contract["search_terms"]},
                 "search query is unrelated to the registered contract")
-    selected = repo_ids or [r["id"] for r in manifest["repositories"]]
+    local_owner = (contract["evidence"]["repo"] if contract and
+                   contract_boundary.scope(manifest, contract) == "repo-local" else None)
+    selected = repo_ids or ([local_owner] if local_owner else [r["id"] for r in manifest["repositories"]])
+    require(not local_owner or selected == [local_owner], "repo-local searches use only their evidence Repo")
     require(len(selected) == len(set(selected)), "duplicate search Repo IDs")
     results = []
     for repo_id in selected:
@@ -1009,7 +1046,7 @@ def ordered_step(context, manifest, operations, api):
     if not isinstance(operations, list) or not operations:
         return {"operations": [], "complete": False, "next_index": 0,
                 "error": "operations must be a nonempty array"}
-    content, searches = FixedSourceCache(context, api), FixedSearchCache(context, api)
+    content, searches = FixedSourceCache(context, api), FixedSearchCache(context, api, persistent=True)
     results = []
     # Speculatively batch known fixed reads. Errors are evaluated again at their
     # ordered position, so a later malformed read cannot discard a valid prefix.

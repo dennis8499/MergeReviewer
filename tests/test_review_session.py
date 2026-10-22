@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import uuid
 import unittest
+from unittest import mock
 
 from tests.support import load_module
 
@@ -99,6 +100,25 @@ class ReviewSessionTests(unittest.TestCase):
         with self.assertRaisesRegex(SESSION.SessionError, "未刪除任何檔案"):
             SESSION.cleanup_session(context)
         self.assertTrue(context.exists())
+
+    def test_partial_cleanup_preserves_owner_for_a_successful_retry(self) -> None:
+        context = SESSION.create_session(self.root / "context")
+        (context / "removed-first.txt").write_text("temporary", encoding="utf-8")
+        blocked = context / "blocked-pack"
+        blocked.mkdir()
+        (blocked / "snapshot.idx").write_bytes(b"temporary pack")
+        original = SESSION.shutil.rmtree
+        def fail_pack(path, *args, **kwargs):
+            if Path(path) == blocked:
+                raise PermissionError("synthetic pack ACL")
+            return original(path, *args, **kwargs)
+        with mock.patch.object(SESSION.shutil, "rmtree", side_effect=fail_pack):
+            with self.assertRaisesRegex(SESSION.SessionError, "synthetic pack ACL"):
+                SESSION.cleanup_session(context)
+        self.assertEqual(context.resolve(), SESSION.validate_session(context))
+        self.assertTrue((context / SESSION.OWNER_FILE).is_file())
+        self.assertTrue(SESSION.cleanup_session(context))
+        self.assertFalse(context.exists())
 
 
 if __name__ == "__main__":

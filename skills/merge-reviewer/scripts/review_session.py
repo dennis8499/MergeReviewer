@@ -155,9 +155,37 @@ def _remove_tree(path: Path) -> None:
             pass
         function(target)
 
+    # Keep the verified owner marker until every other child is gone. A pack
+    # ACL failure must leave a session that the next cleanup can still own.
+    marker = path / OWNER_FILE
+    ownership = marker.read_bytes()
+    identity = (path.stat().st_dev, path.stat().st_ino)
     try:
-        shutil.rmtree(path, onerror=make_writable)
+        for child in path.iterdir():
+            if child.name == OWNER_FILE:
+                continue
+            if child.is_dir() and not _is_link(child):
+                shutil.rmtree(child, onerror=make_writable)
+            else:
+                remove = child.rmdir if os.name == "nt" and _is_link(child) and child.is_dir() else child.unlink
+                try:
+                    remove()
+                except OSError:
+                    if _is_link(child):
+                        raise  # Never chmod the target of a link/junction.
+                    make_writable(lambda target: remove(), str(child), None)
+        marker.unlink()
+        path.rmdir()
     except OSError as exc:
+        # Root deletion itself can fail after marker removal. Restore only in
+        # the same plain directory; never authorize a replaced or linked tree.
+        try:
+            if (path.is_dir() and not _is_link(path)
+                    and (path.stat().st_dev, path.stat().st_ino) == identity and not marker.exists()):
+                with marker.open("xb") as stream:
+                    stream.write(ownership)
+        except OSError:
+            pass
         raise SessionError(f"審查暫存清理失敗，請手動檢查：{path}（{exc}）") from exc
 
 
@@ -190,7 +218,7 @@ def cleanup_if_owned(requested: str | Path) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     values = sys.argv[1:] if argv is None else argv
-    if values and values[0] in ("start", "step", "finish", "status", "cancel"):
+    if values and values[0] in ("start", "step", "check", "finish", "status", "cancel"):
         from review_flow import main as flow_main
         return flow_main(values)
     parser = argparse.ArgumentParser(description=__doc__)

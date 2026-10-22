@@ -69,6 +69,12 @@ def status(root, identifier):
         raise ValueError("Session identity differs.")
     result = {key: value for key, value in job.items() if key not in ("input_digest",)}
     context = job_context(root, identifier, job)
+    if job["state"] == "published" or job.get("planned_report") and Path(job["planned_report"]).is_file():
+        import report_receipt
+        result["publication"] = report_receipt.verify(job)
+        result["review_outcome"] = report_receipt.saved_review(job)
+        result.update({key: result["review_outcome"][key]
+                       for key in ("review_complete", "review_status", "gaps", "remaining")})
     if job["state"] in ("ready", "reviewing") and (context / "manifest.json").is_file():
         import review_workspace as workspace
         manifest = workspace.load(context)
@@ -80,10 +86,12 @@ def status(root, identifier):
         result["resume"] = {"selected_repo": manifest["selected_repo"],
                             "repositories": repo_index(manifest),
                             "required_coverage": manifest["required_coverage"],
-                            "contracts": [{"id": c["id"], "symbol": c["symbol"]}
+                            "contract_scope_policy": manifest.get("contract_scope_policy"),
+                            "contracts": [{"id": c["id"], "symbol": c["symbol"], "search_scope": c.get("search_scope", "workspace")}
                                           for c in manifest["changed_contracts"]],
                             "operations": manifest.get("operations", {}),
                             "remaining": remaining(draft),
+                            "diagnostics": diagnostics(draft, manifest),
                             "network_activity": manifest["network_activity"],
                             "sync_activity": manifest.get("sync_activity", [])}
     return result
@@ -108,7 +116,7 @@ def draft_template(manifest):
                                      "reason": "使用者指定的審查起點。" if item["id"] == manifest["selected_repo"]
                                                else "尚未完成契約追查。",
                                      "search_ids": []} for item in manifest["repositories"]],
-            "impact_coverage": [], "findings": [], "pending_confirmations": [], "next_steps": [],
+            "impact_coverage": [], "boundary_reviews": [], "findings": [], "pending_confirmations": [], "next_steps": [],
             "tests_executed": [], "tests_not_executed": ["本次尚未執行專案測試。"], "limitations": []}
 
 
@@ -121,7 +129,39 @@ def remaining(draft):
     return {"changes": [row for row in rows("coverage") if row.get("status") != "reviewed"],
             "parents": [row for row in rows("merge_parent_review") if row.get("status") != "reviewed"],
             "repositories": [row for row in rows("repository_coverage") if row.get("status") == "unresolved"],
+            "boundaries": [row for row in rows("boundary_reviews") if row.get("outcome") == "unresolved"],
             "pending_confirmation_count": len(rows("pending_confirmations"))}
+
+
+def diagnostics(draft, manifest):
+    import review_diagnostics
+    try:
+        return review_diagnostics.inspect(draft, manifest)
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        return {"errors": [{"code": "authoring.invalid-structure", "pointer": "", "path": "draft", "message": str(exc)}],
+                "gaps": [], "ready_for_finish": False, "evidence_verified": False,
+                "evidence_validation": "deferred-to-finish", "git_commands": 0}
+
+
+def check(root, identifier):
+    """Collect authoring gaps without running Git or marking evidence verified."""
+    import review_workspace as workspace
+    job = coordination.read_json(job_path(root, identifier))
+    context = job_context(root, identifier, job)
+    if job["state"] == "published":
+        published = status(root, identifier)
+        complete = published["review_outcome"]["review_complete"] is True
+        return {**published, "errors": [], "ready_for_finish": False, "publication_complete": True,
+                "evidence_verified": False, "evidence_validation": "publication-receipt-only",
+                "git_commands": 0}, 0 if complete else 3
+    manifest = workspace.load(context)
+    try:
+        draft = coordination.read_json(context / "draft.json")
+    except (OSError, ValueError) as exc:
+        return {"request_id": identifier, "errors": [{"code": "authoring.invalid-json", "pointer": "", "path": "draft", "message": str(exc)}],
+                "ready_for_finish": False, "evidence_verified": False, "git_commands": 0}, 3
+    value = diagnostics(draft, manifest)
+    return {"request_id": identifier, "context_retained": True, **value}, 0 if value["ready_for_finish"] else 3
 
 
 def preflight(path):
@@ -238,6 +278,7 @@ def start(args):
         guide = {"schema": "MergeReviewStart/v1", "request_id": identifier, "runtime_root": str(root),
                  "state": "ready", "context_dir": str(context), "draft_path": str(context / "draft.json"),
                  "selected_repo": manifest["selected_repo"], "repositories": repo_index(manifest),
+                 "contract_scope_policy": manifest.get("contract_scope_policy"),
                  "required_coverage": manifest["required_coverage"],
                  "required_merge_views": manifest["required_merge_views"], "patches": patches,
                  "instructions": instructions["instructions"], "context_gaps": manifest["context_gaps"],
@@ -248,7 +289,7 @@ def start(args):
                           "read": {"id": "read-1", "op": "read", "repo": selected["id"], "source": "head",
                                    "path": "<fixed relative path>", "around_line": 1, "context_lines": 20},
                           "contract": {"id": "<unique C-id>", "root": "<one required_coverage row>",
-                                       "kind": "behavior", "symbol": "<exact frozen symbol>",
+                                       "kind": "behavior", "search_scope": "workspace", "symbol": "<exact frozen symbol>",
                                        "evidence": {"repo": selected["id"], "source": "head", "ref": "<fixed SHA>",
                                                     "path": "<path>", "line_start": 1, "line_end": 1},
                                        "search_terms": [{"query": "<exact symbol>", "reason": "<contract meaning>"},
@@ -367,13 +408,21 @@ def compact(value, context):
     result = {"schema": "MergeReviewEvidenceSummary/v1", "artifact": artifact,
               "evidence_complete": True, "view_complete": False, "summary": sketch(value),
               "continue": {"op": "view", "artifact": artifact, "pointer": "", "offset": 0, "page_size": 100}}
+    if isinstance(value, dict) and "evidence_verified" in value:
+        result["evidence_verified"] = value["evidence_verified"]
+        result["ready_for_finish"] = value.get("ready_for_finish", False)
     if len(review_runtime.canonical(result)) > LIMIT:
         result["summary"] = {"fields": list(value) if isinstance(value, dict) else None,
                              "count": len(value)}
     return result
 
 
-def step(root, identifier, operations):
+def step_file(root, identifier, requested):
+    """Treat an editable operations file failure as an incomplete owned step."""
+    return step(root, identifier, None, requests_file=requested)
+
+
+def step(root, identifier, operations, *, requests_file=None):
     import git_review_context as api
     import review_workspace as workspace
     path = job_path(root, identifier)
@@ -389,7 +438,19 @@ def step(root, identifier, operations):
             review_session.validate_session(context)
             with active.activate(), review_runtime.writer(context):
                 manifest = workspace.load(context)
-                result = workspace.ordered_step(context, manifest, operations, api)
+                input_error = None
+                if operations is None:
+                    try:
+                        if requests_file is None:
+                            raise ValueError("step requires --requests-file.")
+                        operations = coordination.read_json(requests_file)
+                    except (OSError, ValueError) as exc:
+                        input_error = coordination.safe_error(exc)
+                result = ({"operations": [], "complete": False, "next_index": 0,
+                           "error": input_error, "code": "authoring.invalid-requests-file",
+                           "pointer": "/requests_file", "terminal": False, "recoverable": True,
+                           "context_retained": True} if input_error is not None else
+                          workspace.ordered_step(context, manifest, operations, api))
                 if not result["complete"] and not active.cancelled():
                     import workspace_report
                     workspace_report.validate_captured_evidence(manifest, context)
@@ -402,7 +463,7 @@ def step(root, identifier, operations):
             review_session.cleanup_session(context)
             update(root, identifier, state="cancelled", phase="terminal", finished_at_epoch=time.time())
             return {**result, "complete": False, "cancelled": True}
-        update(root, identifier, state="reviewing", phase="review",
+        update(root, identifier, state="reviewing", phase="input-repair" if input_error is not None else "review",
                last_step={"complete": result["complete"], "next_index": result["next_index"]},
                metrics={**job.get("metrics", {}), "read_search_seconds":
                         job.get("metrics", {}).get("read_search_seconds", 0) + time.perf_counter() - started})
@@ -436,29 +497,36 @@ def finish(root, identifier):
     import review_report
     import review_workspace as workspace
     import workspace_report
+    import report_receipt
     path = job_path(root, identifier)
     with coordination.FileLock(path.with_suffix(".owner.lock")):
         job = coordination.read_json(path)
         context = job_context(root, identifier, job)
         planned = job.get("planned_report")
-        if job["state"] == "published":
-            if context.is_dir():
-                review_session.cleanup_session(context)
+        def clean_published():
+            try:
+                if context.is_dir():
+                    review_session.cleanup_session(context)
+                update(root, identifier, cleanup_pending=False, cleanup_error=None)
+            except (OSError, ValueError) as exc:
+                update(root, identifier, cleanup_pending=True, cleanup_error=coordination.safe_error(exc))
             return status(root, identifier), 0
+        if job["state"] == "published":
+            report_receipt.verify(job)
+            return clean_published()
         if planned and Path(planned).is_file():
-            if hashlib.sha256(Path(planned).read_bytes()).hexdigest() != job["report_sha256"]:
-                raise ValueError("The previously staged report changed; it was not replaced.")
+            report_receipt.verify(job)
             update(root, identifier, state="published", phase="complete", report_path=planned,
                    finished_at_epoch=time.time())
-            review_session.cleanup_session(context)
-            return status(root, identifier), 0
+            return clean_published()
         if job["state"] not in ("ready", "reviewing", "validating"):
             raise ValueError("Session cannot be published.")
         started = time.perf_counter()
-        def staged(output, checksum):
+        def staged(output, receipt):
             if (root / "jobs" / (identifier + ".cancel")).exists():
                 raise coordination.Cancelled("Review cancelled before the report commit.")
-            update(root, identifier, planned_report=str(output), report_sha256=checksum)
+            update(root, identifier, planned_report=str(output), report_sha256=receipt["report_sha256"],
+                   report_receipt=receipt, review_outcome=receipt["review_outcome"])
         def published(output):
             update(root, identifier, state="published", phase="complete", report_path=str(output),
                    finished_at_epoch=time.time(), metrics={**job.get("metrics", {}),
@@ -469,9 +537,15 @@ def finish(root, identifier):
             draft_path = context / "draft.json"
             try:
                 draft = coordination.read_json(draft_path)
+            except (OSError, ValueError) as exc:
+                draft, errors = {}, [f"draft input: {coordination.safe_error(exc)}"]
+            else:
                 errors = draft_errors(draft)
-            except json.JSONDecodeError as exc:
-                draft, errors = {}, [f"draft JSON: {exc}"]
+                # This inspection reads saved JSON only. Final evidence verification
+                # remains mandatory after authoring errors have been repaired.
+                inspected = diagnostics(draft, workspace.load(context))
+                errors.extend(f"{row['path']}: {row['message']}" for row in inspected["errors"])
+                errors = list(dict.fromkeys(errors))
             if errors:
                 workspace_report.validate_captured_evidence(workspace.load(context), context)
                 update(root, identifier, state="reviewing", phase="draft-repair", errors=errors)
@@ -481,15 +555,19 @@ def finish(root, identifier):
                    draft_sha256=hashlib.sha256(draft_path.read_bytes()).hexdigest())
             with review_runtime.writer(context):
                 review_report.publish_report(context, draft_path, retain_on_validation_error=True,
-                                             on_stage=staged, on_published=published, cleanup_context=False)
-            review_session.cleanup_session(context)
-            return status(root, identifier), 0
+                                             on_stage_receipt=staged, on_published=published, cleanup_context=False)
+            return clean_published()
         except workspace_report.DraftValidationError as exc:
             update(root, identifier, state="reviewing", phase="draft-repair", errors=[str(exc)])
             return {"request_id": identifier, "context_retained": True, "errors": [str(exc)]}, 3
         except Exception as exc:
             # A published receipt survives cleanup failures and may be retried.
-            if coordination.read_json(path)["state"] == "published":
+            saved = coordination.read_json(path)
+            if saved["state"] == "published":
+                raise
+            if saved.get("planned_report") and Path(saved["planned_report"]).is_file():
+                report_receipt.verify(saved)
+                # The link commit completed; keep its evidence and receipt for retry.
                 raise
             update(root, identifier, state="cancelled" if isinstance(exc, coordination.Cancelled) else "failed",
                    phase="terminal", error=coordination.safe_error(exc),
@@ -523,7 +601,7 @@ def cancel(root, identifier):
 
 def parser():
     value = argparse.ArgumentParser(description=__doc__)
-    value.add_argument("command", choices=("start", "step", "finish", "status", "cancel"))
+    value.add_argument("command", choices=("start", "step", "check", "finish", "status", "cancel"))
     value.add_argument("--workspace")
     value.add_argument("--workspace-file")
     value.add_argument("--runtime-root")
@@ -560,10 +638,10 @@ def main(argv=None):
             elif args.command == "cancel":
                 result = cancel(root, args.request_id)
             elif args.command == "step":
-                if not args.requests_file:
-                    raise ValueError("step requires --requests-file.")
-                result = step(root, args.request_id, coordination.read_json(args.requests_file))
+                result = step_file(root, args.request_id, args.requests_file)
                 code = 0 if result["complete"] else (2 if result.get("cancelled") else 3)
+            elif args.command == "check":
+                result, code = check(root, args.request_id)
             else:
                 result, code = finish(root, args.request_id)
             job = coordination.read_json(job_path(root, args.request_id))

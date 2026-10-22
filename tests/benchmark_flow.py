@@ -1,4 +1,4 @@
-"""Alternate frozen 0.17.0 batch CLI and session facade on one authored scenario.
+"""Alternate a frozen helper baseline and candidate on one authored scenario.
 
 Measures helpers only. Never synthesizes findings/coverage or times model analysis.
 Use an already reviewed --scenario and the exact corresponding --fixture-root.
@@ -71,7 +71,7 @@ def invoke():
 def source_signature(manifest):
     """Compare frozen identities, every inventory entry, instructions and gates."""
     keys = ("selected_repo", "seed_repos", "extension_enabled", "review_basis", "coverage_policy",
-            "merge_parent_policy", "required_coverage", "required_merge_views", "context_gaps",
+            "merge_parent_policy", "contract_scope_policy", "required_coverage", "required_merge_views", "context_gaps",
             "workspace_instructions", "changed_contracts", "searches")
     signature = {key: manifest.get(key) for key in keys}
     signature["repositories"] = []
@@ -84,12 +84,32 @@ def source_signature(manifest):
     return signature
 
 
+def comparable_artifacts(value, context):
+    """Normalize only the additive policy marker and an empty boundary ledger.
+
+    Nonempty judgments, scopes, searches, graphs and frozen source identities
+    remain part of the equality oracle. Unknown policy values remain visible.
+    """
+    def additive(item):
+        if isinstance(item, dict):
+            return {key: additive(entry) for key, entry in item.items()
+                    if not (key == "contract_scope_policy" and entry in (None, "boundary-contracts/v1"))
+                    and not (key == "boundary_reviews" and entry == [])}
+        if isinstance(item, list):
+            return [additive(entry) for entry in item]
+        return item
+    return normalize(additive(value), context)
+
+
 def measure(source, fixture, scenario, destination, candidate, runtime):
     destination.mkdir()
     metrics_file = destination / "commands.json"
     totals, phases, capture_parts = Counter(), {}, {}
     environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     context, identifier = None, uuid.uuid4().hex
+    # 0.18.0 already has the facade. Compare it through the same public entry
+    # points; retain legacy batch replay for older frozen source archives.
+    use_flow = (source / "skills/merge-reviewer/scripts/review_flow.py").is_file()
     def cli(script, *args):
         nonlocal capture_parts
         began = time.perf_counter()
@@ -123,7 +143,7 @@ def measure(source, fixture, scenario, destination, candidate, runtime):
     args = ["--workspace", fixture, "--project", capture.get("project", "orders-api"),
             "--base", capture.get("base", "main"), "--head", capture.get("head", "feature/amount")]
     try:
-        if candidate:
+        if use_flow:
             context = runtime / "sessions" / identifier
             output, phases["capture_seconds"] = cli("review_session.py", "start", *args,
                 "--runtime-root", runtime, "--request-id", identifier)
@@ -134,7 +154,7 @@ def measure(source, fixture, scenario, destination, candidate, runtime):
             context = Path(start["context_dir"])
         reads, searches = [], []
         began = time.perf_counter()
-        if candidate:
+        if use_flow:
             operations = []
             for index, contract in enumerate(scenario["contracts"]):
                 operations.append({"id": f"contract-{index}", "op": "register-contract", "contract": contract})
@@ -167,7 +187,7 @@ def measure(source, fixture, scenario, destination, candidate, runtime):
         manifest = json.loads((context / "manifest.json").read_text(encoding="utf-8"))
         patches = {p.relative_to(context).as_posix(): p.read_bytes().hex() for p in context.rglob("*.patch")}
         write_json(context / "draft.json", scenario["draft"])
-        if candidate:
+        if use_flow:
             output, phases["validation_publish_seconds"] = cli("review_session.py", "finish",
                 "--runtime-root", runtime, "--request-id", identifier)
             job = json.loads(output)
@@ -188,7 +208,7 @@ def measure(source, fixture, scenario, destination, candidate, runtime):
             anchor = '<a id="finding-' + finding["id"] + '"></a>'
             block = markdown.split(anchor, 1)[1].split('<a id="finding-', 1)[0].split("## 範圍與限制", 1)[0].strip()
             blocks[finding["id"]] = block
-        artifacts = normalize({"sources": source_signature(manifest), "reads": reads, "searches": searches,
+        artifacts = comparable_artifacts({"sources": source_signature(manifest), "reads": reads, "searches": searches,
                                "patches": patches, "validated": validated, "finding_blocks": blocks}, context)
         write_json(destination / "artifacts.json", artifacts)
         row = {**phases, "helper_total_seconds": sum(phases.values()), "counts": dict(totals),

@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import tempfile
 import merge_parent_coverage
+import contract_boundary
 
 from review_workspace import (CONTEXT, RESULT, FixedSourceCache, FixedSearchCache, ancestor_noop,
                               SNAPSHOT_POLICY, evidence_repository, instructions,
@@ -123,6 +124,7 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
         repos = {repo["id"]: repo for repo in manifest["repositories"]}
         require(len(repos) == len(manifest["repositories"]), "duplicate Repo IDs")
         require(len({repo["path"] for repo in repos.values()}) == len(repos), "duplicate canonical Repo paths")
+        contract_boundary.enabled(manifest, require)
         enabled = manifest.get("extension_enabled")
         require(type(enabled) is bool and enabled == (len(repos) > 1), "extension must match the captured Repo count")
         require(manifest.get("scope") == ("group" if enabled else "repo"), "scope differs from detected environment")
@@ -213,6 +215,7 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
 
 def _validate(draft, manifest, context, api):
     require(isinstance(manifest, dict) and manifest.get("schema") == CONTEXT, "workspace context v3 is required")
+    boundary_policy = contract_boundary.enabled(manifest, require)
     draft_require(isinstance(draft, dict) and draft.get("schema") == RESULT, "workspace result v3 is required")
     draft_require("report_layout" not in draft or draft["report_layout"] == REPORT_LAYOUT,
                   "unsupported report_layout")
@@ -425,6 +428,11 @@ def _validate(draft, manifest, context, api):
             code, output, error = search_cache.run(repo, record["source"], record["query"])
             require(code in (0, 1) and output == record.get("output") and output.splitlines() == record.get("matches"),
                     "fixed search ledger differs from captured objects: " + error)
+    boundary_reviews, boundary_gaps = contract_boundary.validate(
+        draft, manifest, contracts, nodes, graph, searches, evidence_list, draft_require)
+    if boundary_gaps:
+        incomplete = True
+        gaps.extend(boundary_gaps)
     dispositions = {}
     involved = {n["repo"] for n in nodes.values()} | set(manifest["seed_repos"])
     for row in draft["repository_coverage"]:
@@ -445,15 +453,14 @@ def _validate(draft, manifest, context, api):
             draft_require(state in ("not-related", "unresolved"), "unrelated Repo cannot be expanded without evidence")
         if repo["state"] == "error":
             draft_require(state == "unresolved", "failed Repo capture cannot be claimed reviewed/excluded")
-        if expected and repo_id not in manifest["seed_repos"] and state != "unresolved":
+        required_contracts = contract_boundary.obligations(manifest, contracts, repo_id)
+        if expected and repo_id not in manifest["seed_repos"] and state != "unresolved" and (not boundary_policy or required_contracts):
             draft_require(ids and any(searches[s]["status"] == "complete" and
                                 searches[s]["source"] == repo["review_source"] for s in ids),
                     "candidate Repo needs completed searches against its selected fixed version")
         if expected and enabled and state != "unresolved":
             source_names = (repo["review_source"],)
-            for contract_id, contract in contracts.items():
-                if contract["evidence"]["repo"] == repo_id:
-                    continue
+            for contract_id, contract in required_contracts.items():
                 for source_name in source_names:
                     bound = [searches[s] for s in ids if searches[s]["status"] == "complete" and
                              searches[s]["source"] == source_name and searches[s].get("contract_id") == contract_id]
@@ -562,6 +569,7 @@ def _validate(draft, manifest, context, api):
                  "sources": {k: v["ref"] for k, v in r["sources"].items()}} for r in repos.values()],
             "searches": manifest["searches"],
             "changed_contracts": manifest.get("changed_contracts", []),
+            "contract_scope_policy": manifest.get("contract_scope_policy"), "boundary_reviews": boundary_reviews,
              "coverage_schema": "branch-v3",
              "selected_repo": selected, "review_basis": "codex-native",
              "extension_enabled": enabled,
@@ -738,6 +746,18 @@ def render(result, manifest):
                      f"起點 {mark(repo['name'] + '/' + root['path'])}；父契約 {', '.join(contract.get('parent_ids', [])) or '無'}")
     if not result["changed_contracts"]:
         lines.append("無跨 Repo 契約。")
+    if result.get("boundary_reviews"):
+        lines.extend(["", "### 契約邊界判定", "",
+                      "本 Repo 名稱搜尋與跨 Repo 邊界搜尋分開；未執行的搜尋不列為已搜尋排除。", ""])
+        for review in result["boundary_reviews"]:
+            lines.append(f"- {review['contract_id']}：{review['outcome']}；{review['reason']}；"
+                         f"本 Repo 搜尋 {', '.join(review.get('search_ids', [])) or '未完成'}；"
+                         f"輸出契約 {', '.join(review.get('boundary_contract_ids', [])) or '無'}")
+            for entry in review.get("evidence", []):
+                name = repository(manifest, entry["repo"])["name"]
+                span = f":{entry['line_start']}–{entry['line_end']}" if entry.get("line_start") is not None else ""
+                lines.append(f"  - 固定證據：{mark(name + '/' + entry['path'] + span)}；"
+                             f"來源 {mark(entry['source'])}；完整 SHA {mark(entry['ref'])}")
     lines.extend(["", "### 固定版本搜尋紀錄", "",
                   "僅列搜尋識別、契約、固定來源、狀態及命中數；原始搜尋輸出與設定值不複製到報告。", "",
                   "| 搜尋 | Repo | 契約 | 來源／完整 SHA | 狀態 | 命中數 |", "| --- | --- | --- | --- | --- | --- |"])
@@ -752,7 +772,7 @@ def render(result, manifest):
     return redact("\n".join(lines)) + "\n"
 
 
-def publish(context, draft, manifest, report_dir, *, timeout=180.0, on_stage=None):
+def publish(context, draft, manifest, report_dir, *, timeout=180.0, on_stage=None, on_stage_receipt=None):
     result = validate(draft, manifest, context, timeout=timeout)
     seed = repository(manifest, manifest["selected_repo"])
     base = seed["sources"]["base"]["ref"]
@@ -765,12 +785,16 @@ def publish(context, draft, manifest, report_dir, *, timeout=180.0, on_stage=Non
     published_at = datetime.now(timezone.utc)
     with tempfile.TemporaryDirectory(prefix=".merge-review-", dir=report_dir) as temporary:
         stage = Path(temporary) / "report.md"
-        stage.write_text(render(result, manifest), encoding="utf-8")
+        stage.write_text(render(result, manifest), encoding="utf-8", newline="\n")
         for offset in range(1000):
             timestamp = (published_at + timedelta(microseconds=offset)).strftime("%Y%m%dT%H%M%S%fZ")
             output = report_dir / f"merge-review-{timestamp}-{base[:8]}-{head[:8]}.md"
             if on_stage:
                 on_stage(output, hashlib.sha256(stage.read_bytes()).hexdigest())
+            if on_stage_receipt:
+                import report_receipt
+                on_stage_receipt(output, report_receipt.create(stage.read_text(encoding="utf-8"),
+                                 review_outcome=report_receipt.summarize_review(result)))
             try:
                 # Link the complete file atomically; an existing destination is never replaced.
                 os.link(stage, output)

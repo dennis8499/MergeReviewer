@@ -1,6 +1,6 @@
 # 操作與負載
 
-新請求使用 [start／step／finish](session-workflow.md)，以下獨立 CLI 為相容入口。共用協定集中在 `review_coordinator.py`；現有讀取、搜尋及發布仍各一份實作。
+新請求使用 [start／step／check／finish](session-workflow.md)，以下獨立 CLI 為相容入口。共用協定集中在 `review_coordinator.py`；現有讀取、搜尋及發布仍各一份實作。check／status 的 diagnostics 不執行 Git，輸出明確 `evidence_verified=false`；固定證據仍由 finish 驗證。
 
 新流程的同步以 Git common directory、remote URL、有效認證設定／使用者範圍及必要 refs 識別。成功完成起 300 秒有效、命中不延長；失敗冷卻 30 秒。相同需求進行中共用，完整涵蓋子集合也可重用。快取命中不呼叫 ls-remote／GitLab API；實際 fetch 使用唯一私人 refs，保留 atomic、無 tags／prune／submodule／maintenance。遠端、帳號或工作台已知 fetch／push／pull 變動使後續請求失效；已固定快照繼續離線。
 
@@ -27,6 +27,8 @@ python "<skill-dir>/scripts/review_workspace.py" view --context-dir "<context>" 
 只讀部分搜尋時加可重複的 `--search-id S-0001`；先篩選再對 matches 分頁，未知 ID 報錯。原 artifact hash 與搜尋 ledger 維持原狀。stdout 的 `result.searches` wrapper 與磁碟 artifact 的頂層 `searches` 不同；用 `view` 續讀，完整範例見結果契約。
 
 完整命中同時保存在 manifest 搜尋 ledger；發布仍以固定物件重播核對。分頁只縮減輸出，必要命中或來源尚未判斷時保留未完成。
+
+ordered step 的成功搜尋另以 context 內 `search-cache/` 跨輪保存，綁定固定來源與全部搜尋選項，驗 checksum 後作傳輸快取。每筆邏輯搜尋仍有自己的契約與 ledger ID；失敗不重用，快取損壞重新搜尋。finish 的 FixedSearchCache 不讀此持久快取，實際重播保存的 query 與固定來源。該快取不是完成證明，也不跨 context 共用。
 
 新 context 的 `merge_parent_policy=necessary-merge-parents/v1` 只要求與有效差異路徑相關的 parent views。`merge_parent_review` 每筆含 `id`、`status`、`reason`、`evidence`；reviewed 引用最終固定版本，parent 有文字內容時另引用該 parent。not-reviewed 保留原因及未完成。與最終內容無關的歷史變更不擴大審查；無有效差異可空集合。此紀錄是完成對帳，不證明模型判斷正確。
 
