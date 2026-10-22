@@ -1,6 +1,8 @@
 # Change log
 
-## 0.19.0 — 2026-10-22 (local candidate)
+## 0.19.0 — 2026-10-23
+
+- Publish the cumulative 0.18.0/0.19.0 changes with the explicitly accepted model-quality and performance limitations documented in [release notes](docs/releases/v0.19.0.md). The original acceptance result remains failed; release CI is a separate required gate.
 
 - Add optional v3 `boundary-contracts/v1`: review repo-local use/output paths explicitly and search exported child contracts across peers. Legacy contexts retain their original matrix obligations.
 - Require local exact-symbol searches, fixed boundary evidence, registered workspace descendants and connected impact anchors. Unresolved boundary judgments remain incomplete.
