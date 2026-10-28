@@ -18,6 +18,7 @@
 - Windows 自動化 BDD：16 個情境、65 個步驟通過；GitHub 真實發布的人工情境未執行。
 - Windows Python 最新完整回歸：封存版 `683ba08a0860eae713f1c3cb40754339452586c3985f66823b6f81ff03abbf03` 分三組執行 330 項，328 項通過、2 項跳過；兩項因本機沒有建立 symbolic link 的權限而跳過，不能視為實際連結測試通過。紀錄為 `final3-shard-1.log` 至 `final3-shard-3.log`。最新快照的 BDD 與 WorkflowKit 整合冒煙紀錄為 `final3-bdd.log`、`workflowkit-final3.log`。此封存版的 14 個 helper 與正式效能量測快照內容相同。
 - 發布準備提交 `f89c2bd` 的 [Windows／Python 3.10 CI](https://github.com/dennis8499/MergeReviewer/actions/runs/40606655807/job/122547714135) 有一項計時測試失敗：極短測試在該平台讀到零秒。測試改用受控時鐘，仍檢查零秒不可被接受；原失敗保留，不視為通過。
+- `v0.20.0` 標籤的 [Windows／Python 3.10 CI](https://github.com/dennis8499/MergeReviewer/actions/runs/40607667224/job/122551150818) 因同一測試失敗而未發布；保留原標籤及紀錄，以含修正的 `v0.20.1` 重新驗證。
 - 較早封存版 `feb431894e0122fd563ccd9ce24dffdc66f8d857223f285130b9e41713ed8ecc` 執行 316 項，314 項通過、2 項跳過；紀錄為 `final2-shard-*.log`。其後新增驗收工具與案例，並依暖快取剖析調整固定快照的路徑檢查，故較早的封存版結果保留為歷史紀錄。
 - 逐 ref 的 TTL、refresh、失敗冷卻、同分支別名、十份同時請求及取消測試通過；四個不同 head 的協調測試確認 main 只同步一次。新的 TTL 邊界及同步中失效測試使用受控時鐘與本機假 transport。
 - v1 邊界相容、v2 內部／傳播／未解決、固定讀取行段、搜尋重播及精簡草稿定向測試通過。這些測試檢查結構與固定證據，不是模型判斷的品質評估。
@@ -76,7 +77,7 @@ python -X utf8 -B tests/benchmark_flow.py --baseline "<封存的 0.19.0 來源>"
 
 `tests/merge_acceptance_matrix.py` 是本輪專用的 parent-owned 驗收工具，不會呼叫模型或替審查者產生結論。它安排 117 個品質案例（13 類案例 × 三個模型 × 無技能／0.19.0／候選版），以及 `gpt-6.1-sol`、`high` 設定下的 18 次完整審查（大型內部變更、跨 Repo 變更、單 Repo 各三組雙版本配對）。新增案例包含一般 P2／P3、安全修復反例、內部值流入事件，以及兩個分支各自正常但合併後失敗的情境；父層 oracle 不放進審查工作區。
 
-本機已在系統暫存目錄 `merge-reviewer-matrix-20261028-c` 建立 135 個排程及固定來源，並準備第一組 P0 的三種盲測請求；其中候選 skill 與 trace wrapper 均為最新固定快照。尚未啟動任何模型審查，`test-artifacts/model-matrix-c-pending.json` 如實顯示模型門檻未通過。首次建立的 `merge-reviewer-matrix-20261028-a` 因補入安全修復反例而主動中止；`b` 固定的是路徑檢查優化前的 skill。兩者均保留，不能作為最新模型對照。
+本機已在系統暫存目錄 `merge-reviewer-matrix-20261028-c` 建立 135 個排程及固定來源，並準備第一組 P0 的三種盲測請求；尚未啟動任何模型審查，`test-artifacts/model-matrix-c-pending.json` 如實顯示模型門檻未通過。矩陣 `c` 固定的是發版前的 skill 版本檔，不能當成 `0.20.1` 的逐位元組模型對照。首次建立的 `merge-reviewer-matrix-20261028-a` 因補入安全修復反例而主動中止；`b` 固定的是路徑檢查優化前的 skill。三者均保留。
 
 以下準備步驟會建立兩個各含 18 個 Repo 的大型固定來源；驗收根目錄必須是全新路徑且位於任何 Git Repo 之外，以便 runtime 隔離。基準 skill 的內容 hash 須精確符合 `v0.19.0` 封存版，候選 skill 也會複製並固定 hash。保留準備失敗的原目錄，重試時選新路徑。
 
