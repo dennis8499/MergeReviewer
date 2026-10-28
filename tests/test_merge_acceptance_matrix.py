@@ -95,21 +95,33 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
         directory = self.root / "runs" / job["id"]
         matrix.save(directory / "public-request.json", {"run_id": job["id"], "model": job["model"],
                                                           "reasoning": job["reasoning"]})
-        matrix.start_run(self.root, job["id"])
+        with mock.patch.object(matrix.time, "time", return_value=1000), \
+                mock.patch.object(matrix.time, "monotonic", return_value=100):
+            matrix.start_run(self.root, job["id"])
         report = directory / "reports" / "review.md"
         report.parent.mkdir(parents=True)
         report.write_text("Manually reviewed fixture.\n", encoding="utf-8")
-        matrix.complete_run(self.root, job["id"], report, actual_model=job["model"], actual_reasoning="high")
+        with mock.patch.object(matrix.time, "time", return_value=1000), \
+                mock.patch.object(matrix.time, "monotonic", return_value=100):
+            with self.assertRaisesRegex(ValueError, "timer"):
+                matrix.complete_run(self.root, job["id"], report, actual_model=job["model"], actual_reasoning="high")
+        with mock.patch.object(matrix.time, "time", return_value=1001), \
+                mock.patch.object(matrix.time, "monotonic", return_value=101):
+            matrix.complete_run(self.root, job["id"], report, actual_model=job["model"], actual_reasoning="high")
         parent_audit = self.root / "parent-audit.json"
         matrix.save(parent_audit, {"semantic": {"passed": True, "observations": ["Manual assessment."],
                                                 "dimensions": {key: True for key in matrix.DIMENSIONS[job["case"]]}},
                                    "mechanical_checks": {key: True for key in matrix.CHECKS}})
         matrix.save_audit(self.root, job["id"], parent_audit)
         self.assertTrue(matrix.record(self.root, job)["passed"])
-        with self.assertRaises(FileExistsError):
-            matrix.start_run(self.root, job["id"])
-        with self.assertRaises(FileExistsError):
-            matrix.complete_run(self.root, job["id"], report, actual_model=job["model"], actual_reasoning="high")
+        with mock.patch.object(matrix.time, "time", return_value=1002), \
+                mock.patch.object(matrix.time, "monotonic", return_value=102):
+            with self.assertRaises(FileExistsError):
+                matrix.start_run(self.root, job["id"])
+        with mock.patch.object(matrix.time, "time", return_value=1003), \
+                mock.patch.object(matrix.time, "monotonic", return_value=103):
+            with self.assertRaises(FileExistsError):
+                matrix.complete_run(self.root, job["id"], report, actual_model=job["model"], actual_reasoning="high")
         with self.assertRaises(FileExistsError):
             matrix.save_audit(self.root, job["id"], parent_audit)
 
@@ -222,7 +234,9 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
         directory = self.root / "runs" / job["id"]
         matrix.save(directory / "public-request.json", {"run_id": job["id"], "model": job["model"],
                                                           "reasoning": job["reasoning"]})
-        matrix.start_run(self.root, job["id"])
+        with mock.patch.object(matrix.time, "time", return_value=1000), \
+                mock.patch.object(matrix.time, "monotonic", return_value=100):
+            matrix.start_run(self.root, job["id"])
         report = directory / "reports/review.md"
         report.parent.mkdir(parents=True)
         report.write_text("Audited review.\n", encoding="utf-8")
@@ -233,8 +247,10 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
                    "full_result_validations": int(operation == "finish")}
                   for index, operation in enumerate(("start", "step", "finish"), 1)]
         trace.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
-        completion = matrix.complete_run(self.root, job["id"], report,
-                                         actual_model=job["model"], actual_reasoning=job["reasoning"])
+        with mock.patch.object(matrix.time, "time", return_value=1001), \
+                mock.patch.object(matrix.time, "monotonic", return_value=101):
+            completion = matrix.complete_run(self.root, job["id"], report,
+                                             actual_model=job["model"], actual_reasoning=job["reasoning"])
         self.assertEqual(42, completion["helper_metrics"]["helper_output_bytes"])
         parent_audit = self.root / "speed-audit.json"
         matrix.save(parent_audit, {"semantic": {"passed": True, "observations": ["Manual assessment."],

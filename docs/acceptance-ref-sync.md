@@ -17,6 +17,7 @@
 
 - Windows 自動化 BDD：16 個情境、65 個步驟通過；GitHub 真實發布的人工情境未執行。
 - Windows Python 最新完整回歸：封存版 `683ba08a0860eae713f1c3cb40754339452586c3985f66823b6f81ff03abbf03` 分三組執行 330 項，328 項通過、2 項跳過；兩項因本機沒有建立 symbolic link 的權限而跳過，不能視為實際連結測試通過。紀錄為 `final3-shard-1.log` 至 `final3-shard-3.log`。最新快照的 BDD 與 WorkflowKit 整合冒煙紀錄為 `final3-bdd.log`、`workflowkit-final3.log`。此封存版的 14 個 helper 與正式效能量測快照內容相同。
+- 發布準備提交 `f89c2bd` 的 [Windows／Python 3.10 CI](https://github.com/dennis8499/MergeReviewer/actions/runs/40606655807/job/122547714135) 有一項計時測試失敗：極短測試在該平台讀到零秒。測試改用受控時鐘，仍檢查零秒不可被接受；原失敗保留，不視為通過。
 - 較早封存版 `feb431894e0122fd563ccd9ce24dffdc66f8d857223f285130b9e41713ed8ecc` 執行 316 項，314 項通過、2 項跳過；紀錄為 `final2-shard-*.log`。其後新增驗收工具與案例，並依暖快取剖析調整固定快照的路徑檢查，故較早的封存版結果保留為歷史紀錄。
 - 逐 ref 的 TTL、refresh、失敗冷卻、同分支別名、十份同時請求及取消測試通過；四個不同 head 的協調測試確認 main 只同步一次。新的 TTL 邊界及同步中失效測試使用受控時鐘與本機假 transport。
 - v1 邊界相容、v2 內部／傳播／未解決、固定讀取行段、搜尋重播及精簡草稿定向測試通過。這些測試檢查結構與固定證據，不是模型判斷的品質評估。
