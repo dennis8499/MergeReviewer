@@ -114,6 +114,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REUSE_RUN_ID: ${{ needs.select.outputs.reuse_run_id }}
         run: python -X utf8 -B scripts/release_ci.py publish --run-id "$REUSE_RUN_ID" --fallback-current-run --output release-publication.json
+      - name: Attach documented release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -X utf8 -B scripts/release_notes.py --publication release-publication.json
       - name: Save verified formal asset digests
         uses: actions/upload-artifact@v7
         with:

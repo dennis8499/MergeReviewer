@@ -15,6 +15,9 @@ import zipfile
 spec = importlib.util.spec_from_file_location("release_ci", Path(__file__).with_name("release_ci.py"))
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
+notes_spec = importlib.util.spec_from_file_location("release_notes", Path(__file__).with_name("release_notes.py"))
+notes = importlib.util.module_from_spec(notes_spec)
+notes_spec.loader.exec_module(notes)
 
 
 class ProofTests(unittest.TestCase):
@@ -334,6 +337,52 @@ class PublicationTests(unittest.TestCase):
                 ci.publish_assets(self.api, "v" + version, source, self.files)
 
 
+class ReleaseNotesTests(unittest.TestCase):
+    def setUp(self):
+        self.source = {"repository": "owner/MergeReviewer", "sha": "a" * 40, "version": "0.20.0"}
+        self.publication = {"tag": "v0.20.0", "sha": self.source["sha"]}
+        self.release = {"id": 12, "tag_name": "v0.20.0", "draft": False,
+                        "body": "Generated changelog\n\n## Verification\nExact CI proof."}
+        self.api = mock.Mock()
+        def request(path, method="GET", data=None):
+            if path.startswith("git/ref/"):
+                return {"object": {"type": "commit", "sha": self.source["sha"]}}
+            if path.startswith("compare/"):
+                return {"merge_base_commit": {"sha": self.source["sha"]}}
+            if path.startswith("releases/tags/"):
+                return dict(self.release)
+            if path == "releases/12" and method == "PATCH":
+                self.release.update(data)
+                return dict(self.release)
+            raise AssertionError((path, method))
+        self.api.request.side_effect = request
+
+    def test_notes_are_published_once_and_preserve_ci_provenance(self):
+        text = "# Version notes\n\n[驗收](../acceptance-ref-sync.md)\n\nModel checks remain pending."
+        first = notes.attach(self.api, self.source, "v0.20.0", self.publication, text)
+        self.assertTrue(first["updated"])
+        self.assertIn("https://github.com/owner/MergeReviewer/blob/v0.20.0/docs/acceptance-ref-sync.md", self.release["body"])
+        self.assertIn("Model checks remain pending.", self.release["body"])
+        self.assertIn("## Verification\nExact CI proof.", self.release["body"])
+        self.assertFalse(notes.attach(self.api, self.source, "v0.20.0", self.publication, text)["updated"])
+        self.assertEqual(1, sum(call.args[1:2] == ("PATCH",) for call in self.api.request.call_args_list))
+
+    def test_conflicting_notes_and_wrong_receipts_are_not_overwritten(self):
+        self.release["body"] = "<!-- release-notes:v0.20.0:start -->\nUser edit\n<!-- release-notes:v0.20.0:end -->"
+        with self.assertRaises(notes.ci.ProofError):
+            notes.attach(self.api, self.source, "v0.20.0", self.publication, "Different notes")
+        with self.assertRaises(notes.ci.ProofError):
+            notes.attach(self.api, self.source, "v0.20.0", {"tag": "v0.20.0", "sha": "b" * 40}, "Notes")
+        self.assertFalse(any(call.args[1:2] == ("PATCH",) for call in self.api.request.call_args_list))
+
+    def test_unpublished_release_and_escaping_links_are_rejected(self):
+        self.release["draft"] = True
+        with self.assertRaises(notes.ci.ProofError):
+            notes.attach(self.api, self.source, "v0.20.0", self.publication, "Notes")
+        with self.assertRaises(notes.ci.ProofError):
+            notes.public_notes("[bad](../../../outside.md)", self.source["repository"], "v0.20.0")
+
+
 class WorkflowContractTests(unittest.TestCase):
     def test_local_workflow_matches_fixed_matrix_and_guarded_promotion(self):
         root = Path(__file__).resolve().parents[1]
@@ -358,6 +407,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--clobber", text)
         self.assertNotIn("package_release.py", publish)
         self.assertNotIn("npm run package", publish)
+        if name == "MergeReviewer":
+            self.assertIn("scripts/release_notes.py --publication release-publication.json", publish)
 
 
 if __name__ == "__main__":
