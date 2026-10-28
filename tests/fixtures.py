@@ -45,12 +45,18 @@ class ReviewFixture(unittest.TestCase):
         git(target, "add", ".")
         git(target, "commit", "-m", "change")
 
-    def capture(self, *extra, workspace_root=None, project=None, base="main", head="feature"):
+    def capture(self, *extra, workspace_root=None, project=None, base="main", head="feature", policy="boundary-contracts/v1"):
         arguments = ["--workspace", str(workspace_root or self.root),
                      "--project", str(project or self.repo), "--base", base, "--head", head, *extra]
         manifest = api.build_manifest(api.parse_args(arguments))
         context = Path(manifest["context_dir"])
         self.addCleanup(review_session.cleanup_session, context)
+        # Existing fixture drafts exercise recovery and validation of legacy
+        # contexts. New-policy tests explicitly request the new default.
+        if policy != manifest["contract_scope_policy"]:
+            manifest["contract_scope_policy"] = policy
+            manifest.pop("boundary_changes", None)
+            workspace.save(context, manifest)
         return context, manifest
 
     def draft(self, context, manifest):
@@ -111,9 +117,21 @@ class ReviewFixture(unittest.TestCase):
                     items.append({"repo": seed["id"], "source": name, "ref": source["ref"], "path": path})
             parent_reviews.append({"id": view["id"], "status": "reviewed", "reason": "測試作者對照固定parent與最終版本。",
                                    "evidence": items, "final_ref": final_ref})
+        boundaries = []
+        if manifest.get("extension_enabled") and manifest.get("contract_scope_policy") == "boundary-contracts/v2":
+            for change in manifest["boundary_changes"]:
+                root = change["root"]
+                row = next(item for item in coverage if all(item.get(key) == value for key, value in root.items()))
+                contracts = [contract["id"] for contract in manifest["changed_contracts"]
+                             if contract["root"] == root and contract.get("search_scope", "workspace") == "workspace"]
+                resolved = row["status"] == "reviewed" and bool(contracts)
+                boundaries.append({"change_id": change["id"], "outcome": "propagates" if resolved else "unresolved",
+                                   "reason": "測試作者追查固定契約。" if resolved else "必要變更尚未完成。",
+                                   "evidence": copy.deepcopy(row["evidence"]) if resolved else [],
+                                   "search_ids": [], "boundary_contract_ids": contracts})
         return {"schema": workspace.RESULT, "summary": "已完成所選範圍的固定證據檢查。", "merge_parent_review": parent_reviews,
                 "coverage": coverage, "impact_coverage": nodes, "repository_coverage": dispositions,
-                "findings": [], "next_steps": [], "tests_executed": [],
+                "boundary_reviews": boundaries, "findings": [], "next_steps": [], "tests_executed": [],
                 "tests_not_executed": ["未執行專案測試；此結果為測試夾具。"], "limitations": []}
 
     def attach_consumer(self, draft, manifest, consumer, *, reviewed=True, connected=True):

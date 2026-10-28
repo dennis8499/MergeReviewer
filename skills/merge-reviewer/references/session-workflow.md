@@ -46,11 +46,11 @@ start 回傳 `MergeReviewStart/v1`，含固定 Repo／source ref、必要覆蓋�
 
 結果 `operations[]` 按順序帶 id／artifact／result。成功一次保存 manifest；失敗保存成功前綴並回傳 `complete=false／next_index／error`。修正失敗項後可重送整份陣列；成功 ID 的內容須保持一致，重用 artifact 而不新增契約或搜尋。新操作給新 ID。
 
-較大的 step 優先使用 `MergeReviewEvidenceStep/v1`：read 的 `content_id` 指向頂層 `contents[id].lines`，每筆保留自己的來源、完整 ref、路徑及全文 hash；搜尋的共同 query／contract_id／source 移到該操作 result，個別紀錄沿用，所有 matches 保留。只省略與 matches 重複的原始 output，以及已由請求提供的契約欄位；契約回傳 id／parent_ids／anchor_sha256 與 `input_fields_reused=true`。`projection_complete=true` 代表必要行段及命中全部回傳，原始完整結果仍由 artifact 保存。超過上限才用摘要並要求分頁。
+較大的 step 優先使用 `MergeReviewEvidenceStep/v1`：read 的 `content_id` 指向頂層 `contents[id].lines`，每筆保留來源與全文 hash；搜尋的共同欄位合併，所有 matches 保留。仍超過上限時使用 `MergeReviewEvidenceStep/v2`：按操作保留可容納的小結果，其餘以 `result_returned=false` 與 `continue` 指向完整 artifact；操作太多時，`operations_next_offset`／`continue_operations` 指向後續清單。`evidence_complete` 表示完整保存，`result_returned` 表示此次是否回傳該結果；語意是否審查由 agent 判斷。必要內容續讀後才標 reviewed。
 
-同輪註冊後搜尋，再閱讀 consumer；實際發現間接輸出契約才建立下一輪。單 Repo 搜尋可省略 contract，跨 Repo 須先註冊。
+Repo 內搜尋可用 `change_id` 指向必要變更；單 Repo 搜尋也可省略 contract。跨 Repo 須先註冊契約，再搜尋及閱讀 consumer；發現間接輸出契約才建立下一輪。
 
-新 Group context 可填 `search_scope=repo-local|workspace`；省略時為 workspace。local 搜尋預設只用 evidence Repo，精確 source 使用 anchor 的 source。判定及 contained／propagates／unresolved 草稿例子見[契約邊界](contract-boundaries.md)。ordered step 的相同 raw query 可跨輪重用成功結果，各契約仍建立自己的 ledger 紀錄；快取按 context、Repo、固定 source/ref/tree、flags、環境及 query 隔離，失敗不保存。損壞快取丟棄後重搜，finish 忽略此快取並重新驗證搜尋。
+契約的 `search_scope` 可為 `repo-local|workspace`；省略時為 workspace。判定及草稿例子見[契約邊界](contract-boundaries.md)。同來源的安全查詢可合併執行，每個查詢仍有獨立 ledger；特殊輸入以單查詢處理。finish 忽略閱讀階段的搜尋快取並重新驗證。
 
 ## artifact 續讀
 
@@ -62,6 +62,8 @@ start 回傳 `MergeReviewStart/v1`，含固定 Repo／source ref、必要覆蓋�
 ~~~
 
 JSON pointer 的 `/`、`~` 以 `~1`、`~0` 轉義。陣列回傳 items／total／next_offset／view_complete；長字串用 string_offset，依 next_string_offset 續讀。字典由 fields 選 pointer。操作 artifact 保存原始 result；外層精簡摘要 artifact 保存完整回傳，兩者 pointer 不同。artifact 位於 `<context>/views/<SHA-256>.json`，helper 讀取核對 hash。
+
+終止後 context 已清理、且 status 或 finish 結果仍超過上限時，摘要標示 `response_scope=runtime`，完整回應保存於該 request 的 runtime；用 `status --artifact <SHA-256> --pointer <JSON-pointer> --offset <n> --page-size <n>` 續讀，長字串用 `--string-offset`。此續讀只讀本機回應，不重新驗證或連線；終止紀錄到期後隨之清理。
 
 24 KiB 限制傳輸，不取代語意覆蓋。必要命中及指示讀完才能判斷；用 artifact 翻頁。
 

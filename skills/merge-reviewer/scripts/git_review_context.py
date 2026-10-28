@@ -379,8 +379,8 @@ def has_git_marker(path: Path) -> bool:
     return marker.is_dir() or marker.is_file()
 
 
-def discover_repositories(workspace: Path, workspace_file: Path | None) -> list[Path]:
-    roots = workspace_roots(workspace, workspace_file)
+def discover_repositories(workspace: Path, workspace_file: Path | None, *, roots=None) -> list[Path]:
+    roots = roots if roots is not None else workspace_roots(workspace, workspace_file)
     repositories: set[Path] = set()
     def discovery_error(error):
         raise ReviewContextError(f"無法讀取宣告的工作區目錄：{error}")
@@ -407,8 +407,10 @@ def choose_repository(
     workspace: Path,
     workspace_file: Path | None,
     project: str | None,
+    *, repositories: list[Path] | None = None,
 ) -> tuple[Path, list[Path]]:
-    repositories = discover_repositories(workspace, workspace_file)
+    if repositories is None:
+        repositories = discover_repositories(workspace, workspace_file)
     if project:
         requested = Path(project).expanduser()
         candidates: list[Path] = []
@@ -514,11 +516,13 @@ def remote_target_for_ref(repo: Path, ref: str) -> RemoteTarget | None:
 def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[str, str]]:
     actions: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
+    aliases: dict[tuple[str, str], list[str]] = {}
     grouped: dict[str, list[RemoteTarget]] = {}
     for ref in refs:
         target = remote_target_for_ref(repo, ref)
         if not target:
             continue
+        aliases.setdefault((target.remote, target.branch), []).append(target.input_ref)
         if (target.remote, target.branch) in seen:
             continue
         seen.add((target.remote, target.branch))
@@ -542,12 +546,15 @@ def fetch_inputs(repo: Path, refs: Iterable[str], enabled: bool) -> list[dict[st
                            "--no-write-fetch-head", "--jobs=1", remote, *refspecs])
             if activity is not None:
                 activity["fetch_success_count"] += 1
-                activity["synced_ref_count"] += len(targets)
+                activity["synced_ref_count"] += len(refspecs)
         try:
             import review_coordinator
             active = review_coordinator.ACTIVE.get()
             if active:
                 active.sync(repo, remote, targets, sys.modules[__name__], fetch)
+                for item in targets:
+                    for alias in aliases[(item.remote, item.branch)]:
+                        active.pins[alias] = active.pins[item.input_ref]
             else:
                 fetch([f"refs/heads/{item.branch}:refs/remotes/{remote}/{item.branch}" for item in targets])
         except GitCommandError as exc:

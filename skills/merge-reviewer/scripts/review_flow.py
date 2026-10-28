@@ -45,6 +45,14 @@ def job_path(root, identifier):
     return root / "jobs" / (identifier + ".json")
 
 
+def response_context(root, identifier, *, create=False):
+    job_path(root, identifier)
+    path = coordination.plain(root / "responses" / identifier)
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return coordination.plain(path)
+
+
 def update(root, identifier, **fields):
     path = job_path(root, identifier)
     with coordination.FileLock(path.with_suffix(".state.lock")):
@@ -86,12 +94,13 @@ def status(root, identifier):
         result["resume"] = {"selected_repo": manifest["selected_repo"],
                             "repositories": repo_index(manifest),
                             "required_coverage": manifest["required_coverage"],
+                            "boundary_changes": manifest.get("boundary_changes", []),
                             "contract_scope_policy": manifest.get("contract_scope_policy"),
                             "contracts": [{"id": c["id"], "symbol": c["symbol"], "search_scope": c.get("search_scope", "workspace")}
                                           for c in manifest["changed_contracts"]],
                             "operations": manifest.get("operations", {}),
                             "remaining": remaining(draft),
-                            "diagnostics": diagnostics(draft, manifest),
+                            "diagnostics": diagnostics(draft, manifest, context),
                             "network_activity": manifest["network_activity"],
                             "sync_activity": manifest.get("sync_activity", [])}
     return result
@@ -116,7 +125,11 @@ def draft_template(manifest):
                                      "reason": "使用者指定的審查起點。" if item["id"] == manifest["selected_repo"]
                                                else "尚未完成契約追查。",
                                      "search_ids": []} for item in manifest["repositories"]],
-            "impact_coverage": [], "boundary_reviews": [], "findings": [], "pending_confirmations": [], "next_steps": [],
+            "impact_coverage": [], "boundary_reviews": [
+                {"change_id": item["id"], "outcome": "unresolved", "reason": "尚未完成邊界判定。",
+                 "evidence": [], "search_ids": [], "boundary_contract_ids": []}
+                for item in manifest.get("boundary_changes", []) if manifest.get("extension_enabled")],
+            "findings": [], "pending_confirmations": [], "next_steps": [],
             "tests_executed": [], "tests_not_executed": ["本次尚未執行專案測試。"], "limitations": []}
 
 
@@ -133,11 +146,14 @@ def remaining(draft):
             "pending_confirmation_count": len(rows("pending_confirmations"))}
 
 
-def diagnostics(draft, manifest):
+def diagnostics(draft, manifest, context=None):
     import review_diagnostics
     try:
+        if context is not None:
+            import review_authoring
+            draft = review_authoring.expand(draft, manifest, context)
         return review_diagnostics.inspect(draft, manifest)
-    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+    except (KeyError, TypeError, AttributeError, ValueError, OSError) as exc:
         return {"errors": [{"code": "authoring.invalid-structure", "pointer": "", "path": "draft", "message": str(exc)}],
                 "gaps": [], "ready_for_finish": False, "evidence_verified": False,
                 "evidence_validation": "deferred-to-finish", "git_commands": 0}
@@ -160,7 +176,7 @@ def check(root, identifier):
     except (OSError, ValueError) as exc:
         return {"request_id": identifier, "errors": [{"code": "authoring.invalid-json", "pointer": "", "path": "draft", "message": str(exc)}],
                 "ready_for_finish": False, "evidence_verified": False, "git_commands": 0}, 3
-    value = diagnostics(draft, manifest)
+    value = diagnostics(draft, manifest, context)
     return {"request_id": identifier, "context_retained": True, **value}, 0 if value["ready_for_finish"] else 3
 
 
@@ -201,6 +217,12 @@ def prune_jobs(root):
             if value.get("state") in TERMINAL and value.get("finished_at_epoch", time.time()) < cutoff:
                 # Evidence is cleaned only through its separate owner marker.
                 if not value.get("context_dir") or not Path(value["context_dir"]).exists():
+                    response = response_context(root, path.stem)
+                    if response.exists():
+                        try:
+                            coordination.remove_owned(response, root / "responses")
+                        except (ValueError, OSError):
+                            continue
                     path.unlink()
                     (root / "jobs" / (path.stem + ".cancel")).unlink(missing_ok=True)
         finally:
@@ -242,9 +264,14 @@ def start(args):
                   file=sys.stderr, flush=True)
         active = coordination.Coordination(root, identifier, notify, args.refresh, args.auth_scope)
         notify("preflight", {"runtime_root": str(root)})
-        seed, repositories = api.choose_repository(Path(inputs["workspace"]),
-                                                    Path(inputs["workspace_file"]) if inputs["workspace_file"] else None,
-                                                    args.project)
+        declared = Path(inputs["workspace"])
+        workspace_file = Path(inputs["workspace_file"]) if inputs["workspace_file"] else None
+        workspace_digest = hashlib.sha256(workspace_file.read_bytes()).hexdigest() if workspace_file else None
+        roots = api.workspace_roots(declared, workspace_file)
+        repositories = api.discover_repositories(declared, workspace_file, roots=roots)
+        seed, repositories = api.choose_repository(declared, workspace_file, args.project, repositories=repositories)
+        if workspace_file and hashlib.sha256(workspace_file.read_bytes()).hexdigest() != workspace_digest:
+            raise ValueError("Workspace file changed during repository discovery.")
         if any(root.is_relative_to(repo.resolve()) for repo in repositories):
             raise ValueError("Review runtime must be outside every declared Git Repo.")
         inputs["project"] = str(seed.resolve())
@@ -263,6 +290,7 @@ def start(args):
             arguments.append("--no-fetch")
         capture = api.parse_args(arguments)
         capture._prepared_context = str(context)
+        capture._workspace_discovery = (declared, workspace_file, roots, repositories, seed, workspace_digest)
         began = time.perf_counter()
         with active.activate():
             manifest = api.build_manifest(capture)
@@ -280,6 +308,7 @@ def start(args):
                  "selected_repo": manifest["selected_repo"], "repositories": repo_index(manifest),
                  "contract_scope_policy": manifest.get("contract_scope_policy"),
                  "required_coverage": manifest["required_coverage"],
+                 "boundary_changes": manifest.get("boundary_changes", []),
                  "required_merge_views": manifest["required_merge_views"], "patches": patches,
                  "instructions": instructions["instructions"], "context_gaps": manifest["context_gaps"],
                  "network_activity": manifest["network_activity"], "sync_activity": manifest.get("sync_activity", []),
@@ -295,7 +324,10 @@ def start(args):
                                        "search_terms": [{"query": "<exact symbol>", "reason": "<contract meaning>"},
                                                         {"query": "<different frozen anchor term>", "reason": "<meaning>"}]},
                           "search": {"id": "search-1", "op": "search", "contract": "<registered C-id>",
-                                     "query": "<registered term>", "repo": ["<Repo IDs>"]}}}
+                                      "query": "<registered term>", "repo": ["<Repo IDs>"]},
+                           "local_search": {"id": "local-search-1", "op": "search",
+                                            "change_id": "<boundary change ID>", "query": "<local use>"}},
+                 "authoring_schema": "merge-reviewer-authoring/v1"}
         coordination.atomic(context / "start.json", guide)
         update(root, identifier, state="ready", phase="review", selected_repo=selected["id"],
                network_activity=manifest["network_activity"], sync_activity=manifest.get("sync_activity", []),
@@ -381,15 +413,47 @@ def step_projection(value):
 
 
 def compact(value, context):
-    if len(review_runtime.canonical(value)) <= LIMIT:
-        return value
+    if isinstance(value, dict) and isinstance(value.get("operations"), list) and all(
+            isinstance(item, dict) and "id" in item and "result" in item for item in value["operations"]):
+        returned = {**value, "evidence_complete": True, "review_status": "agent-determined",
+                    "operations": [{**item, "saved": True, "result_returned": True} for item in value["operations"]]}
+    else:
+        returned = value
+    if len(review_runtime.canonical(returned)) < LIMIT:
+        return returned
     artifact = review_runtime.store_view(context, value)
     projected = step_projection(value)
     if projected is not None:
         lean = {"schema": "MergeReviewEvidenceStep/v1", "artifact": artifact,
-                "evidence_complete": True, "projection_complete": True, **projected}
-        if len(review_runtime.canonical(lean)) <= LIMIT:
+                "evidence_complete": True, "projection_complete": True, "review_status": "agent-determined", **projected}
+        lean["operations"] = [{**item, "saved": True, "result_returned": True} for item in lean["operations"]]
+        if len(review_runtime.canonical(lean)) < LIMIT:
             return lean
+        # Reserve a continuation for each operation, then fill the smallest
+        # results first. One large operation must not hide unrelated small ones.
+        operations = value["operations"]
+        rows = [{"id": operation.get("id"), "saved": True, "result_returned": False,
+                 "continue": {"op": "view", "artifact": artifact,
+                              "pointer": f"/operations/{index}/result", "offset": 0, "page_size": 100}}
+                for index, operation in enumerate(operations)]
+        partial = {**{key: item for key, item in value.items() if key != "operations"},
+                   "schema": "MergeReviewEvidenceStep/v2", "artifact": artifact,
+                   "evidence_complete": True, "review_status": "agent-determined",
+                   "projection_complete": False, "operations": rows}
+        if len(review_runtime.canonical(partial)) >= LIMIT and len(rows) > 64:
+            rows[:] = rows[:64]
+            partial.update(operations_total=len(operations), operations_next_offset=len(rows),
+                           continue_operations={"op": "view", "artifact": artifact,
+                                                "pointer": "/operations", "offset": len(rows), "page_size": 64})
+        if len(review_runtime.canonical(partial)) < LIMIT:
+            sizes = sorted(range(len(rows)), key=lambda index: len(review_runtime.canonical(operations[index])))
+            for index in sizes:
+                previous = rows[index]
+                rows[index] = {**operations[index], "saved": True, "result_returned": True}
+                if len(review_runtime.canonical(partial)) >= LIMIT:
+                    rows[index] = previous
+            partial["projection_complete"] = len(rows) == len(operations) and all(row["result_returned"] for row in rows)
+            return partial
     # Bound every level, including thousands of matches, long lines and metadata.
     def sketch(item, pointer="", depth=0):
         if isinstance(item, str):
@@ -411,8 +475,8 @@ def compact(value, context):
     if isinstance(value, dict) and "evidence_verified" in value:
         result["evidence_verified"] = value["evidence_verified"]
         result["ready_for_finish"] = value.get("ready_for_finish", False)
-    if len(review_runtime.canonical(result)) > LIMIT:
-        result["summary"] = {"fields": list(value) if isinstance(value, dict) else None,
+    if len(review_runtime.canonical(result)) >= LIMIT:
+        result["summary"] = {"fields": [str(key)[:80] for key in list(value)[:32]] if isinstance(value, dict) else None,
                              "count": len(value)}
     return result
 
@@ -540,10 +604,16 @@ def finish(root, identifier):
             except (OSError, ValueError) as exc:
                 draft, errors = {}, [f"draft input: {coordination.safe_error(exc)}"]
             else:
-                errors = draft_errors(draft)
+                import review_authoring
+                try:
+                    expanded = review_authoring.expand(draft, workspace.load(context), context)
+                except (KeyError, TypeError, ValueError, OSError) as exc:
+                    expanded, errors = draft, [f"draft input: {coordination.safe_error(exc)}"]
+                else:
+                    errors = draft_errors(expanded)
                 # This inspection reads saved JSON only. Final evidence verification
                 # remains mandatory after authoring errors have been repaired.
-                inspected = diagnostics(draft, workspace.load(context))
+                inspected = diagnostics(expanded, workspace.load(context), context)
                 errors.extend(f"{row['path']}: {row['message']}" for row in inspected["errors"])
                 errors = list(dict.fromkeys(errors))
             if errors:
@@ -614,6 +684,11 @@ def parser():
     value.add_argument("--auth-scope", default=os.environ.get("GITLAB_WORKSPACE_AUTH_SCOPE", ""))
     value.add_argument("--no-fetch", action="store_true")
     value.add_argument("--git-timeout", type=float, default=180)
+    value.add_argument("--artifact", help="Read a persisted oversized terminal response with status")
+    value.add_argument("--pointer", default="")
+    value.add_argument("--offset", type=int, default=0)
+    value.add_argument("--page-size", type=int, default=100)
+    value.add_argument("--string-offset", type=int, default=0)
     return value
 
 
@@ -623,18 +698,28 @@ def main(argv=None):
             stream.reconfigure(encoding="utf-8")
     args = parser().parse_args(argv)
     code = 0
+    runtime_response = False
     try:
         if args.command == "start":
             if not all((args.workspace, args.project, args.base, args.head)):
                 raise ValueError("start requires workspace, project, base and head.")
             result = start(args)
+            root = Path(result["runtime_root"])
             if result.get("state") in ("failed", "cancelled"):
                 code = 2
             context = Path(result.get("context_dir", "")) if result.get("context_dir") else None
         else:
             root = resolve_runtime(args.workspace, args.runtime_root)
             if args.command == "status":
-                result = status(root, args.request_id)
+                if args.artifact:
+                    job = coordination.read_json(job_path(root, args.request_id))
+                    job_context(root, args.request_id, job)
+                    response = response_context(root, args.request_id)
+                    result = artifact_view(response, args.artifact, args.pointer, args.offset,
+                                           args.page_size, args.string_offset)
+                    runtime_response = True
+                else:
+                    result = status(root, args.request_id)
             elif args.command == "cancel":
                 result = cancel(root, args.request_id)
             elif args.command == "step":
@@ -645,9 +730,20 @@ def main(argv=None):
             else:
                 result, code = finish(root, args.request_id)
             job = coordination.read_json(job_path(root, args.request_id))
-            context = Path(job["context_dir"]) if job.get("context_dir") else None
+            context = (response if args.command == "status" and args.artifact else
+                       Path(job["context_dir"]) if job.get("context_dir") else None)
         if context and context.exists():
             result = compact(result, context)
+        elif args.request_id and len(review_runtime.canonical(result)) >= LIMIT:
+            response = response_context(root, args.request_id, create=True)
+            result = compact(result, response)
+            runtime_response = True
+        if runtime_response:
+            result["response_scope"] = "runtime"
+            if isinstance(result.get("continue"), dict):
+                result["continue"] = {**result["continue"], "command": "status"}
+            if len(review_runtime.canonical(result)) >= LIMIT:
+                result["summary"] = {"fields": list(result.get("summary", {}))[:16]}
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return code
     except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:

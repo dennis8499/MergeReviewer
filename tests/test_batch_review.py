@@ -341,9 +341,10 @@ class FixedSourceCacheTests(ReviewFixture):
         cache = workspace.FixedSourceCache(context, api)
         with mock.patch.object(api, "run_git", wraps=api.run_git) as run:
             first = cache.read(repo, "head", "app.py")
-            self.assertEqual(2, run.call_count)
+            self.assertEqual(1, run.call_count)
+            self.assertEqual(["cat-file", "--batch"], run.call_args.args[1])
             self.assertEqual(first, cache.read(repo, "head", "app.py"))
-            self.assertEqual(2, run.call_count)
+            self.assertEqual(1, run.call_count)
             repo["sources"]["head"]["files"][0]["blob_sha"] = "0" * 40
             with self.assertRaisesRegex(ValueError, "blob identity"):
                 cache.read(repo, "head", "app.py")
@@ -369,11 +370,12 @@ class FixedSourceCacheTests(ReviewFixture):
         cache = workspace.FixedSourceCache(context, api)
         alternate = context / "alternate-objects"
         alternate.mkdir()
-        with mock.patch.object(workspace, "fixed_bytes", wraps=workspace.fixed_bytes) as read:
+        with mock.patch.object(api, "run_git", wraps=api.run_git) as read:
             expected = cache.read(repo, "head", "app.py")
             with mock.patch.dict(os.environ, {"GIT_ALTERNATE_OBJECT_DIRECTORIES": str(alternate)}):
                 self.assertEqual(expected, cache.read(repo, "head", "app.py"))
             self.assertEqual(2, read.call_count)
+            self.assertTrue(all(call.args[1] == ["cat-file", "--batch"] for call in read.call_args_list))
 
     def test_json_metadata_keeps_uncached_blob_and_mode_validation_behavior(self):
         context, manifest = self.capture()
@@ -454,9 +456,10 @@ class FixedSourceCacheTests(ReviewFixture):
             (context / "cache-objects-b").rmdir()
             with self.assertRaisesRegex(ValueError, "storage is missing"):
                 cache.read(repo, "head", "app.py")
-        with mock.patch.object(workspace, "fixed_bytes", wraps=workspace.fixed_bytes) as read:
+        with mock.patch.object(api, "run_git", wraps=api.run_git) as read:
             workspace.FixedSourceCache(context, api).read(changed, "head", "app.py")
             self.assertEqual(1, read.call_count)
+            self.assertEqual(["cat-file", "--batch"], read.call_args.args[1])
 
     def test_changed_patch_cache_keys_baseline_flags_and_source(self):
         context, manifest = self.capture()
@@ -485,11 +488,11 @@ class FixedSourceCacheTests(ReviewFixture):
         expected = workspace.validate_contract(context, empty_contracts, contract, api)
         with mock.patch.object(api, "run_git", wraps=api.run_git) as run:
             self.assertEqual(expected, workspace.validate_contract(context, empty_contracts, contract, api, cache=cache))
-            self.assertEqual(3, run.call_count)
+            self.assertEqual(2, run.call_count)
             other = {**contract, "id": "C-second"}
             expected_other = {**expected, "id": "C-second"}
             self.assertEqual(expected_other, workspace.validate_contract(context, empty_contracts, other, api, cache=cache))
-            self.assertEqual(3, run.call_count)
+            self.assertEqual(2, run.call_count)
 
     def test_validate_root_queries_git_root_once(self):
         with mock.patch.object(api, "run_git", wraps=api.run_git) as run:

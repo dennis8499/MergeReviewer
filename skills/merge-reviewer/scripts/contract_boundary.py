@@ -2,19 +2,79 @@
 from __future__ import annotations
 
 POLICY = "boundary-contracts/v1"
+V2_POLICY = "boundary-contracts/v2"
 SCOPES = {"repo-local", "workspace"}
 
 
 def enabled(manifest, require):
     policy = manifest.get("contract_scope_policy")
-    require(policy in (None, POLICY), "unsupported contract scope policy")
-    return policy == POLICY
+    require(policy in (None, POLICY, V2_POLICY), "unsupported contract scope policy")
+    return policy in (POLICY, V2_POLICY)
 
 
 def scope(manifest, contract):
     # Existing v3 evidence retains its original obligations even if an extra
     # field was authored by an older client.
-    return contract.get("search_scope", "workspace") if manifest.get("contract_scope_policy") == POLICY else "workspace"
+    return contract.get("search_scope", "workspace") if manifest.get("contract_scope_policy") in (POLICY, V2_POLICY) else "workspace"
+
+
+def changes(manifest):
+    return [{"id": f"CH-{index:04}", "root": row}
+            for index, row in enumerate(manifest.get("required_coverage", []), 1)]
+
+
+def validate_v2(draft, manifest, contracts, nodes, graph, searches, evidence_list, require, *, only=None):
+    """Require an explicit, evidence-backed disposition for each changed path."""
+    expected = {row["id"]: row["root"] for row in changes(manifest)} if manifest["extension_enabled"] else {}
+    require(manifest.get("boundary_changes") == changes(manifest), "boundary change index differs from fixed coverage")
+    reviews = draft.get("boundary_reviews", [])
+    require(isinstance(reviews, list), "boundary_reviews must be an array")
+    found, gaps = {}, []
+    coverage = {(row.get("repo"), row.get("source"), row.get("path")): row
+                for row in draft.get("coverage", []) if isinstance(row, dict)}
+    for review in reviews:
+        require(isinstance(review, dict), "boundary review must be an object")
+        identifier = review.get("change_id")
+        require(identifier in expected and identifier not in found and (only is None or identifier in only),
+                "boundary review needs a unique required change")
+        root = expected[identifier]
+        outcome = review.get("outcome")
+        require(outcome in {"contained", "propagates", "unresolved"}, "invalid boundary outcome")
+        require(isinstance(review.get("reason"), str) and review["reason"].strip(), "boundary review needs a data-flow reason")
+        ids = review.get("search_ids", [])
+        require(isinstance(ids, list) and all(isinstance(i, str) for i in ids)
+                and len(ids) == len(set(ids)) and all(i in searches for i in ids), "invalid boundary search_ids")
+        require(all(searches[i].get("change_id") == identifier and searches[i].get("repo") == root["repo"]
+                    and searches[i].get("status") == "complete" for i in ids),
+                "boundary searches must be completed searches of this change in its own Repo")
+        child_ids = review.get("boundary_contract_ids", [])
+        require(isinstance(child_ids, list) and all(isinstance(i, str) for i in child_ids)
+                and len(child_ids) == len(set(child_ids)), "boundary_contract_ids must be unique")
+        keys = evidence_list(review, outcome != "unresolved")
+        require(all(key[0] == root["repo"] for key in keys), "boundary evidence must use its own Repo")
+        relevant = {i for i, contract in contracts.items() if contract.get("root") == root
+                    and scope(manifest, contract) == "workspace"}
+        if outcome == "unresolved":
+            require(set(child_ids) <= relevant, "unresolved boundary names unknown workspace contracts")
+            gaps.append(identifier + ": " + review["reason"])
+        else:
+            row = coverage.get((root["repo"], root["source"], root["path"]))
+            require(row and row.get("status") == "reviewed", "resolved boundary needs a reviewed change")
+            coverage_keys = evidence_list(row)
+            require(any(key in coverage_keys and key[0] == root["repo"] and key[2] == root["path"] for key in keys),
+                    "boundary evidence must include fixed changed-path evidence")
+            if outcome == "contained":
+                require(not relevant and not child_ids, "contained boundary cannot hide workspace contracts")
+                local = {i for i, contract in contracts.items() if contract.get("root") == root}
+                require(all(node["repo"] == root["repo"] for node in nodes.values()
+                            if local.intersection(node.get("contract_ids", []))),
+                        "contained boundary cannot reach another Repo")
+            else:
+                require(relevant and set(child_ids) == relevant, "propagation needs every workspace contract")
+        found[identifier] = review
+    required = set(expected) if only is None else set(expected) & set(only)
+    require(set(found) == required, "every required change needs a boundary review")
+    return list(found.values()), gaps
 
 
 def obligations(manifest, contracts, repo_id):
@@ -25,6 +85,8 @@ def obligations(manifest, contracts, repo_id):
 def validate(draft, manifest, contracts, nodes, graph, searches, evidence_list, require, *, only=None):
     """Validate closure evidence after all child contracts have been registered."""
     active = enabled(manifest, require)
+    if manifest.get("contract_scope_policy") == V2_POLICY:
+        return validate_v2(draft, manifest, contracts, nodes, graph, searches, evidence_list, require, only=only)
     reviews = draft.get("boundary_reviews", [])
     require(isinstance(reviews, list), "boundary_reviews must be an array")
     if not active:

@@ -158,11 +158,11 @@ python "<skill-dir>/scripts/review_workspace.py" batch-register-contract --conte
 
 ## 多儲存庫延伸
 
-新 context 先按[契約邊界](contract-boundaries.md)判斷 `search_scope` 與 `boundary_reviews`。下列 workspace 契約的全候選搜尋規則仍適用；repo-local 名稱改用自身搜尋及明確邊界證據。缺少政策標記的舊 v3 context 全部維持 workspace 規則。
+新 context 先按[契約邊界](contract-boundaries.md)逐變更判斷 `contained`／`propagates`／`unresolved`。以下契約及影響圖規則適用實際傳播的變更；contained 無須額外契約或節點。舊 context 依其原政策處理。精簡草稿可用[操作 ID 與行段](authoring.md)引用固定證據。
 
 同一份結果另加 `impact_coverage` 與 `repository_coverage`，追查必要的直接／間接影響；其他儲存庫不成為第二起點。
 
-1. 從實際變更行擷取 API、事件、資料、套件、設定或行為契約。每個已審查的變更路徑需固定契約；無法理解的路徑保留未完成。
+1. 對傳播到邊界的變更，從實際變更行擷取 API、事件、資料、套件、設定或行為契約；無法理解的路徑保留未完成。
 2. 契約 JSON 包含 `id`、`root`（一筆 `required_coverage`）、`kind=api|event|package|data|table|config|behavior`、`symbol`、`evidence`、`search_terms`（`query`／`reason`）。workspace 契約初次註冊即選至少兩個不同且在固定 anchor 中出現的契約詞，包含精確 symbol 與相關欄位／Topic／API 名稱，供無關 Repo 的替代詞排除；repo-local 至少保留 exact symbol，其完成義務見契約邊界。必要時擴至最小相關行段；別名需自己的固定證據（`evidence`）。註冊後以契約 ID 搜尋，所有紀錄由 helper 保存，不直接修改 manifest 或搜尋 ledger。
 3. 閱讀呼叫端／消費端，發現延伸契約時加上 `parent_ids` 並繼續查找，直到必要鏈路查清或標為 `unresolved`。預覽契約使用合併預覽來源。
 4. 每個儲存庫記錄 `seed|related|not-related|unresolved`、原因及 `search_ids`。每個跨儲存庫契約都要搜尋候選的固定主來源；排除需至少兩個不同且相關的詞，解釋符合／不符合結果。

@@ -102,15 +102,20 @@ def evidence_repository(context: Path, repo: dict) -> Path:
     expected = f"repos/{repo['id']}/snapshot.git"
     require(snapshot.get("git_dir") == expected, "snapshot repository identity differs")
     path = safe_path(context, expected)
-    objects = safe_path(context, expected + "/objects")
-    require(path.is_dir() and safe_path(context, expected + "/HEAD").is_file() and objects.is_dir(),
+    # The snapshot root and every ancestor were checked above. These are fixed
+    # literal descendants, so check each remaining component once rather than
+    # repeatedly resolving the same root for HEAD, refs, config and pack. Do
+    # this on every access: a cache hit must still notice a replaced link.
+    objects, head, refs = path / "objects", path / "HEAD", path / "refs"
+    config, pack = path / "config", objects / "pack"
+    for child in (objects, head, refs, config, pack):
+        require(not is_link(child), f"linked evidence path: {child}")
+    require(path.is_dir() and head.is_file() and objects.is_dir(),
             "frozen snapshot repository is missing")
-    require(safe_path(context, expected + "/refs").is_dir(), "frozen snapshot refs directory is missing")
+    require(refs.is_dir(), "frozen snapshot refs directory is missing")
     if snapshot.get("head_policy") == "fixed-head/v1":
-        require((path / "HEAD").read_text(encoding="ascii").strip() == snapshot.get("head_ref"),
+        require(head.read_text(encoding="ascii").strip() == snapshot.get("head_ref"),
                 "frozen snapshot HEAD identity differs")
-    safe_path(context, expected + "/config")
-    pack = safe_path(context, expected + "/objects/pack")
     require(pack.is_dir() and all(not is_link(item) for item in pack.iterdir()), "linked frozen object storage")
     require(not (path / "objects/info/alternates").exists(), "frozen snapshot cannot borrow alternate objects")
     return path
@@ -202,7 +207,14 @@ class FixedSourceCache:
         key = json.dumps(("read", key, entry["blob_sha"], entry.get("mode"), entry["kind"]),
                          ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if key not in self._content:
-            self._content[key] = fixed_bytes(self.context, repo, source_name, path, self.api)
+            if repo.get("snapshot") is not None:
+                try:
+                    self.prefetch({"repositories": [repo], "snapshot_policy": SNAPSHOT_POLICY},
+                                  [{"repo": repo["id"], "source": source_name, "path": path}])
+                except (ValueError, KeyError, TypeError, OSError, self.api.ReviewContextError):
+                    pass  # Re-run the ordinary path for its precise validation error.
+            if key not in self._content:
+                self._content[key] = fixed_bytes(self.context, repo, source_name, path, self.api)
         return self._content[key]
 
     def prefetch(self, manifest, requests):
@@ -263,7 +275,20 @@ class FixedSearchCache:
         self._results = {}
         self.persistent = persistent
 
-    def run(self, repo: dict, source_name: str, query: str) -> tuple[int, str, str]:
+    def _save(self, key, result):
+        if not self.persistent:
+            return
+        import review_coordinator
+        cache_path = safe_path(self.context, "search-cache/" + hashlib.sha256(key.encode("utf-8")).hexdigest() + ".json")
+        payload = {"key": key, "result": result}
+        try:
+            cache_path.parent.mkdir(exist_ok=True)
+            review_coordinator.atomic(cache_path, {"payload": payload,
+                "sha256": hashlib.sha256(review_runtime.canonical(payload)).hexdigest()})
+        except OSError:
+            pass  # A disposable optimization cannot discard a fresh Git result.
+
+    def _identity(self, repo, source_name, query):
         source = repo["sources"][source_name]
         environment = source_environment(self.context, repo, source, self.api)
         git_repo = evidence_repository(self.context, repo)
@@ -276,6 +301,73 @@ class FixedSearchCache:
                           SEARCH_FLAGS, query), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         snapshot = repo.get("snapshot")
         frozen = isinstance(snapshot, dict) and snapshot.get("policy") == SNAPSHOT_POLICY
+        return key, source, environment, git_repo, frozen
+
+    def prefetch(self, manifest, requests):
+        """Batch safe literal patterns; preserve the original Git output per query."""
+        if type(self).run is not FixedSearchCache.run:
+            return  # An overridden runner need not consume this cache.
+        groups = {}
+        for request in requests:
+            try:
+                repo = repository(manifest, request["repo"])
+                name, query = request["source"], request["query"]
+                if (not isinstance(query, str) or not query or
+                        any(ord(char) < 32 or ord(char) > 126 for char in query)):
+                    continue
+                key, source, environment, git_repo, frozen = self._identity(repo, name, query)
+                # Git's normal grep quotes unusual paths. Only reconstruct its
+                # output where NUL-delimited filenames are byte-for-byte equal.
+                if not frozen or any(not re.fullmatch(r"[A-Za-z0-9_./ -]+", item["path"])
+                                     for item in source["files"]):
+                    continue
+                if self.persistent and safe_path(self.context, "search-cache/" +
+                        hashlib.sha256(key.encode("utf-8")).hexdigest() + ".json").is_file():
+                    continue
+                group_key = (repo["id"], name, source["ref"])
+                group = groups.setdefault(group_key, {"repo": git_repo, "source": source,
+                                                       "env": environment, "queries": {}})
+                group["queries"][query] = key
+            except (ValueError, KeyError, TypeError, OSError, self.api.ReviewContextError):
+                continue
+        for group in groups.values():
+            pending = [(query, key) for query, key in group["queries"].items() if key not in self._results]
+            # Keep Windows command lines comfortably below the platform limit.
+            while pending:
+                chunk, length = [], 0
+                while pending and len(chunk) < 32 and length + len(pending[0][0]) < 8000:
+                    entry = pending.pop(0)
+                    chunk.append(entry)
+                    length += len(entry[0])
+                if len(chunk) < 2:
+                    if not chunk:
+                        pending.pop(0)
+                    continue
+                patterns = [part for query, _ in chunk for part in ("-e", query)]
+                code, output, error = self.api.run_git_capture(group["repo"],
+                    ["grep", "-n", "-z", "-I", "--no-textconv", "-F", *patterns,
+                     group["source"]["ref"], "--"], env=group["env"])
+                if code not in (0, 1) or error or "\x1b" in output:
+                    continue
+                matches = {query: [] for query, _ in chunk}
+                valid = not output or output.endswith("\n")
+                for row in output.split("\n")[:-1]:
+                    parts = row.split("\0", 2)
+                    if len(parts) != 3 or not parts[1].isdigit():
+                        valid = False
+                        break
+                    original = ":".join(parts) + "\n"
+                    for query, _ in chunk:
+                        if query in parts[2]:
+                            matches[query].append(original)
+                if valid:
+                    for query, key in chunk:
+                        text = "".join(matches[query])
+                        self._results[key] = (0 if text else 1, text, "")
+                        self._save(key, self._results[key])
+
+    def run(self, repo: dict, source_name: str, query: str) -> tuple[int, str, str]:
+        key, source, environment, git_repo, frozen = self._identity(repo, source_name, query)
         cache_path = (safe_path(self.context, "search-cache/" + hashlib.sha256(key.encode("utf-8")).hexdigest() + ".json")
                       if self.persistent and frozen else None)
         if frozen and self.persistent and key not in self._results and cache_path.is_file():
@@ -296,15 +388,7 @@ class FixedSearchCache:
             if not frozen or result[0] not in (0, 1):
                 return result
             self._results[key] = result
-            if self.persistent:
-                import review_coordinator
-                payload = {"key": key, "result": result}
-                try:
-                    cache_path.parent.mkdir(exist_ok=True)
-                    review_coordinator.atomic(cache_path, {"payload": payload,
-                        "sha256": hashlib.sha256(review_runtime.canonical(payload)).hexdigest()})
-                except OSError:
-                    pass  # A disposable optimization cannot discard a fresh Git result.
+            self._save(key, result)
         return self._results[key]
 
 
@@ -505,7 +589,7 @@ def capture_workspace_instructions(context, roots, repositories):
     return entries
 
 
-def instructions(context, manifest, repo_id, path, api):
+def instructions(context, manifest, repo_id, path, api, *, cache=None):
     repo = repository(manifest, repo_id)
     if path is not None:
         safe_path(context, path)
@@ -534,7 +618,8 @@ def instructions(context, manifest, repo_id, path, api):
     for item in repo_entries:
         parent = PurePosixPath(item["path"]).parent
         if path is None or parent in PurePosixPath(path).parents:
-            raw = fixed_bytes(context, repo, item["source"], item["path"], api)
+            raw = (cache.read(repo, item["source"], item["path"]) if cache is not None else
+                   fixed_bytes(context, repo, item["source"], item["path"], api))
             require(hashlib.sha256(raw).hexdigest() == item["sha256"], "Repo instruction identity mismatch")
             entries.append({**item, "content": raw.decode("utf-8", errors="replace")})
     return {"instructions": entries}
@@ -586,14 +671,24 @@ def build(args, api) -> dict:
     require(not is_link(declared_root), "workspace root cannot be a link or junction")
     root = api.normalize_path(declared_root)
     workspace_file = api.normalize_path(args.workspace_file) if args.workspace_file else None
-    roots = api.workspace_roots(root, workspace_file)
+    discovery = getattr(args, "_workspace_discovery", None)
+    workspace_digest = hashlib.sha256(workspace_file.read_bytes()).hexdigest() if workspace_file else None
+    if discovery:
+        declared, original_file, roots, paths, seed, original_digest = discovery
+        require(root == declared and workspace_file == original_file and workspace_digest == original_digest,
+                "workspace identity changed during repository discovery")
+    else:
+        roots = api.workspace_roots(root, workspace_file)
+        paths = api.discover_repositories(root, workspace_file, roots=roots)
+        seed, _ = api.choose_repository(root, workspace_file, args.project, repositories=paths)
+        require(not workspace_file or hashlib.sha256(workspace_file.read_bytes()).hexdigest() == workspace_digest,
+                "workspace file changed during repository discovery")
     require(all(not is_link(r) for r in roots), "workspace roots cannot be links or junctions")
     require(all(r.is_dir() for r in roots), "宣告的工作區資料夾不存在，無法確認 Repo 範圍。")
-    paths = api.discover_repositories(root, workspace_file)
     require(bool(paths), "找不到 Git Repo；請指定正確工作區。")
     require(all(any(p.is_relative_to(r) for r in roots) for p in paths),
             "Repo canonical path escapes the declared workspace roots")
-    seed, _ = api.choose_repository(root, workspace_file, args.project)
+    require(seed in paths, "selected Repo is outside the discovered workspace")
     enabled = len(paths) > 1
     context = Path(args.context_dir)
     manifest = {
@@ -601,12 +696,12 @@ def build(args, api) -> dict:
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8],
         "workspace": str(root), "workspace_roots": [str(r) for r in roots],
         "workspace_file": str(workspace_file) if workspace_file else None,
-        "workspace_file_sha256": hashlib.sha256(workspace_file.read_bytes()).hexdigest() if workspace_file else None,
+        "workspace_file_sha256": workspace_digest,
         "review_basis": "codex-native", "scope": "group" if enabled else "repo", "target": "branch",
         "extension_enabled": enabled,
         "extension_reason": f"宣告工作區包含 {len(paths)} 個不同的 Git 根目錄。" if enabled else "宣告工作區只有一個 Git 根目錄。",
         "selected_repo": None, "repositories": [], "seed_repos": [], "searches": [],
-        "changed_contracts": [], "contract_scope_policy": contract_boundary.POLICY,
+        "changed_contracts": [], "contract_scope_policy": contract_boundary.V2_POLICY,
         "context_gaps": [], "context_dir": str(context),
         "context_cleanup_required": True, "snapshot_policy": SNAPSHOT_POLICY,
         "workspace_instructions": [], "coverage_policy": "ancestor-noop/v1",
@@ -722,6 +817,7 @@ def build(args, api) -> dict:
             manifest["context_gaps"].extend(f"{record['id']}: {gap}" for gap in record["limitations"])
     api.capture_phase("manifest-finalize")
     manifest["required_coverage"] = required_coverage(manifest)
+    manifest["boundary_changes"] = contract_boundary.changes(manifest)
     selected = repository(manifest, manifest["selected_repo"])
     native = selected["native"]
     final = selected["sources"].get("merge-preview", selected["sources"]["head"])
@@ -839,7 +935,7 @@ def validate_contract(context, manifest, item, api, *, cache=None):
     source, path = evidence.get("source"), evidence.get("path")
     require(source in repo["sources"] and evidence.get("ref") == repo["sources"][source]["ref"], "contract source identity differs")
     raw = cache.read(repo, source, path) if cache is not None else fixed_bytes(context, repo, source, path, api)
-    lines = raw.decode("utf-8", errors="strict").splitlines()
+    lines = [line.decode("utf-8", errors="strict") for line in raw.splitlines()]
     start, end = evidence.get("line_start"), evidence.get("line_end")
     require(type(start) is int and type(end) is int and 1 <= start <= end <= len(lines), "invalid contract line interval")
     text = "\n".join(lines[start-1:end])
@@ -878,7 +974,7 @@ def validate_contract(context, manifest, item, api, *, cache=None):
                 "alias source identity differs")
         alias_raw = (cache.read(alias_repo, alias_source, alias.get("path")) if cache is not None else
                      fixed_bytes(context, alias_repo, alias_source, alias.get("path"), api))
-        alias_lines = alias_raw.decode("utf-8").splitlines()
+        alias_lines = [line.decode("utf-8", errors="strict") for line in alias_raw.splitlines()]
         first, last = alias.get("line_start"), alias.get("line_end")
         require(type(first) is int and type(last) is int and 1 <= first <= last <= len(alias_lines) and
                 term["query"] in "\n".join(alias_lines[first-1:last]), "alternate query must occur in frozen alias evidence")
@@ -902,9 +998,15 @@ def batch_register_contract(context, manifest, requests, api):
 
 
 def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None, api, source_name=None,
-           contract_id=None, *, cache=None) -> dict:
+           contract_id=None, *, cache=None, change_id=None) -> dict:
     require(bool(query), "search query must be nonempty")
-    if manifest.get("extension_enabled") is True:
+    change = None
+    if change_id is not None:
+        require(manifest.get("contract_scope_policy") == contract_boundary.V2_POLICY and contract_id is None,
+                "change searches require boundary-contracts/v2 and no contract")
+        change = next((row for row in contract_boundary.changes(manifest) if row["id"] == change_id), None)
+        require(change is not None, "unknown change_id")
+    if manifest.get("extension_enabled") is True and change is None:
         require(contract_id in contract_rows(manifest), "Group searches require a registered --contract")
     contract = None
     if contract_id is not None:
@@ -913,7 +1015,9 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
                 "search query is unrelated to the registered contract")
     local_owner = (contract["evidence"]["repo"] if contract and
                    contract_boundary.scope(manifest, contract) == "repo-local" else None)
-    selected = repo_ids or ([local_owner] if local_owner else [r["id"] for r in manifest["repositories"]])
+    selected = repo_ids or ([change["root"]["repo"]] if change else
+                            [local_owner] if local_owner else [r["id"] for r in manifest["repositories"]])
+    require(not change or selected == [change["root"]["repo"]], "change search must stay in its own Repo")
     require(not local_owner or selected == [local_owner], "repo-local searches use only their evidence Repo")
     require(len(selected) == len(set(selected)), "duplicate search Repo IDs")
     results = []
@@ -926,6 +1030,8 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
         name = source_name or repo.get("review_source")
         record = {"id": f"S-{len(manifest['searches']) + 1:04}", "repo": repo_id, "source": name,
                   "query": query, "contract_id": contract_id, "matches": [], "status": "complete"}
+        if change_id is not None:
+            record["change_id"] = change_id
         try:
             source = repo["sources"][name]
             if cache is None:
@@ -964,7 +1070,9 @@ def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_nam
     name = source_name or repo["review_source"]
     content = cache.read(repo, name, path) if cache is not None else fixed_bytes(context, repo, name, path, api)
     require(b"\0" not in content, "binary blob; record a coverage limitation")
-    lines = content.decode("utf-8", errors="replace").splitlines()
+    # Evidence intervals and report excerpts count byte lines. Decode each
+    # line separately so Unicode separators cannot create phantom line numbers.
+    lines = [line.decode("utf-8", errors="replace") for line in content.splitlines()]
     result = {"repo": repo["id"], "source": name, "ref": repo["sources"][name]["ref"], "path": path,
               "sha256": hashlib.sha256(content).hexdigest()}
     if around_line is not None:
@@ -1026,9 +1134,23 @@ def batch_search(context: Path, manifest: dict, requests: list[dict], api) -> di
     require(isinstance(requests, list), "batch requests must be an array")
     results = []
     cache = FixedSearchCache(context, api)
+    candidates = []
+    for request in requests:
+        if not isinstance(request, dict):
+            continue
+        selected = request.get("repo") or [r["id"] for r in manifest["repositories"]]
+        if isinstance(selected, list):
+            for repo_id in selected:
+                try:
+                    repo = repository(manifest, repo_id)
+                    candidates.append({"repo": repo_id, "source": request.get("source") or repo["review_source"],
+                                       "query": request.get("query")})
+                except (ValueError, KeyError, TypeError):
+                    pass
+    cache.prefetch(manifest, candidates)
     for request in requests:
         require(isinstance(request, dict), "batch request must be an object")
-        require(set(request) <= {"repo", "source", "query", "contract"}, "unknown batch-search request argument")
+        require(set(request) <= {"repo", "source", "query", "contract", "change_id"}, "unknown batch-search request argument")
         repos = request.get("repo")
         require(repos is None or isinstance(repos, list) and all(isinstance(r, str) for r in repos),
                 "search repo must be an array of Repo IDs")
@@ -1036,7 +1158,7 @@ def batch_search(context: Path, manifest: dict, requests: list[dict], api) -> di
         require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
         require(request.get("contract") is None or isinstance(request["contract"], str), "contract must be text")
         value = search(context, manifest, request.get("query"), repos, api,
-                       request.get("source"), request.get("contract"), cache=cache)
+                       request.get("source"), request.get("contract"), cache=cache, change_id=request.get("change_id"))
         results.extend(value["searches"])
     return {"searches": results}
 
@@ -1048,6 +1170,21 @@ def ordered_step(context, manifest, operations, api):
                 "error": "operations must be a nonempty array"}
     content, searches = FixedSourceCache(context, api), FixedSearchCache(context, api, persistent=True)
     results = []
+    search_requests = []
+    for operation in operations:
+        if not isinstance(operation, dict) or operation.get("op") != "search":
+            continue
+        selected = operation.get("repo") or [row["id"] for row in manifest["repositories"]]
+        if not isinstance(selected, list):
+            continue
+        for repo_id in selected:
+            try:
+                repo = repository(manifest, repo_id)
+                search_requests.append({"repo": repo_id, "source": operation.get("source") or repo["review_source"],
+                                        "query": operation.get("query")})
+            except (ValueError, KeyError, TypeError):
+                pass
+    searches.prefetch(manifest, search_requests)
     # Speculatively batch known fixed reads. Errors are evaluated again at their
     # ordered position, so a later malformed read cannot discard a valid prefix.
     requests = []
@@ -1100,10 +1237,10 @@ def ordered_step(context, manifest, operations, api):
                     require(set(args) == {"contract"}, "register-contract needs contract")
                     result = register_contract(context, manifest, args["contract"], api, cache=content)
                 elif kind == "search":
-                    require(set(args) <= {"query", "repo", "source", "contract"}, "unknown search argument")
+                    require(set(args) <= {"query", "repo", "source", "contract", "change_id"}, "unknown search argument")
                     require(args.get("repo") is None or isinstance(args["repo"], list), "search repo must be an array")
                     result = search(context, manifest, args.get("query"), args.get("repo"), api,
-                                    args.get("source"), args.get("contract"), cache=searches)
+                                    args.get("source"), args.get("contract"), cache=searches, change_id=args.get("change_id"))
                 elif kind == "instructions":
                     require(set(args) <= {"repo", "path"}, "unknown instructions argument")
                     result = instructions(context, manifest, args.get("repo"), args.get("path"), api)
@@ -1132,7 +1269,7 @@ def ordered_step(context, manifest, operations, api):
                 else:
                     raise ValueError(f"Unsupported step operation: {kind}")
                 artifact = review_runtime.store_view(context, result)
-                manifest["operations"][identifier] = {"fingerprint": fingerprint, "artifact": artifact}
+                manifest["operations"][identifier] = {"fingerprint": fingerprint, "artifact": artifact, "op": kind}
                 save(context, manifest)
                 results.append({"id": identifier, "artifact": artifact, "result": result})
             except (ValueError, KeyError, TypeError, OSError, api.ReviewContextError) as exc:
@@ -1159,6 +1296,7 @@ def main(argv=None):
     parser.add_argument("--line-end", type=int, help="Last fixed file line (inclusive; requires --line-start)")
     parser.add_argument("--query")
     parser.add_argument("--contract", help="Previously registered changed/propagated contract ID")
+    parser.add_argument("--change-id", help="Required change ID for a Repo-local search")
     parser.add_argument("--contract-file", type=Path, help="One fixed-anchor contract JSON object")
     parser.add_argument("--requests-file", type=Path, help="Ordered JSON array for a batch command")
     parser.add_argument("--git-timeout", type=float, default=180.0)
@@ -1206,7 +1344,7 @@ def _execute(args, context, api):
                          "batch-register-contract": batch_register_contract}[args.command]
             value = operation(context, manifest, requests, api)
         elif args.command == "search":
-            value = search(context, manifest, args.query, args.repo, api, args.source, args.contract)
+            value = search(context, manifest, args.query, args.repo, api, args.source, args.contract, change_id=args.change_id)
         elif args.command == "register-contract":
             require(args.contract_file, "register-contract needs --contract-file")
             value = register_contract(context, manifest, json.loads(args.contract_file.read_text(encoding="utf-8-sig")), api)

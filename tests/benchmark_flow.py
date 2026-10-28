@@ -17,6 +17,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 
@@ -85,15 +86,18 @@ def source_signature(manifest):
 
 
 def comparable_artifacts(value, context):
-    """Normalize only the additive policy marker and an empty boundary ledger.
+    """Normalize the additive policy marker and an empty boundary ledger.
 
     Nonempty judgments, scopes, searches, graphs and frozen source identities
-    remain part of the equality oracle. Unknown policy values remain visible.
+    remain part of the equality oracle. V2 is additive only for a single Repo;
+    unknown policies and v2 Group judgments remain visible.
     """
+    single_repo = isinstance(value, dict) and isinstance(value.get("sources"), dict) and value["sources"].get("extension_enabled") is False
     def additive(item):
         if isinstance(item, dict):
             return {key: additive(entry) for key, entry in item.items()
-                    if not (key == "contract_scope_policy" and entry in (None, "boundary-contracts/v1"))
+                    if not (key == "contract_scope_policy" and (entry in (None, "boundary-contracts/v1")
+                            or single_repo and entry == "boundary-contracts/v2"))
                     and not (key == "boundary_reviews" and entry == [])}
         if isinstance(item, list):
             return [additive(entry) for entry in item]
@@ -101,7 +105,51 @@ def comparable_artifacts(value, context):
     return normalize(additive(value), context)
 
 
-def measure(source, fixture, scenario, destination, candidate, runtime):
+def operation_batches(operations, limit):
+    """Keep the same ordered authored operations in each implementation's steps."""
+    if type(limit) is not int or limit < 1:
+        raise ValueError("operations-per-step must be a positive integer")
+    return [operations[index:index + limit] for index in range(0, len(operations), limit)]
+
+
+def wait_for_validation(lock, *, timeout=900):
+    deadline = time.monotonic() + timeout
+    while lock.exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError("Local validation is still active; benchmark was not measured.")
+        time.sleep(.5)
+
+
+class ValidationWatch:
+    """Reject a sample if another local validation overlaps its measurement."""
+
+    def __init__(self, lock):
+        self.lock = lock
+        self.seen = threading.Event()
+        self.stop = threading.Event()
+        self.thread = None
+
+    def check(self):
+        if self.lock.exists():
+            self.seen.set()
+
+    def __enter__(self):
+        self.check()
+        def monitor():
+            while not self.stop.wait(.05):
+                self.check()
+        self.thread = threading.Thread(target=monitor, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self.check()
+        self.stop.set()
+        self.thread.join()
+
+
+def measure(source, fixture, scenario, destination, candidate, runtime, *, mechanical_v1=False,
+            operations_per_step=None):
     destination.mkdir()
     metrics_file = destination / "commands.json"
     totals, phases, capture_parts = Counter(), {}, {}
@@ -129,6 +177,8 @@ def measure(source, fixture, scenario, destination, candidate, runtime):
             raise RuntimeError(f"{script} ({process.returncode}): {process.stderr}\n{process.stdout}")
         return process.stdout.strip(), elapsed
     def expand(value):
+        if value.get("schema") == "MergeReviewEvidenceStep/v2" and not value.get("projection_complete"):
+            raise ValueError("Benchmark requires unmeasured artifact paging; use a complete projection.")
         if value.get("schema") in ("MergeReviewEvidenceSummary/v1", "MergeReviewEvidenceStep/v1"):
             # This fixture must return every required line/match in the first
             # step response; hidden pagination cannot improve the measurements.
@@ -148,6 +198,15 @@ def measure(source, fixture, scenario, destination, candidate, runtime):
             output, phases["capture_seconds"] = cli("review_session.py", "start", *args,
                 "--runtime-root", runtime, "--request-id", identifier)
             start = expand(json.loads(output))
+            if mechanical_v1 and candidate:
+                # This disposable benchmark context models recovery of an old
+                # v1 context, so identical authored v3 decisions can exercise
+                # mechanical changes without inventing v2 semantic decisions.
+                manifest_path = context / "manifest.json"
+                legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
+                legacy["contract_scope_policy"] = "boundary-contracts/v1"
+                legacy.pop("boundary_changes", None)
+                write_json(manifest_path, legacy)
         else:
             output, phases["capture_seconds"] = cli("git_review_context.py", *args, "--summary-v2")
             start = json.loads(output)
@@ -161,15 +220,19 @@ def measure(source, fixture, scenario, destination, candidate, runtime):
             operations.extend({"id": f"read-{i}", "op": "read", **row} for i, row in enumerate(scenario["reads"]))
             operations.extend({"id": f"search-{i}", "op": "search", **row} for i, row in enumerate(scenario["searches"]))
             requests = context / "round.json"
-            write_json(requests, operations)
-            output, _ = cli("review_session.py", "step", "--runtime-root", runtime, "--request-id",
-                            identifier, "--requests-file", requests)
-            batch = expand(json.loads(output))
-            for row in batch["operations"]:
-                if row["id"].startswith("read-"):
-                    reads.append(row["result"])
-                if row["id"].startswith("search-"):
-                    searches.extend(row["result"]["searches"])
+            width = operations_per_step if operations_per_step is not None else max(1, len(operations))
+            for batch_operations in operation_batches(operations, width):
+                write_json(requests, batch_operations)
+                output, _ = cli("review_session.py", "step", "--runtime-root", runtime, "--request-id",
+                                identifier, "--requests-file", requests)
+                batch = expand(json.loads(output))
+                if [row.get("id") for row in batch["operations"]] != [row["id"] for row in batch_operations]:
+                    raise ValueError("Benchmark step did not return every requested operation in order.")
+                for row in batch["operations"]:
+                    if row["id"].startswith("read-"):
+                        reads.append(row["result"])
+                    if row["id"].startswith("search-"):
+                        searches.extend(row["result"]["searches"])
         else:
             for command, entries in (("register-contract", scenario["contracts"]),
                                      ("read", scenario["reads"]), ("search", scenario["searches"])):
@@ -225,6 +288,17 @@ def measure(source, fixture, scenario, destination, candidate, runtime):
             cli("review_session.py", "cleanup", "--context-dir", context)
 
 
+def paired_gates(rows, *, large_multi_repo=False):
+    for mode, pair in rows.items():
+        if (not pair["baseline"] or len(pair["baseline"]) != len(pair["candidate"])
+                or any(row["helper_total_seconds"] <= 0 for row in pair["baseline"] + pair["candidate"])):
+            raise ValueError(f"Invalid or unpaired helper timings: {mode}")
+    ratios = {mode: statistics.median(candidate["helper_total_seconds"] / baseline["helper_total_seconds"]
+              for baseline, candidate in zip(pair["baseline"], pair["candidate"])) for mode, pair in rows.items()}
+    limits = {mode: (0.75 if mode == "warm" and large_multi_repo else 1.05) for mode in rows}
+    return ratios, limits, {mode: ratios[mode] <= limits[mode] for mode in rows}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True, type=Path)
@@ -232,15 +306,23 @@ def main():
     parser.add_argument("--scenario", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--mechanical-v1", action="store_true",
+                        help="Replay the identical legacy v3 draft against v1-policy benchmark contexts.")
+    parser.add_argument("--large-multi-repo", action="store_true",
+                        help="Apply the 25%% warm-cache target to the 12-Repo/12,000-file fixture.")
+    parser.add_argument("--operations-per-step", type=int,
+                        help="Use the same bounded operation batches in both variants; every step is timed.")
+    parser.add_argument("--warm-first", action="store_true",
+                        help="Measure all required modes, starting with warm-cache pairs.")
     parser.add_argument("--validation-lock", type=Path,
         default=ROOT.parent / "GitlabWorkSpace/.gitlab-workspace-validation/runner.lock",
         help="Wait for this local build/test lock before timing, to avoid self-induced I/O contention.")
     args = parser.parse_args()
-    deadline = time.monotonic() + 900
-    while args.validation_lock.exists():
-        if time.monotonic() > deadline:
-            raise TimeoutError("Local validation is still active; benchmark was not measured.")
-        time.sleep(.5)
+    if args.repeats < 1 or args.large_multi_repo and args.repeats < 5:
+        parser.error("large multi-Repo acceptance needs at least five paired repeats")
+    if args.operations_per_step is not None and args.operations_per_step < 1:
+        parser.error("--operations-per-step must be positive")
+    wait_for_validation(args.validation_lock)
     time.sleep(2)  # Let the completed validation runner close its log/receipt files.
     scenario = json.loads(args.scenario.read_text(encoding="utf-8"))
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -248,19 +330,34 @@ def main():
     # Keep source evidence paths below Windows MAX_PATH even when the benchmark
     # report directory itself has a long descriptive name.
     runtime_base = Path(tempfile.mkdtemp(prefix="flowbench-"))
-    for mode in ("cold", "warm", "staggered"):
+    def measured(*parameters, **options):
+        wait_for_validation(args.validation_lock)
+        with ValidationWatch(args.validation_lock) as watch:
+            result = measure(*parameters, **options)
+        if watch.seen.is_set():
+            raise RuntimeError("Local validation overlapped this sample; its raw data is invalid for acceptance.")
+        return result
+
+    modes = ("warm", "cold", "staggered") if args.warm_first else ("cold", "warm", "staggered")
+    for mode in modes:
         rows[mode] = {"baseline": [], "candidate": []}
-        shared = runtime_base / mode
         if mode != "cold":
-            measure(ROOT, args.fixture_root, scenario, args.output_dir / (mode + "-prime"), True, shared)
+            for candidate in (False, True):
+                label = "candidate" if candidate else "baseline"
+                measured(ROOT if candidate else args.baseline, args.fixture_root, scenario,
+                         args.output_dir / (mode + "-prime-" + label), candidate,
+                         runtime_base / (mode + "-" + label), mechanical_v1=args.mechanical_v1,
+                         operations_per_step=args.operations_per_step)
         for repetition in range(args.repeats):
             order = (False, True) if repetition % 2 == 0 else (True, False)
             for candidate in order:
                 label = "candidate" if candidate else "baseline"
                 destination = args.output_dir / f"{mode}-{label}-{repetition+1}"
-                runtime = runtime_base / ("cold-" + str(repetition)) if mode == "cold" else shared
-                result, artifacts = measure(ROOT if candidate else args.baseline, args.fixture_root,
-                                             scenario, destination, candidate, runtime)
+                runtime = (runtime_base / (f"cold-{label}-{repetition}") if mode == "cold" else
+                           runtime_base / (mode + "-" + label))
+                result, artifacts = measured(ROOT if candidate else args.baseline, args.fixture_root,
+                                              scenario, destination, candidate, runtime, mechanical_v1=args.mechanical_v1,
+                                              operations_per_step=args.operations_per_step)
                 if expected is None:
                     expected = artifacts
                 if expected != artifacts:
@@ -269,11 +366,19 @@ def main():
                 print(json.dumps({"mode": mode, "label": label, "run": repetition+1, **result}), flush=True)
     medians = {mode: {label: statistics.median(row["helper_total_seconds"] for row in entries)
                       for label, entries in pair.items()} for mode, pair in rows.items()}
-    gates = {mode: pair["candidate"] <= pair["baseline"] * (1.05 if mode == "cold" else 1)
-             for mode, pair in medians.items()}
+    if args.large_multi_repo:
+        repos = expected["sources"]["repositories"]
+        files = sum(len(row.get("sources", {}).get("head", {}).get("files", [])) for row in repos)
+        if len(repos) < 12 or files < 12000:
+            raise ValueError("Large acceptance requires at least 12 Repos and 12,000 fixed head files.")
+    ratios, limits, gates = paired_gates(rows, large_multi_repo=args.large_multi_repo)
     write_json(args.output_dir / "summary.json", {"schema": "MergeReviewFlowBenchmark/v1",
         "repeats": args.repeats, "normalized_evidence_result_finding_bodies_equal": True,
-        "medians": medians, "gates": gates, "runs": rows, "model_analysis_seconds": None,
+        "medians": medians, "paired_ratio_medians": ratios, "ratio_limits": limits, "gates": gates,
+        "mechanical_v1": args.mechanical_v1, "large_multi_repo": args.large_multi_repo,
+        "operations_per_step": args.operations_per_step,
+        "mode_order": list(modes),
+        "runs": rows, "model_analysis_seconds": None,
         "staggered_definition": "Sequential independent starts while prior review receipts stay warm; overlapping stages are tested separately.",
         "scope": "Helper replay of an authored scenario; model quality and latency are separate acceptance gates."})
     print(json.dumps({"medians": medians, "gates": gates}), flush=True)

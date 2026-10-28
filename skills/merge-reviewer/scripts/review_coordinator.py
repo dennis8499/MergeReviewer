@@ -22,7 +22,7 @@ import git_network_lease
 
 ACTIVE = ContextVar("review_coordination", default=None)
 RUNTIME_SCHEMA = "MergeReviewRuntime/v1"
-SYNC_SCHEMA = "MergeReviewSync/v1"
+SYNC_SCHEMA = "MergeReviewSync/v2"
 PACK_SCHEMA = "MergeReviewPack/v1"
 IDENTIFIER = re.compile(r"^[a-f0-9]{32}$")
 DIGEST = re.compile(r"^[a-f0-9]{64}$")
@@ -273,7 +273,7 @@ class Coordination:
         auth_env = {key: value for key, value in os.environ.items()
                     if key.startswith(("GIT_CONFIG_", "GIT_ASKPASS", "GIT_SSH", "SSH_AUTH_SOCK",
                                        "GITLAB_WORKSPACE_SCOPED_AUTH"))}
-        identity = digest([str(Path(common).resolve()), remote, url, getpass.getuser(),
+        identity = digest(["ref-sync/v2", str(Path(common).resolve()), remote, url, getpass.getuser(),
                            self.auth_scope, config, auth_env])
         directory = self.root / "sync" / identity
         directory.mkdir(parents=True, exist_ok=True)
@@ -284,8 +284,7 @@ class Coordination:
         self._waiter_path = waiters / (self.request_id + ".json")
         self._waiter_presence = FileLock(self._waiter_path.with_suffix(".live.lock")).acquire()
         atomic(self._waiter_path, {"refs": requested})
-        request_key = digest(requested)
-        failed_path = directory / (request_key + ".failure.json")
+        failures = {branch: directory / (digest(["ref", branch]) + ".failure.json") for branch in requested}
         epoch_path = self.root / "invalidations" / (digest(str(Path(common).resolve())) + ".json")
         epoch = epoch_path.read_bytes().hex() if epoch_path.exists() else ""
         waiting_at = time.time()
@@ -295,49 +294,69 @@ class Coordination:
             self.check()
             now = time.time()
             epoch = epoch_path.read_bytes().hex() if epoch_path.exists() else ""
-            if not self.refresh and failed_path.exists():
-                failed = read_json(failed_path)
-                if (failed.get("epoch") == epoch and 0 <= now - failed.get("failed_at", 0) < FAILURE_TTL):
-                    raise api.ReviewContextError("Shared sync cooldown: " + failed["error"],
-                                                 hint="Retry explicitly with --refresh after checking the failure.")
             receipts = [(path, read_json(path)) for path in directory.glob("*.receipt.json")]
             receipts.sort(key=lambda item: item[1].get("completed_at", 0), reverse=True)
-            for path, receipt in receipts:
-                age = now - receipt.get("completed_at", 0)
-                refs = receipt.get("refs", {})
-                eligible = (receipt.get("schema") == SYNC_SCHEMA and receipt.get("identity") == identity
-                            and receipt.get("epoch") == epoch and not receipt.get("superseded_by")
-                            and 0 <= age < SYNC_TTL
-                            and set(requested) <= refs.keys()
-                            and (not self.refresh or receipt["completed_at"] >= waiting_at))
-                if eligible and all(api.verified_commit(repo, refs[branch]["ref"]) == refs[branch]["sha"]
-                                    for branch in requested):
-                    receipt.setdefault("users", []).append(self.request_id)
-                    receipt["users"] = sorted(set(receipt["users"]))
-                    atomic(path, receipt)
-                    mode = "joined" if receipt.get("completed_at", 0) >= waiting_at else "cached"
-                    self._adopt(receipt, path, targets, mode)
-                    return
+            selected = {}
+            for branch in requested:
+                failed = read_json(failures[branch]) if failures[branch].exists() else {}
+                if failed.get("epoch") != epoch:
+                    failed = {}
+                for path, receipt in receipts:
+                    completed = receipt.get("completed_at", 0)
+                    item = receipt.get("refs", {}).get(branch)
+                    eligible = (receipt.get("schema") == SYNC_SCHEMA and receipt.get("identity") == identity
+                                and receipt.get("epoch") == epoch and isinstance(item, dict)
+                                and not item.get("superseded_by") and 0 <= now - completed < SYNC_TTL
+                                and (not self.refresh or completed >= waiting_at)
+                                and (not failed or completed > failed.get("failed_at", 0)))
+                    if eligible and api.verified_commit(repo, item["ref"]) == item["sha"]:
+                        selected[branch] = (path, receipt)
+                        break
+                if branch not in selected and not self.refresh and failed:
+                    age = now - failed.get("failed_at", 0)
+                    if 0 <= age < FAILURE_TTL:
+                        raise api.ReviewContextError("Shared sync cooldown: " + failed["error"],
+                                                     hint="Retry explicitly with --refresh after checking the failure.")
+            missing = [target for target in targets if target.branch not in selected]
+            # Register readers before fetching another ref: a concurrent cleanup
+            # must not remove a private ref while this capture still needs it.
+            groups = {}
+            for target in targets:
+                if target.branch in selected:
+                    path, receipt = selected[target.branch]
+                    groups.setdefault(str(path), (path, receipt, []))[2].append(target)
+            for path, receipt, reused in groups.values():
+                receipt.setdefault("users", []).append(self.request_id)
+                receipt["users"] = sorted(set(receipt["users"]))
+                atomic(path, receipt)
+                mode = "joined" if receipt["completed_at"] >= waiting_at else "cached"
+                self._adopt(receipt, path, reused, mode, requested)
+            if not missing:
+                return
             sync_id = uuid.uuid4().hex
             refs = {target.branch: {"ref": f"refs/merge-reviewer-sync/{sync_id}/{i}"}
-                    for i, target in enumerate(targets)}
+                    for i, target in enumerate(missing)}
             def supersede_previous(*, failed=False):
                 for old_path, old in receipts:
                     if old.get("schema") != SYNC_SCHEMA or old.get("identity") != identity:
                         continue
                     previous = old.get("refs", {})
-                    # A failed refresh cannot resurrect an older covering
-                    # receipt after cooldown. Successful observations retire
-                    # only receipts with a known changed overlapping ref.
-                    obsolete = (set(requested) <= previous.keys() if failed else
-                                any(branch in previous and previous[branch]["sha"] != item["sha"]
-                                    for branch, item in refs.items()))
-                    if obsolete and not old.get("superseded_by"):
-                        old["superseded_by"] = ("failed:" if failed else "") + sync_id
+                    changed = False
+                    for branch in refs:
+                        if branch in previous and not previous[branch].get("superseded_by"):
+                            previous[branch]["superseded_by"] = ("failed:" if failed else "") + sync_id
+                            changed = True
+                    if changed:
+                        if all(item.get("superseded_by") for item in previous.values()):
+                            old["superseded_by"] = ("failed:" if failed else "") + sync_id
                         atomic(old_path, old)
             try:
                 self.phase("fetch", remote=remote)
-                fetch([f"refs/heads/{target.branch}:{refs[target.branch]['ref']}" for target in targets])
+                fetch([f"refs/heads/{target.branch}:{refs[target.branch]['ref']}" for target in missing])
+                current_epoch = epoch_path.read_bytes().hex() if epoch_path.exists() else ""
+                if current_epoch != epoch:
+                    raise api.ReviewContextError("Remote synchronization was invalidated while fetching.",
+                                                 hint="Start again to capture the latest refs.")
                 for item in refs.values():
                     item["sha"] = api.verified_commit(repo, item["ref"])
                     if not item["sha"]:
@@ -348,11 +367,14 @@ class Coordination:
                 path = directory / (sync_id + ".receipt.json")
                 atomic(path, receipt)
                 supersede_previous()
-                failed_path.unlink(missing_ok=True)
-                self._adopt(receipt, path, targets, "owner")
+                for target in missing:
+                    failures[target.branch].unlink(missing_ok=True)
+                self._adopt(receipt, path, missing, "owner", requested)
             except Exception as exc:
                 if not self.cancelled():
-                    atomic(failed_path, {"failed_at": time.time(), "epoch": epoch, "error": safe_error(exc)})
+                    for target in missing:
+                        atomic(failures[target.branch], {"failed_at": time.time(), "epoch": epoch,
+                                                        "error": safe_error(exc)})
                     supersede_previous(failed=True)
                 raise
             # Expired receipts have no readers once their captures release them.
@@ -379,12 +401,19 @@ class Coordination:
                             api.run_git(repo, ["update-ref", "-d", item["ref"], item["sha"]])
                     old_path.unlink()
 
-    def _adopt(self, receipt, path, targets, mode):
+    def _adopt(self, receipt, path, targets, mode, requested):
         for target in targets:
             self.pins[target.input_ref] = receipt["refs"][target.branch]
         self.syncs.append({"mode": mode, "sync_id": receipt["sync_id"],
                            "synced_at": receipt["completed_at"], "receipt": str(path),
-                           "ref_count": len(targets)})
+                           "ref_count": len(targets), "requested_refs": requested,
+                           "synced_refs": [target.branch for target in targets] if mode == "owner" else [],
+                           "fetch_count": int(mode == "owner"),
+                           "refs": [{"branch": target.branch, "input_ref": target.input_ref,
+                                     "sha": receipt["refs"][target.branch]["sha"],
+                                     "private_ref": receipt["refs"][target.branch]["ref"],
+                                     "synced_at": receipt["completed_at"], "mode": mode}
+                                    for target in targets]})
 
     def release_syncs(self):
         for item in self.syncs:

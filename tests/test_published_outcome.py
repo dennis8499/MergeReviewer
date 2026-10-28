@@ -135,9 +135,12 @@ class PublishedOutcomeTests(ReviewFixture):
         root, identifier, context, manifest, draft = self.start()
         contract = manifest["changed_contracts"][0]
         contract["search_scope"] = "repo-local"
+        manifest["searches"] = []
+        for disposition in draft["repository_coverage"]:
+            disposition["search_ids"] = []
         workspace.save(context, manifest)
         draft["impact_coverage"][0].update(status="not-reviewed", evidence=[], reason="必要輸出映射尚未查清。")
-        draft["boundary_reviews"] = [{"contract_id": contract["id"], "outcome": "unresolved",
+        draft["boundary_reviews"] = [{"change_id": manifest["boundary_changes"][0]["id"], "outcome": "unresolved",
             "reason": "尚缺 enclosing operation 輸出證據。", "evidence": [], "search_ids": [], "boundary_contract_ids": []}]
         self.save(context, draft)
         flow.finish(root, identifier)

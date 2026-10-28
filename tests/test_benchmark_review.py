@@ -1,5 +1,6 @@
 """Guard the benchmark oracle against hiding source or report regressions."""
 from pathlib import Path
+import tempfile
 import unittest
 
 from tests import benchmark_review as benchmark
@@ -8,6 +9,43 @@ from tests import benchmark_flow as flow_benchmark
 
 
 class BenchmarkOracleTests(unittest.TestCase):
+    def test_validation_watch_keeps_a_transient_overlap_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock = Path(directory) / "runner.lock"
+            with flow_benchmark.ValidationWatch(lock) as watch:
+                lock.mkdir()
+                self.assertTrue(watch.seen.wait(2), "watch did not notice local validation")
+                lock.rmdir()
+            self.assertTrue(watch.seen.is_set())
+            with flow_benchmark.ValidationWatch(lock) as quiet:
+                pass
+            self.assertFalse(quiet.seen.is_set())
+            lock.mkdir()
+            with self.assertRaises(TimeoutError):
+                flow_benchmark.wait_for_validation(lock, timeout=-1)
+
+    def test_bounded_replay_batches_keep_every_operation_in_order(self):
+        operations = [{"id": str(index)} for index in range(11)]
+        batches = flow_benchmark.operation_batches(operations, 4)
+        self.assertEqual([4, 4, 3], [len(batch) for batch in batches])
+        self.assertEqual(operations, [item for batch in batches for item in batch])
+        for invalid in (0, -1, True, "4"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                flow_benchmark.operation_batches(operations, invalid)
+
+    def test_performance_gate_uses_paired_ratios_and_explicit_large_warm_target(self):
+        pair = {"baseline": [{"helper_total_seconds": value} for value in (1, 100, 100)],
+                "candidate": [{"helper_total_seconds": value} for value in (.8, 70, 80)]}
+        rows = {mode: pair for mode in ("cold", "warm", "staggered")}
+        ratios, limits, gates = flow_benchmark.paired_gates(rows, large_multi_repo=True)
+        self.assertEqual(.8, ratios["warm"])
+        self.assertEqual(.75, limits["warm"])
+        self.assertFalse(gates["warm"])
+        self.assertTrue(gates["cold"])
+        self.assertTrue(gates["staggered"])
+        with self.assertRaisesRegex(ValueError, "unpaired"):
+            flow_benchmark.paired_gates({"warm": {"baseline": pair["baseline"], "candidate": pair["candidate"][:1]}})
+
     def test_flow_normalization_removes_only_empty_additive_boundary_fields(self):
         original = {"changed_contracts": [{"id": "C-001"}], "searches": [{"query": "amount", "matches": ["fixed"]}]}
         added = {**original, "contract_scope_policy": "boundary-contracts/v1", "boundary_reviews": []}
@@ -19,6 +57,17 @@ class BenchmarkOracleTests(unittest.TestCase):
                         {**added, "searches": []},
                         {**added, "changed_contracts": [{"id": "C-001", "search_scope": "repo-local"}]}):
             self.assertNotEqual(expected, flow_benchmark.comparable_artifacts(changed, root))
+
+    def test_v2_policy_is_only_additive_for_single_repo_comparison(self):
+        old = {"sources": {"extension_enabled": False}, "contract_scope_policy": "boundary-contracts/v1",
+               "boundary_reviews": []}
+        new = {**old, "contract_scope_policy": "boundary-contracts/v2"}
+        self.assertEqual(flow_benchmark.comparable_artifacts(old, Path("unused")),
+                         flow_benchmark.comparable_artifacts(new, Path("unused")))
+        group = {**new, "sources": {"extension_enabled": True}}
+        group_old = {**old, "sources": {"extension_enabled": True}}
+        self.assertNotEqual(flow_benchmark.comparable_artifacts(group_old, Path("unused")),
+                            flow_benchmark.comparable_artifacts(group, Path("unused")))
 
     def test_flow_signature_keeps_frozen_objects_inventories_contracts_and_gates(self):
         manifest = {"repositories": [{"id": "repo-000", "sources": {"head": {

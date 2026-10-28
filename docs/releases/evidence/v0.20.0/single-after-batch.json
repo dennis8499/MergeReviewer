@@ -1,0 +1,929 @@
+{
+  "schema": "MergeReviewFlowBenchmark/v1",
+  "repeats": 5,
+  "normalized_evidence_result_finding_bodies_equal": true,
+  "medians": {
+    "cold": {
+      "baseline": 6.851943000001484,
+      "candidate": 6.835703400000057
+    },
+    "warm": {
+      "baseline": 7.59004719999939,
+      "candidate": 7.161837100000412
+    },
+    "staggered": {
+      "baseline": 8.06790720000572,
+      "candidate": 7.409782700000505
+    }
+  },
+  "paired_ratio_medians": {
+    "cold": 0.9976299277443751,
+    "warm": 0.9340934090325353,
+    "staggered": 0.8787462638844599
+  },
+  "ratio_limits": {
+    "cold": 1.05,
+    "warm": 1.05,
+    "staggered": 1.05
+  },
+  "gates": {
+    "cold": true,
+    "warm": true,
+    "staggered": true
+  },
+  "mechanical_v1": false,
+  "large_multi_repo": false,
+  "runs": {
+    "cold": {
+      "baseline": [
+        {
+          "capture_seconds": 4.550166999993962,
+          "read_search_seconds": 0.5221509999973932,
+          "validation_publish_seconds": 0.750952900001721,
+          "helper_total_seconds": 5.8232708999930765,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6742,
+            "stderr_bytes": 713,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.20325189999857685,
+            "output-preflight": 0.3202716999949189,
+            "branch-preflight": 0.6274830000038492,
+            "ref-pinning": 0.2919404999993276,
+            "snapshot-capture": 2.5548978000006173,
+            "manifest-finalize": 0.015170799997576978
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 2.5548978000006173,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.039369800004351,
+          "read_search_seconds": 0.7502088000037475,
+          "validation_publish_seconds": 0.8642959999997402,
+          "helper_total_seconds": 6.653874600007839,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6742,
+            "stderr_bytes": 713,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.14323999999760417,
+            "output-preflight": 0.3290171999979066,
+            "branch-preflight": 0.6422674000059487,
+            "ref-pinning": 0.3787984999944456,
+            "snapshot-capture": 2.9843685000014375,
+            "manifest-finalize": 0.011856800003442913
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 2.9843685000014375,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.301231800003734,
+          "read_search_seconds": 0.7512404000008246,
+          "validation_publish_seconds": 0.799470799996925,
+          "helper_total_seconds": 6.851943000001484,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6740,
+            "stderr_bytes": 713,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.18152460000419524,
+            "output-preflight": 0.42207280000002356,
+            "branch-preflight": 0.7167636999947717,
+            "ref-pinning": 0.3159453000043868,
+            "snapshot-capture": 2.995934500002477,
+            "manifest-finalize": 0.01451019999512937
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 2.995934500002477,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.808672999999544,
+          "read_search_seconds": 0.6901119000031031,
+          "validation_publish_seconds": 1.01645140000619,
+          "helper_total_seconds": 7.515236300008837,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6741,
+            "stderr_bytes": 713,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.223668099999486,
+            "output-preflight": 0.41484379999747034,
+            "branch-preflight": 0.8292045999987749,
+            "ref-pinning": 0.5050979000006919,
+            "snapshot-capture": 3.0907415999972727,
+            "manifest-finalize": 0.011713300002156757
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.0907415999972727,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.672980000003008,
+          "read_search_seconds": 0.8706635000053211,
+          "validation_publish_seconds": 1.0052202999941073,
+          "helper_total_seconds": 7.548863800002437,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6745,
+            "stderr_bytes": 713,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.19776780000393046,
+            "output-preflight": 0.47339179999835324,
+            "branch-preflight": 0.6954965999975684,
+            "ref-pinning": 0.37752670000190847,
+            "snapshot-capture": 3.3026361000011093,
+            "manifest-finalize": 0.012584999996761326
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.3026361000011093,
+          "model_analysis_seconds": null
+        }
+      ],
+      "candidate": [
+        {
+          "capture_seconds": 4.920810099996743,
+          "read_search_seconds": 0.7445425999976578,
+          "validation_publish_seconds": 0.6370838999937405,
+          "helper_total_seconds": 6.302436599988141,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7169,
+            "stderr_bytes": 714,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.31919590000325115,
+            "output-preflight": 0.3993735999974888,
+            "branch-preflight": 0.5947125000020606,
+            "ref-pinning": 0.4333159000016167,
+            "snapshot-capture": 2.682483199998387,
+            "manifest-finalize": 0.01348139999754494
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 2.682483199998387,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 4.574987299994973,
+          "read_search_seconds": 0.5530815999954939,
+          "validation_publish_seconds": 0.6168035000009695,
+          "helper_total_seconds": 5.744872399991436,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7175,
+            "stderr_bytes": 714,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.16132130000187317,
+            "output-preflight": 0.29241490000276826,
+            "branch-preflight": 0.6520325999954366,
+            "ref-pinning": 0.26766950000455836,
+            "snapshot-capture": 2.6840316000016173,
+            "manifest-finalize": 0.011556799996469636
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 2.6840316000016173,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.2579292000009445,
+          "read_search_seconds": 0.7865836999990279,
+          "validation_publish_seconds": 0.7911905000000843,
+          "helper_total_seconds": 6.835703400000057,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7169,
+            "stderr_bytes": 714,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.1727628000007826,
+            "output-preflight": 0.4019953000024543,
+            "branch-preflight": 0.7009079999988899,
+            "ref-pinning": 0.4090507000000798,
+            "snapshot-capture": 2.885861800001294,
+            "manifest-finalize": 0.012545999998110346
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 2.885861800001294,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 6.091630299997632,
+          "read_search_seconds": 1.0078399999983958,
+          "validation_publish_seconds": 1.1175050000019837,
+          "helper_total_seconds": 8.216975299998012,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7173,
+            "stderr_bytes": 714,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.22438460000557825,
+            "output-preflight": 0.5575539999990724,
+            "branch-preflight": 0.6642712999964715,
+            "ref-pinning": 0.34719200000108685,
+            "snapshot-capture": 3.6094493999989936,
+            "manifest-finalize": 0.009633100002247375
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.6094493999989936,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.681388500001049,
+          "read_search_seconds": 0.6971529000002192,
+          "validation_publish_seconds": 0.8465041000017663,
+          "helper_total_seconds": 7.225045500003034,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7174,
+            "stderr_bytes": 714,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.18444129999988945,
+            "output-preflight": 0.5089040000020759,
+            "branch-preflight": 0.7946665999988909,
+            "ref-pinning": 0.3471150999976089,
+            "snapshot-capture": 3.1225980000017444,
+            "manifest-finalize": 0.015681500000937376
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.1225980000017444,
+          "model_analysis_seconds": null
+        }
+      ]
+    },
+    "warm": {
+      "baseline": [
+        {
+          "capture_seconds": 6.248759100002644,
+          "read_search_seconds": 0.8953199000025052,
+          "validation_publish_seconds": 0.9044016000043484,
+          "helper_total_seconds": 8.048480600009498,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6729,
+            "stderr_bytes": 711,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.43277920000400627,
+            "output-preflight": 0.42513209999742685,
+            "branch-preflight": 0.75446589999774,
+            "ref-pinning": 0.3944450999988476,
+            "snapshot-capture": 3.5803613000025507,
+            "manifest-finalize": 0.009650100000726525
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.5803613000025507,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.858364100000472,
+          "read_search_seconds": 0.7658561999996891,
+          "validation_publish_seconds": 0.9658268999992288,
+          "helper_total_seconds": 7.59004719999939,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6729,
+            "stderr_bytes": 711,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.20950380000431323,
+            "output-preflight": 0.3745192999995197,
+            "branch-preflight": 0.7412328999998863,
+            "ref-pinning": 0.3482450000010431,
+            "snapshot-capture": 3.4820489999983693,
+            "manifest-finalize": 0.012851499996031635
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.4820489999983693,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.768550300002971,
+          "read_search_seconds": 0.7942633999991813,
+          "validation_publish_seconds": 0.9013693000015337,
+          "helper_total_seconds": 7.464183000003686,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6728,
+            "stderr_bytes": 711,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.20962039999722037,
+            "output-preflight": 0.3744913999980781,
+            "branch-preflight": 0.7755815999989863,
+            "ref-pinning": 0.370466899999883,
+            "snapshot-capture": 3.360797699999239,
+            "manifest-finalize": 0.010569800004304852
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.360797699999239,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 6.209221500001149,
+          "read_search_seconds": 0.7529360000044107,
+          "validation_publish_seconds": 0.8868961999978637,
+          "helper_total_seconds": 7.849053700003424,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6729,
+            "stderr_bytes": 711,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.29689679999864893,
+            "output-preflight": 0.36292880000110017,
+            "branch-preflight": 0.7620460999969509,
+            "ref-pinning": 0.3432944000014686,
+            "snapshot-capture": 3.7369117999987793,
+            "manifest-finalize": 0.016260600001260173
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.7369117999987793,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.7047323999941,
+          "read_search_seconds": 0.7401424000054249,
+          "validation_publish_seconds": 0.9057526999968104,
+          "helper_total_seconds": 7.350627499996335,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6733,
+            "stderr_bytes": 711,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.24069629999576136,
+            "output-preflight": 0.514864700002363,
+            "branch-preflight": 0.6906234999987646,
+            "ref-pinning": 0.46347989999776473,
+            "snapshot-capture": 3.0482288999992306,
+            "manifest-finalize": 0.018406100003630854
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.0482288999992306,
+          "model_analysis_seconds": null
+        }
+      ],
+      "candidate": [
+        {
+          "capture_seconds": 5.599596599997312,
+          "read_search_seconds": 0.7579001000049175,
+          "validation_publish_seconds": 0.804340399998182,
+          "helper_total_seconds": 7.161837100000412,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7161,
+            "stderr_bytes": 712,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.18334780000441242,
+            "output-preflight": 0.40699429999949643,
+            "branch-preflight": 0.6957934999954887,
+            "ref-pinning": 0.33939200000168057,
+            "snapshot-capture": 3.2376332999992883,
+            "manifest-finalize": 0.012409400005708449
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.2376332999992883,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.429065000003902,
+          "read_search_seconds": 0.7115718999993987,
+          "validation_publish_seconds": 0.8631520999988425,
+          "helper_total_seconds": 7.003789000002143,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7162,
+            "stderr_bytes": 712,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.3649347000027774,
+            "output-preflight": 0.38875739999639336,
+            "branch-preflight": 0.6168982000017422,
+            "ref-pinning": 0.48296290000143927,
+            "snapshot-capture": 2.930184899996675,
+            "manifest-finalize": 0.009286200001952238
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 2.930184899996675,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.937882800004445,
+          "read_search_seconds": 0.7988699999987148,
+          "validation_publish_seconds": 0.9586567000005743,
+          "helper_total_seconds": 7.695409500003734,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7159,
+            "stderr_bytes": 712,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.18947170000319602,
+            "output-preflight": 0.4689807999966433,
+            "branch-preflight": 0.8311479999974836,
+            "ref-pinning": 0.4664682000002358,
+            "snapshot-capture": 3.265421200005221,
+            "manifest-finalize": 0.011767899995902553
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.265421200005221,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.84311919999891,
+          "read_search_seconds": 0.8394363999977941,
+          "validation_publish_seconds": 1.0034392999950796,
+          "helper_total_seconds": 7.685994899991783,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7161,
+            "stderr_bytes": 712,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.19083990000217455,
+            "output-preflight": 0.4302377999993041,
+            "branch-preflight": 0.7398246000011568,
+            "ref-pinning": 0.3437093000029563,
+            "snapshot-capture": 3.4862196999965818,
+            "manifest-finalize": 0.015096600000106264
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.4862196999965818,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.361368500001845,
+          "read_search_seconds": 0.667625299996871,
+          "validation_publish_seconds": 0.8371789000011631,
+          "helper_total_seconds": 6.866172699999879,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7160,
+            "stderr_bytes": 712,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.1976442000013776,
+            "output-preflight": 0.45553759999893373,
+            "branch-preflight": 0.6539222999999765,
+            "ref-pinning": 0.33922319999692263,
+            "snapshot-capture": 3.051611499999126,
+            "manifest-finalize": 0.010799700001371093
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.051611499999126,
+          "model_analysis_seconds": null
+        }
+      ]
+    },
+    "staggered": {
+      "baseline": [
+        {
+          "capture_seconds": 6.656058900000062,
+          "read_search_seconds": 0.7580617999992683,
+          "validation_publish_seconds": 0.9394270000047982,
+          "helper_total_seconds": 8.353547700004128,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6759,
+            "stderr_bytes": 716,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.3952341999975033,
+            "output-preflight": 0.4503234000003431,
+            "branch-preflight": 0.9876367000033497,
+            "ref-pinning": 0.4205408999987412,
+            "snapshot-capture": 3.5762393999975757,
+            "manifest-finalize": 0.012461799997254275
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.5762393999975757,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.3161439999967115,
+          "read_search_seconds": 0.8744806000031531,
+          "validation_publish_seconds": 0.9723891000030562,
+          "helper_total_seconds": 7.163013700002921,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6759,
+            "stderr_bytes": 716,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.1552834999965853,
+            "output-preflight": 0.3448403000002145,
+            "branch-preflight": 0.6354865000030259,
+            "ref-pinning": 0.36544290000165347,
+            "snapshot-capture": 3.175552399996377,
+            "manifest-finalize": 0.014044199997442774
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.175552399996377,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 6.106065600004513,
+          "read_search_seconds": 0.8587028999972972,
+          "validation_publish_seconds": 1.0891083999958937,
+          "helper_total_seconds": 8.053876899997704,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6758,
+            "stderr_bytes": 716,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.19382080000650603,
+            "output-preflight": 0.601473899994744,
+            "branch-preflight": 0.775483900004474,
+            "ref-pinning": 0.4790601999993669,
+            "snapshot-capture": 3.3016863000011654,
+            "manifest-finalize": 0.016449499998998363
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.3016863000011654,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 6.3267317000063485,
+          "read_search_seconds": 0.7255612000008114,
+          "validation_publish_seconds": 1.0156142999985605,
+          "helper_total_seconds": 8.06790720000572,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6755,
+            "stderr_bytes": 716,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.20873440000286791,
+            "output-preflight": 0.49641890000202693,
+            "branch-preflight": 0.927671499994176,
+            "ref-pinning": 0.640121900003578,
+            "snapshot-capture": 3.29386009999871,
+            "manifest-finalize": 0.01146829999925103
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.29386009999871,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 6.250150699997903,
+          "read_search_seconds": 1.093453800000134,
+          "validation_publish_seconds": 1.0886165000047185,
+          "helper_total_seconds": 8.432221000002755,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6758,
+            "stderr_bytes": 716,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.22703789999650326,
+            "output-preflight": 0.4166802000036114,
+            "branch-preflight": 0.7909855999969295,
+            "ref-pinning": 0.4706694000051357,
+            "snapshot-capture": 3.6466086999935214,
+            "manifest-finalize": 0.016953800004557706
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.6466086999935214,
+          "model_analysis_seconds": null
+        }
+      ],
+      "candidate": [
+        {
+          "capture_seconds": 4.8523532999970485,
+          "read_search_seconds": 0.5505497999984073,
+          "validation_publish_seconds": 0.7774208999981056,
+          "helper_total_seconds": 6.180323999993561,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7189,
+            "stderr_bytes": 717,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.17316099999879953,
+            "output-preflight": 0.4138526000024285,
+            "branch-preflight": 0.6850775999992038,
+            "ref-pinning": 0.3059634000019287,
+            "snapshot-capture": 2.615087099999073,
+            "manifest-finalize": 0.010093699995195493
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 2.615087099999073,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 4.685033600006136,
+          "read_search_seconds": 0.6972978999983752,
+          "validation_publish_seconds": 0.7138272000011057,
+          "helper_total_seconds": 6.096158700005617,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7190,
+            "stderr_bytes": 717,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.1707931000055396,
+            "output-preflight": 0.3764560999989044,
+            "branch-preflight": 0.5778074999980163,
+            "ref-pinning": 0.30811070000345353,
+            "snapshot-capture": 2.7103714999975637,
+            "manifest-finalize": 0.011330299996188842
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 2.7103714999975637,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 7.487403899998753,
+          "read_search_seconds": 0.9624519999997574,
+          "validation_publish_seconds": 0.9645039000024553,
+          "helper_total_seconds": 9.414359800000966,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7188,
+            "stderr_bytes": 717,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.3829838000019663,
+            "output-preflight": 0.4068688999977894,
+            "branch-preflight": 1.016277300004731,
+            "ref-pinning": 0.38633459999982733,
+            "snapshot-capture": 4.491029500000877,
+            "manifest-finalize": 0.014819599993643351
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 4.491029500000877,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.974433100003807,
+          "read_search_seconds": 0.7690963999993983,
+          "validation_publish_seconds": 0.9338630000056583,
+          "helper_total_seconds": 7.677392500008864,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7188,
+            "stderr_bytes": 717,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.27299849999690196,
+            "output-preflight": 0.47097170000051847,
+            "branch-preflight": 0.6609492999996291,
+            "ref-pinning": 0.545526100002462,
+            "snapshot-capture": 3.3322781000024406,
+            "manifest-finalize": 0.01510279999638442
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.3322781000024406,
+          "model_analysis_seconds": null
+        },
+        {
+          "capture_seconds": 5.930796700005885,
+          "read_search_seconds": 0.6278507999959402,
+          "validation_publish_seconds": 0.85113519999868,
+          "helper_total_seconds": 7.409782700000505,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7191,
+            "stderr_bytes": 717,
+            "git_processes": 76
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.19298999999591615,
+            "output-preflight": 0.39614740000251913,
+            "branch-preflight": 0.9242171000005328,
+            "ref-pinning": 0.3617341999997734,
+            "snapshot-capture": 3.2728994999997667,
+            "manifest-finalize": 0.010575399996014312
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 3.2728994999997667,
+          "model_analysis_seconds": null
+        }
+      ]
+    }
+  },
+  "model_analysis_seconds": null,
+  "staggered_definition": "Sequential independent starts while prior review receipts stay warm; overlapping stages are tested separately.",
+  "scope": "Helper replay of an authored scenario; model quality and latency are separate acceptance gates."
+}

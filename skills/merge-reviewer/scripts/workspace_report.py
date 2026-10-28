@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 from datetime import datetime, timedelta, timezone
 import hashlib
+import math
 import os
 from pathlib import Path
 import re
@@ -78,11 +79,16 @@ def allowed_sources(repo, key):
 
 def validate(draft: dict, manifest: dict, context: Path, *, timeout=180.0) -> dict:
     import git_review_context as api
+    import review_authoring
     from review_session import validate_session
     context = validate_session(context)
     token = api.GIT_TIMEOUT_SECONDS.set(api.positive_timeout(str(timeout)))
     try:
-        return _validate(draft, manifest, context, api)
+        try:
+            expanded = review_authoring.expand(draft, manifest, context)
+        except (ValueError, KeyError, TypeError, OSError) as exc:
+            raise DraftValidationError(str(exc)) from exc
+        return _validate(expanded, manifest, context, api)
     finally:
         api.GIT_TIMEOUT_SECONDS.reset(token)
 
@@ -105,6 +111,82 @@ def validate_coverage_policy(manifest, context, api):
                                  env=source_environment(context, repo, source, api))).strip()
         require(actual == source["tree_sha"], "ancestor coverage fixed tree identity mismatch: " + name)
     return True
+
+
+def prefetch_validation_sources(cache, manifest, draft=None):
+    """Speculate only; the normal validators still check every citation in order."""
+    requests = {}
+    repos = {repo.get("id"): repo for repo in manifest.get("repositories", []) if isinstance(repo, dict)}
+
+    def collect(value):
+        if isinstance(value, dict):
+            repo, source, path = value.get("repo"), value.get("source"), value.get("path")
+            if all(isinstance(item, str) and item for item in (repo, source, path)):
+                entry = repos.get(repo, {}).get("sources", {}).get(source, {})
+                if any(item.get("path") == path and item.get("kind") == "blob" for item in entry.get("files", [])):
+                    requests[(repo, source, path)] = {"repo": repo, "source": source, "path": path}
+            for item in value.values():
+                collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    collect(manifest.get("changed_contracts", []))
+    for repo in manifest.get("repositories", []):
+        collect(repo.get("instructions", []))
+    if draft is not None:
+        collect(draft)
+    if len(requests) > 1:
+        try:
+            cache.prefetch(manifest, list(requests.values()))
+        except (ValueError, KeyError, TypeError, OSError, RuntimeError):
+            # Malformed/unavailable citations must fail at their original
+            # validation position; no partial speculative content is trusted.
+            return FixedSourceCache(cache.context, cache.api)
+    return cache
+
+
+def validate_search_binding(record, manifest, contracts, enabled):
+    identifier, change_id = record.get("contract_id"), record.get("change_id")
+    if change_id is not None:
+        changes = {row["id"]: row["root"] for row in contract_boundary.changes(manifest)}
+        require(manifest.get("contract_scope_policy") == contract_boundary.V2_POLICY and identifier is None
+                and change_id in changes and record.get("repo") == changes[change_id]["repo"],
+                "search is not bound to a local required change")
+    elif enabled or identifier is not None:
+        require(identifier in contracts and record.get("query") in
+                {term["query"] for term in contracts[identifier]["search_terms"]},
+                "search is not bound to a relevant changed contract")
+        if contract_boundary.scope(manifest, contracts[identifier]) == "repo-local":
+            require(record.get("repo") == contracts[identifier]["evidence"]["repo"],
+                    "repo-local search ledger cannot include another Repo")
+
+
+def validate_sync_records(manifest, repos):
+    """Keep each reported remote observation tied to the pinned branch SHA."""
+    if manifest.get("contract_scope_policy") != contract_boundary.V2_POLICY:
+        return
+    activity = manifest.get("sync_activity", [])
+    require(isinstance(activity, list), "invalid sync activity")
+    refs = []
+    for item in activity:
+        require(isinstance(item, dict) and item.get("mode") in ("owner", "joined", "cached")
+                and isinstance(item.get("refs"), list), "invalid ref-level sync activity")
+        for ref in item["refs"]:
+            require(isinstance(ref, dict) and isinstance(ref.get("input_ref"), str)
+                    and isinstance(ref.get("private_ref"), str)
+                    and ref["private_ref"].startswith("refs/merge-reviewer-sync/")
+                    and isinstance(ref.get("sha"), str) and SHA.fullmatch(ref["sha"])
+                    and ref.get("mode") == item["mode"]
+                    and type(ref.get("synced_at")) in (int, float) and math.isfinite(ref["synced_at"]),
+                    "invalid ref-level sync record")
+            refs.append(ref)
+    seed = repos[manifest["selected_repo"]]
+    for role in ("base", "head"):
+        private = seed["native"][f"{role}_resolved_ref"]
+        if private.startswith("refs/merge-reviewer-sync/"):
+            require(any(ref["private_ref"] == private and ref["sha"] == seed["sources"][role]["ref"] for ref in refs),
+                    "sync record differs from the pinned branch")
 
 
 def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
@@ -131,14 +213,19 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
         selected = manifest.get("selected_repo")
         require(selected in repos and manifest.get("seed_repos") == [selected], "exactly one selected Repo is required")
         require(repos[selected].get("state") == "captured", "selected Repo snapshot was not captured")
+        validate_sync_records(manifest, repos)
         require(all(repo.get("role") == ("seed" if repo["id"] == selected else "candidate")
                     for repo in repos.values()), "Repo roles differ from the single selected Repo")
         validate_coverage_policy(manifest, context, api)
         require(manifest.get("required_coverage") == required_coverage(manifest), "changed-path contract differs from captured changes")
+        if manifest.get("contract_scope_policy") == contract_boundary.V2_POLICY:
+            require(manifest.get("boundary_changes") == contract_boundary.changes(manifest),
+                    "boundary change index differs from fixed coverage")
         frozen = manifest.get("snapshot_policy") is not None
         if frozen:
             require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
             require(isinstance(manifest.get("capture_completed_at"), str), "snapshot completion time is required")
+        source_cache = prefetch_validation_sources(FixedSourceCache(context, api), manifest)
         for repo in repos.values():
             require(repo.get("state") in ("captured", "error"), "invalid captured Repo state")
             if repo["state"] == "error":
@@ -179,8 +266,7 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
                         "frozen snapshot object closure is incomplete")
                 for index in sorted((git_repo / "objects/pack").glob("*.idx")):
                     api.run_git(git_repo, ["verify-pack", str(index)], env=environment)
-                instructions(context, manifest, repo["id"], None, api)
-        source_cache = FixedSourceCache(context, api)
+                instructions(context, manifest, repo["id"], None, api, cache=source_cache)
         prefix = {**manifest, "changed_contracts": []}
         contracts = {}
         for contract in manifest.get("changed_contracts", []):
@@ -191,17 +277,14 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
         searches = {row["id"]: row for row in manifest["searches"]}
         require(len(searches) == len(manifest["searches"]), "duplicate search IDs")
         replay = FixedSearchCache(context, api)
+        replay.prefetch(manifest, [row for row in searches.values() if row.get("status") == "complete"])
         for row in searches.values():
             require(row.get("repo") in repos and row.get("status") in ("complete", "unresolved"), "invalid search record")
             if row["status"] != "complete":
                 continue
             source = repos[row["repo"]]["sources"].get(row.get("source"))
             require(source and row.get("ref") == source["ref"], "search version differs from the selected snapshot")
-            contract_id = row.get("contract_id")
-            if enabled or contract_id is not None:
-                require(contract_id in contracts and row.get("query") in
-                        {term["query"] for term in contracts[contract_id]["search_terms"]},
-                        "search is not bound to a relevant changed contract")
+            validate_search_binding(row, manifest, contracts, enabled)
             code, output, error = replay.run(repos[row["repo"]], row["source"], row["query"])
             require(code in (0, 1) and output == row.get("output") and output.splitlines() == row.get("matches"),
                     "fixed search ledger differs from captured objects: " + error)
@@ -252,7 +335,9 @@ def _validate(draft, manifest, context, api):
     require(len(repos) == len(manifest["repositories"]), "duplicate Repo IDs")
     require(len({r["path"] for r in repos.values()}) == len(repos), "duplicate canonical Repo paths")
     require(set(manifest["seed_repos"]) <= set(repos), "unknown seed Repo")
+    validate_sync_records(manifest, repos)
     frozen = manifest.get("snapshot_policy") is not None
+    source_cache = prefetch_validation_sources(FixedSourceCache(context, api), manifest, draft)
     if frozen:
         require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
         require(isinstance(manifest.get("capture_completed_at"), str), "snapshot completion time is required")
@@ -260,12 +345,11 @@ def _validate(draft, manifest, context, api):
             if repo["state"] != "error":
                 require(repo.get("snapshot") is not None, "frozen context needs an owned snapshot for every captured Repo")
                 evidence_repository(context, repo)
-                instructions(context, manifest, repo["id"], None, api)
+                instructions(context, manifest, repo["id"], None, api, cache=source_cache)
     validate_coverage_policy(manifest, context, api)
     require(manifest.get("required_coverage") == required_coverage(manifest), "changed-path contract differs from captured changes")
     expected = {location(c) for c in manifest["required_coverage"]}
     contracts = {}
-    source_cache = FixedSourceCache(context, api)
     contract_manifest = {**manifest, "changed_contracts": []}
     for contract in manifest.get("changed_contracts", []):
         validated = validate_contract(context, contract_manifest, contract, api, cache=source_cache)
@@ -367,6 +451,10 @@ def _validate(draft, manifest, context, api):
             graph[neighbor].add(identifier)
 
     coverage, root_nodes, reviewed_anchors = {}, set(), set()
+    v2 = enabled and manifest.get("contract_scope_policy") == contract_boundary.V2_POLICY
+    change_ids = {location(row["root"]): row["id"] for row in contract_boundary.changes(manifest)}
+    boundary_outcomes = {row.get("change_id"): row.get("outcome") for row in draft.get("boundary_reviews", [])
+                         if isinstance(row, dict)}
     for row in draft["coverage"]:
         draft_require(isinstance(row, dict), "coverage row must be an object")
         key = location(row)
@@ -382,12 +470,14 @@ def _validate(draft, manifest, context, api):
             matches = [k for k in keys if k[0] == key[0] and k[2] == key[2] and k[1] in allowed]
             draft_require(matches, "change coverage cites the wrong version/source")
             if enabled:
-                ids = row.get("impact_ids")
-                draft_require(isinstance(ids, list) and ids and all(i in nodes for i in ids), "each extended change needs impact nodes")
+                ids = row.get("impact_ids", [])
+                needs_graph = not v2 or boundary_outcomes.get(change_ids.get(key)) == "propagates"
+                draft_require(isinstance(ids, list) and (ids or not needs_graph) and all(i in nodes for i in ids),
+                              "each propagating change needs impact nodes")
                 draft_require(all(location(nodes[i]) in matches for i in ids), "change's impact roots must cover its own frozen evidence")
                 root_nodes.update(ids)
             reviewed_anchors.update(matches)
-            if enabled:
+            if enabled and needs_graph:
                 applicable = {c["id"] for c in contracts.values()
                               if location(c["root"]) == key and not c["parent_ids"]}
                 draft_require(applicable, "each reviewed Group change needs an anchored changed contract")
@@ -415,15 +505,13 @@ def _validate(draft, manifest, context, api):
     searches = {s["id"]: s for s in manifest["searches"]}
     require(len(searches) == len(manifest["searches"]), "duplicate search IDs")
     search_cache = FixedSearchCache(context, api)
+    search_cache.prefetch(manifest, [row for row in searches.values() if row.get("status") == "complete"])
     for record in searches.values():
         require(record.get("repo") in repos and record.get("status") in ("complete", "unresolved"), "invalid search record")
         if record["status"] == "complete":
             source = repos[record["repo"]]["sources"].get(record.get("source"))
             require(source and record.get("ref") == source["ref"], "search version differs from the selected snapshot")
-            identifier = record.get("contract_id")
-            if enabled or identifier is not None:
-                require(identifier in contracts and record.get("query") in {t["query"] for t in contracts[identifier]["search_terms"]},
-                        "search is not bound to a relevant changed contract")
+            validate_search_binding(record, manifest, contracts, enabled)
             repo = repos[record["repo"]]
             code, output, error = search_cache.run(repo, record["source"], record["query"])
             require(code in (0, 1) and output == record.get("output") and output.splitlines() == record.get("matches"),
@@ -715,6 +803,17 @@ def render(result, manifest):
             lines.append(f"| {cell(repo['name'])} | {repo['role']} | {cell(source)} | {mark(reference)} |")
         if not version["sources"]:
             lines.append(f"| {cell(repo['name'])} | {repo['role']} | 未擷取 | 未提供 |")
+    synced = [ref for item in manifest.get("sync_activity", []) for ref in item.get("refs", [])]
+    if synced:
+        lines.extend(["", "### 遠端 ref 同步", "", "| 輸入 ref | 完整 SHA | 同步時間（UTC） | 來源 |",
+                      "| --- | --- | --- | --- |"])
+        for ref in synced:
+            try:
+                timestamp = datetime.fromtimestamp(ref["synced_at"], timezone.utc).isoformat()
+            except (OverflowError, OSError, ValueError):
+                timestamp = str(ref["synced_at"])
+            lines.append("| " + " | ".join(cell(value) for value in
+                         (ref["input_ref"], ref["sha"], timestamp, ref["mode"])) + " |")
     lines.extend(["", "### 逐檔覆蓋", "", "| Repo／路徑 | 來源 | 狀態 | 判定與證據 |", "| --- | --- | --- | --- |"])
     for row in result["coverage"]:
         repo = repository(manifest, row["repo"])
@@ -750,7 +849,7 @@ def render(result, manifest):
         lines.extend(["", "### 契約邊界判定", "",
                       "本 Repo 名稱搜尋與跨 Repo 邊界搜尋分開；未執行的搜尋不列為已搜尋排除。", ""])
         for review in result["boundary_reviews"]:
-            lines.append(f"- {review['contract_id']}：{review['outcome']}；{review['reason']}；"
+            lines.append(f"- {review.get('change_id', review.get('contract_id'))}：{review['outcome']}；{review['reason']}；"
                          f"本 Repo 搜尋 {', '.join(review.get('search_ids', [])) or '未完成'}；"
                          f"輸出契約 {', '.join(review.get('boundary_contract_ids', [])) or '無'}")
             for entry in review.get("evidence", []):
@@ -764,7 +863,7 @@ def render(result, manifest):
     for row in result["searches"]:
         repo = repository(manifest, row["repo"])
         lines.append("| " + " | ".join(cell(value) for value in
-                     (row["id"], repo["name"], row.get("contract_id") or "無", row.get("source", "") + "@" + row.get("ref", ""),
+                     (row["id"], repo["name"], row.get("contract_id") or row.get("change_id") or "無", row.get("source", "") + "@" + row.get("ref", ""),
                       row["status"], len(row.get("matches", [])))) + " |")
     if not result["searches"]:
         lines.append("| 無搜尋紀錄 | — | — | — | — | 0 |")

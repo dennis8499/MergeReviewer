@@ -27,7 +27,7 @@ def summarize_review(result):
         "repositories": unfinished("repository_coverage", lambda row: row["status"] == "unresolved",
                                    ("repo", "status", "reason")),
         "boundaries": unfinished("boundary_reviews", lambda row: row["outcome"] == "unresolved",
-                                 ("contract_id", "outcome", "reason")),
+                                 ("change_id", "contract_id", "outcome", "reason")),
         "pending_confirmation_count": pending}
     # These are the validator's final gaps, including captured-context and graph
     # gaps, rather than just the author's draft limitations.
@@ -35,7 +35,7 @@ def summarize_review(result):
     for kind, rows in remaining.items():
         if isinstance(rows, list):
             for row in rows:
-                identifier = row.get("id", row.get("contract_id", row.get("path", row.get("repo", ""))))
+                identifier = row.get("id", row.get("change_id", row.get("contract_id", row.get("path", row.get("repo", "")))))
                 gaps.append(f"{kind}/{identifier}: {row.get('reason', '尚未完成。')}")
     if pending:
         gaps.append(f"待人工確認：{pending} 項；人工紀錄不會重算初次審查判斷。")

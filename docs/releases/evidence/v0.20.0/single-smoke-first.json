@@ -1,0 +1,233 @@
+{
+  "schema": "MergeReviewFlowBenchmark/v1",
+  "repeats": 1,
+  "normalized_evidence_result_finding_bodies_equal": true,
+  "medians": {
+    "cold": {
+      "baseline": 14.30878799999482,
+      "candidate": 14.671310499994433
+    },
+    "warm": {
+      "baseline": 13.3862988999972,
+      "candidate": 11.662766999994346
+    },
+    "staggered": {
+      "baseline": 11.456227999995463,
+      "candidate": 12.262440899990906
+    }
+  },
+  "paired_ratio_medians": {
+    "cold": 1.0253356538652851,
+    "warm": 0.8712465698787576,
+    "staggered": 1.0703733288125692
+  },
+  "ratio_limits": {
+    "cold": 1.05,
+    "warm": 1.05,
+    "staggered": 1.05
+  },
+  "gates": {
+    "cold": true,
+    "warm": true,
+    "staggered": false
+  },
+  "mechanical_v1": true,
+  "large_multi_repo": false,
+  "runs": {
+    "cold": {
+      "baseline": [
+        {
+          "capture_seconds": 12.052524799997627,
+          "read_search_seconds": 0.9429311999992933,
+          "validation_publish_seconds": 1.3133319999978994,
+          "helper_total_seconds": 14.30878799999482,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6739,
+            "stderr_bytes": 713,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.43160509999870555,
+            "output-preflight": 0.8270351000028313,
+            "branch-preflight": 1.46109129999968,
+            "ref-pinning": 0.7770767999973032,
+            "snapshot-capture": 7.314208700001473,
+            "manifest-finalize": 0.09191650000138907
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 7.314208700001473,
+          "model_analysis_seconds": null
+        }
+      ],
+      "candidate": [
+        {
+          "capture_seconds": 12.333762599999318,
+          "read_search_seconds": 1.029669899995497,
+          "validation_publish_seconds": 1.3078779999996186,
+          "helper_total_seconds": 14.671310499994433,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7001,
+            "stderr_bytes": 714,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.4067469000001438,
+            "output-preflight": 1.0031302999996115,
+            "branch-preflight": 2.0882330000022193,
+            "ref-pinning": 0.6656679000006989,
+            "snapshot-capture": 7.20917300000292,
+            "manifest-finalize": 0.02412029999686638
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 7.20917300000292,
+          "model_analysis_seconds": null
+        }
+      ]
+    },
+    "warm": {
+      "baseline": [
+        {
+          "capture_seconds": 11.029783600002702,
+          "read_search_seconds": 1.0786835999970208,
+          "validation_publish_seconds": 1.2778316999974777,
+          "helper_total_seconds": 13.3862988999972,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6729,
+            "stderr_bytes": 711,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.29020239999954356,
+            "output-preflight": 1.0404745000050752,
+            "branch-preflight": 1.291516799996316,
+            "ref-pinning": 0.7612724999999045,
+            "snapshot-capture": 6.833763599999656,
+            "manifest-finalize": 0.013547500006097835
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 6.833763599999656,
+          "model_analysis_seconds": null
+        }
+      ],
+      "candidate": [
+        {
+          "capture_seconds": 9.641696200000297,
+          "read_search_seconds": 0.8790089999965858,
+          "validation_publish_seconds": 1.1420617999974638,
+          "helper_total_seconds": 11.662766999994346,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6989,
+            "stderr_bytes": 712,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.2767787999982829,
+            "output-preflight": 0.7678708000021288,
+            "branch-preflight": 1.2401592999958666,
+            "ref-pinning": 0.8855151000025216,
+            "snapshot-capture": 5.445802299997013,
+            "manifest-finalize": 0.011808800001745112
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 5.445802299997013,
+          "model_analysis_seconds": null
+        }
+      ]
+    },
+    "staggered": {
+      "baseline": [
+        {
+          "capture_seconds": 9.44824659999722,
+          "read_search_seconds": 1.0175164000029326,
+          "validation_publish_seconds": 0.9904649999953108,
+          "helper_total_seconds": 11.456227999995463,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 6760,
+            "stderr_bytes": 716,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.27234900000621565,
+            "output-preflight": 0.5969062999938615,
+            "branch-preflight": 1.4688145000036457,
+            "ref-pinning": 0.6331063999969047,
+            "snapshot-capture": 5.526556500000879,
+            "manifest-finalize": 0.014645800001744647
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 5.526556500000879,
+          "model_analysis_seconds": null
+        }
+      ],
+      "candidate": [
+        {
+          "capture_seconds": 10.034112699999241,
+          "read_search_seconds": 1.0687421999973594,
+          "validation_publish_seconds": 1.159585999994306,
+          "helper_total_seconds": 12.262440899990906,
+          "counts": {
+            "python_cli": 3,
+            "stdout_bytes": 7018,
+            "stderr_bytes": 717,
+            "git_processes": 77
+          },
+          "network_activity": {
+            "fetch_attempt_count": 0,
+            "fetch_success_count": 0,
+            "requested_ref_count": 0,
+            "synced_ref_count": 0
+          },
+          "phase_seconds": {
+            "local-preflight": 0.24210889999812935,
+            "output-preflight": 0.8007743999987724,
+            "branch-preflight": 1.114997000004223,
+            "ref-pinning": 0.634953000000678,
+            "snapshot-capture": 6.36874589999934,
+            "manifest-finalize": 0.013695699999516364
+          },
+          "network_wait_seconds": 0,
+          "packing_seconds": 6.36874589999934,
+          "model_analysis_seconds": null
+        }
+      ]
+    }
+  },
+  "model_analysis_seconds": null,
+  "staggered_definition": "Sequential independent starts while prior review receipts stay warm; overlapping stages are tested separately.",
+  "scope": "Helper replay of an authored scenario; model quality and latency are separate acceptance gates."
+}

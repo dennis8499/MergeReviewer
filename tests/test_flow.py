@@ -309,6 +309,31 @@ class FlowTests(ReviewFixture):
         self.assertEqual(git(self.repo, "rev-parse", "main"), seed["sources"]["head"]["ref"])
         self.assertTrue(seed["native"]["head_resolved_ref"].startswith("refs/merge-reviewer-sync/"))
 
+    def test_remote_observation_times_and_shas_survive_offline_publication(self):
+        self.remote()
+        result = self.start(base="origin/main", head="origin/feature")
+        context, manifest, draft = self.authored_draft(result)
+        recorded = [ref for item in result["sync_activity"] for ref in item["refs"]]
+        self.assertEqual({"main", "feature"}, {row["branch"] for row in recorded})
+        damaged = copy.deepcopy(manifest)
+        damaged["sync_activity"][0]["refs"][0]["sha"] = "0" * 40
+        with self.assertRaisesRegex(ValueError, "sync record differs"):
+            workspace_report.validate(draft, damaged, context)
+        original = api.run_git
+        def offline(repo, args, **kwargs):
+            if args and args[0] == "fetch":
+                self.fail("fixed publication contacted a remote")
+            return original(repo, args, **kwargs)
+        with mock.patch.object(api, "run_git", side_effect=offline):
+            published, code = flow.finish(Path(result["runtime_root"]), result["request_id"])
+        self.assertEqual(0, code, published)
+        report = Path(published["report_path"]).read_text(encoding="utf-8")
+        self.assertIn("### 遠端 ref 同步", report)
+        for ref in recorded:
+            self.assertIn(ref["sha"], report)
+            self.assertIn(ref["input_ref"], report)
+        self.assertFalse(context.exists())
+
     def test_new_ref_repo_and_remote_url_require_their_own_sync_but_subsets_reuse(self):
         self.remote()
         first = self.start(base="origin/main", head="origin/feature")
@@ -318,8 +343,17 @@ class FlowTests(ReviewFixture):
         git(self.repo, "push", "origin", "topic")
         new_ref = self.start(base="origin/main", head="origin/topic")
         self.assertEqual(1, new_ref["network_activity"]["fetch_attempt_count"])
+        self.assertEqual(2, new_ref["network_activity"]["requested_ref_count"])
+        self.assertEqual(1, new_ref["network_activity"]["synced_ref_count"])
+        self.assertEqual({"main": "cached", "topic": "owner"},
+                         {ref["branch"]: ref["mode"] for item in new_ref["sync_activity"] for ref in item["refs"]})
         subset = self.start(base="origin/main", head="origin/main")
         self.assertEqual(0, subset["network_activity"]["fetch_attempt_count"])
+        aliases = self.start(base="origin/main", head="refs/remotes/origin/main")
+        self.assertEqual(0, aliases["network_activity"]["fetch_attempt_count"])
+        alias_repo = workspace.repository(workspace.load(Path(aliases["context_dir"])), aliases["selected_repo"])
+        self.assertEqual(alias_repo["native"]["base_sha"], alias_repo["native"]["head_sha"])
+        self.assertEqual(alias_repo["native"]["base_resolved_ref"], alias_repo["native"]["head_resolved_ref"])
         other = self.make_repo("other")
         git(other, "switch", "-c", "feature")
         self.commit("contract = 'other'\n", repository=other)

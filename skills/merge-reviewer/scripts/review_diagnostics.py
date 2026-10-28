@@ -73,7 +73,7 @@ def inspect(draft, manifest):
     for field in ("coverage", "impact_coverage", "repository_coverage", "findings", "merge_parent_review",
                   "next_steps", "tests_executed", "tests_not_executed", "limitations"):
         need(isinstance(draft.get(field), list), "draft." + field, "must be an array")
-    need(manifest.get("contract_scope_policy") in (None, boundary.POLICY), "manifest.contract_scope_policy", "unsupported policy")
+    need(manifest.get("contract_scope_policy") in (None, boundary.POLICY, boundary.V2_POLICY), "manifest.contract_scope_policy", "unsupported policy")
     repos = {row["id"]: row for row in manifest.get("repositories", [])}
     contracts = {row["id"]: row for row in manifest.get("changed_contracts", [])}
     searches = {row["id"]: row for row in manifest.get("searches", [])}
@@ -81,6 +81,9 @@ def inspect(draft, manifest):
     need(len(nodes) == len(rows(draft, "impact_coverage")), "draft.impact_coverage", "impact IDs must be unique")
     graph = {identifier: set() for identifier in nodes}
     expected = {(row["repo"], row["source"], row["path"]) for row in manifest.get("required_coverage", [])}
+    change_ids = {(row["root"]["repo"], row["root"]["source"], row["root"]["path"]): row["id"]
+                  for row in boundary.changes(manifest)}
+    outcomes = {row.get("change_id"): row.get("outcome") for row in rows(draft, "boundary_reviews")}
     seen = set()
 
     def row_path(field, row):
@@ -124,7 +127,9 @@ def inspect(draft, manifest):
         else:
             need(bool(row.get("evidence")), place + ".evidence", "reviewed change needs fixed evidence")
             evidence(row.get("evidence", []), place + ".evidence")
-            if manifest.get("extension_enabled"):
+            if (manifest.get("extension_enabled") and
+                    (manifest.get("contract_scope_policy") != boundary.V2_POLICY or
+                     outcomes.get(change_ids.get(key)) == "propagates")):
                 need(bool(row.get("impact_ids")) and all(i in nodes for i in row.get("impact_ids", [])),
                      place + ".impact_ids", "reviewed Group change needs impact anchors")
                 need(any(contract.get("root") == {"repo": key[0], "source": key[1], "path": key[2]}
@@ -169,7 +174,27 @@ def inspect(draft, manifest):
     # Run the same policy validator once per local contract to collect independent
     # boundary errors together. Descendants remain available for propagation checks.
     reviews = rows(draft, "boundary_reviews")
-    if manifest.get("contract_scope_policy") == boundary.POLICY:
+    if manifest.get("contract_scope_policy") == boundary.V2_POLICY:
+        required_changes = boundary.changes(manifest) if manifest.get("extension_enabled") else []
+        for change in required_changes:
+            identifier = change["id"]
+            selected_reviews = [row for row in reviews if row.get("change_id") == identifier]
+            place = row_path("boundary_reviews", selected_reviews[0]) if selected_reviews else "draft.boundary_reviews"
+            def strict(condition, message):
+                if not condition:
+                    raise ValueError(message)
+            def cite(row, required=True):
+                values = row.get("evidence", [])
+                strict(isinstance(values, list) and (values or not required), "fixed boundary evidence is required")
+                return evidence(values, place + ".evidence")
+            try:
+                _, missing = boundary.validate({**draft, "boundary_reviews": selected_reviews}, manifest, contracts,
+                                               nodes, graph, searches, cite, strict, only={identifier})
+                gaps.extend({"kind": "boundary", "id": identifier, "reason": reason} for reason in missing)
+            except (ValueError, KeyError, TypeError) as exc:
+                add(place, str(exc))
+        need(len(reviews) == len(required_changes), "draft.boundary_reviews", "every change needs one boundary review")
+    elif manifest.get("contract_scope_policy") == boundary.POLICY:
         local = {i: c for i, c in contracts.items() if boundary.scope(manifest, c) == "repo-local"}
         for identifier in local:
             selected_reviews = [row for row in reviews if row.get("contract_id") == identifier]

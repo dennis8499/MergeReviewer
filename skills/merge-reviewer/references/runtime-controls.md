@@ -2,7 +2,7 @@
 
 新請求使用 [start／step／check／finish](session-workflow.md)，以下獨立 CLI 為相容入口。共用協定集中在 `review_coordinator.py`；現有讀取、搜尋及發布仍各一份實作。check／status 的 diagnostics 不執行 Git，輸出明確 `evidence_verified=false`；固定證據仍由 finish 驗證。
 
-新流程的同步以 Git common directory、remote URL、有效認證設定／使用者範圍及必要 refs 識別。成功完成起 300 秒有效、命中不延長；失敗冷卻 30 秒。相同需求進行中共用，完整涵蓋子集合也可重用。快取命中不呼叫 ls-remote／GitLab API；實際 fetch 使用唯一私人 refs，保留 atomic、無 tags／prune／submodule／maintenance。遠端、帳號或工作台已知 fetch／push／pull 變動使後續請求失效；已固定快照繼續離線。
+新流程以 Git common directory、remote URL、有效認證設定／使用者範圍及各分支識別同步。每個 ref 成功後 300 秒有效、命中不延長；失敗 ref 冷卻 30 秒。不同 head 可重用同一 base，只同步缺少或失效的 refs；`--refresh` 重同步要求的 refs。快取命中不呼叫 ls-remote／GitLab API；fetch 使用唯一私人 refs，保留 atomic、無 tags／prune／submodule／maintenance。遠端、帳號或工作台已知 fetch／push／pull 變動使後續請求失效；已固定快照繼續離線。
 
 網路只占用既有共用 Git lease（配額 1），Git 程序樹結束後立即釋放；本機封裝另以 OS 鎖限全 runtime 2 份。peer pack 依 Repo／SHA／object format／policy 共用單一 producer，驗證後複製進各自 context；LRU 上限 2 GiB。所有需協作的審查使用同一 runtime。成功重用者的 fetch 計數為 0，`sync_activity.mode` 記錄 owner／joined／cached，避免重複加總。
 
@@ -12,7 +12,7 @@
 
 一次請求由主 agent capture 一次並保存 `context_dir`；子 agent 共用固定 context，契約／搜尋寫入保持單一寫入者。只有明確遠端 base／head 按 remote 合併為一次同步；其他 Repo 使用本機 HEAD。草稿驗證 exit 3 沿原 context 修正，終止錯誤回報後停止，不自動重新 capture。
 
-`network_activity` 記錄四個整數：`fetch_attempt_count` 是 helper 嘗試呼叫 Git fetch 的次數，`fetch_success_count` 是成功數；`requested_ref_count` 是去重後要求同步的遠端分支數，`synced_ref_count` 是成功同步的遠端分支數。同一 remote 的兩個不同分支成功同步一次時，四值依序為 `1/1/2/2`。`fetches` 每項是一個成功同步分支，長度不是連線次數；以上計數都不是 Git 傳輸內部的 HTTP／SSH 請求數。本機分支審查沒有遠端同步時四值皆為 0。
+`network_activity` 記錄 `fetch_attempt_count`、`fetch_success_count`、去重的 `requested_ref_count` 及實際 fetch 成功的 `synced_ref_count`。首次抓兩個 ref 為 `1/1/2/2`，重用 base 並抓另一 head 為 `1/1/2/1`。`sync_activity` 逐收據記錄 owner／joined／cached、每個 ref 的 SHA 與同步時間，並區分要求及實際同步的 refs；`fetches` 列出要求的遠端分支，長度不是連線次數。這些數字不是 Git 傳輸內部的 HTTP／SSH 請求數。本機分支不需要遠端同步。
 
 `review_workspace.py batch-read --auto-content` 選較小的原格式或 `MergeReviewEvidenceBatch/v1`。共享格式的每筆 read 保留 Repo／source／ref／path，以 `content_id` 取 `contents[id].lines`；每個來源仍獨立判斷。同一全文的不同切片使用各自的 `content_id`，`sha256` 仍是全文 hash。`--shared-content` 可明確選共享格式。
 

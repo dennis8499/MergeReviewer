@@ -13,6 +13,30 @@ class VerificationCacheTests(ReviewFixture):
         self.consumer = self.make_repo("consumer", {"app.py": "contract = 'consumer'\n"})
         self.commit()
 
+    def test_one_frozen_blob_uses_one_verified_batch_process(self):
+        context, manifest = self.capture()
+        seed = workspace.repository(manifest, manifest["selected_repo"])
+        cache = workspace.FixedSourceCache(context, api)
+        with mock.patch.object(api, "run_git", wraps=api.run_git) as calls:
+            self.assertEqual(b"contract = 'new'\n", cache.read(seed, "head", "app.py"))
+        commands = [call.args[1] for call in calls.call_args_list]
+        self.assertEqual(1, sum(command[0] == "cat-file" for command in commands))
+        self.assertFalse(any(command[0] == "hash-object" for command in commands))
+
+    def test_cached_reads_recheck_each_fixed_snapshot_child_for_links(self):
+        context, manifest = self.capture()
+        seed = workspace.repository(manifest, manifest["selected_repo"])
+        cache = workspace.FixedSourceCache(context, api)
+        cache.read(seed, "head", "app.py")
+        snapshot = context / seed["snapshot"]["git_dir"]
+        original = workspace.is_link
+        for relative in ("objects", "HEAD", "refs", "config", "objects/pack"):
+            target = snapshot / relative
+            with self.subTest(relative=relative), mock.patch.object(
+                    workspace, "is_link", side_effect=lambda path: path == target or original(path)):
+                with self.assertRaisesRegex(ValueError, "linked evidence path"):
+                    cache.read(seed, "head", "app.py")
+
     def test_shared_contract_and_evidence_reads_preserve_validated_result(self):
         context, manifest = self.capture()
         draft = self.draft(context, manifest)
