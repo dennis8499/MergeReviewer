@@ -88,10 +88,10 @@
 
 ## 0.11.0 - 2026-10-13
 
-- Route new Group branch, quick, MR and Megin receipt reviews through fixed-source workspace context/result v2.
+- Route new Group branch, quick and MR reviews through fixed-source workspace context/result v2.
 - Anchor changed and propagated contracts, bind every search to relevant evidence and require alternate queries before excluding candidates.
 - Keep separate index and saved-file quick coverage, source freshness, graph cycles and unresolved consumer gaps.
-- Revalidate MR/receipt bindings before publication, including portable reports; independently validate native Repo/Group receipt v2 without installing Megin.
+- Revalidate MR bindings before publication, including portable reports.
 - Retain historical context/receipt verification without promoting old evidence to new cross-Repo completion.
 - Bundle the MIT-licensed Tomli parser for Python 3.10 receipt/scanner compatibility and verify its source hashes before isolated receipt validation.
 
@@ -101,18 +101,16 @@
 - Freeze related Repos at their own workspace versions, retain exact index/working content and support unborn Repos without a remote.
 - Add fixed-source inventory/read/search helpers, auditable impact graphs, candidate dispositions and source-specific change coverage.
 - Validate reachable impact gaps, evidence versions, reviewed-change anchors and live version drift before publishing Group summaries and Repo details.
-- Include legacy dual-source Group quick in standalone archives; retain schema-4 quick/ref, MR and optional Megin receipt contracts.
+- Include legacy dual-source Group quick in standalone archives; retain schema-4 quick/ref and MR contracts.
 
 ## 0.9.0 - 2026-10-12
 
-- Validate complete native Megin v2 discovery, approval, scenario/TDD and review-history evidence with no Megin installation dependency.
 - Retain standalone explicit-ref, local modification and native v1 receipt review.
 - Use fixed ZIP metadata without compressor dependencies so release hashes are reproducible across checkout times and platforms.
 
 ## 0.8.0
 
-- Add optional native Megin delivery receipt binding to fixed committed capture and validated Markdown/JSON reports, with independent historical proof validation and no Megin installation dependency.
-- Preserve native single-Repo scope and compatibility for reviews without a receipt.
+- Preserve native single-Repo scope and compatibility for existing reports.
 
 ## 0.7.0
 

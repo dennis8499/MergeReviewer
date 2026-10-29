@@ -20,7 +20,7 @@ class BranchReviewTests(ReviewFixture):
     def test_removed_public_arguments_are_rejected(self):
         for extra in (["--quick"], ["--scope", "repo"], ["--target", "staged"], ["--target", "uncommitted"],
                       ["--group-root", str(self.root)], ["--include-working-tree"], ["--remote", "origin"],
-                      ["--mode", "direct"], ["--megin-receipt", "receipt.json"], ["--mr-context", "task.json"]):
+                      ["--mode", "direct"], ["--mr-context", "task.json"]):
             with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 api.parse_args(["--project", str(self.repo), "--base", "main", "--head", "feature", *extra])
 

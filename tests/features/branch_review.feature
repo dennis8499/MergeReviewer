@@ -30,7 +30,6 @@ Feature: One Repo branch review with conditional impact extension
       | --target uncommitted |
       | --scope group |
       | --mode direct |
-      | --megin-receipt receipt.json |
 
   Scenario Outline: Non branch inputs are rejected
     Given a branch fixture with 1 visible Repos

@@ -48,7 +48,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 
 ## 0.12.0 相容性
 
-不支援 Stage、未提交、quick、直接比較、tag／commit／HEAD、多起點、MR task 或 Megin 收據。舊參數直接拒絕，不自動轉成其他審查。
+不支援 Stage、未提交、quick、直接比較、tag／commit／HEAD、多起點或 MR task。舊參數直接拒絕，不自動轉成其他審查。
 
 公開 context/result 為 v3，見[證據與結果契約](skills/merge-reviewer/references/workspace-review.md)。GitlabWorkSpace 0.31.0 整合本版三階段入口與本機任務狀態；仍固定 MergeReviewer 0.11.0 的舊版工作台須更新完整 VSIX／組合包，不能直接替換其依賴 MR、Group quick 及收據 adapter 的技能目錄。
 

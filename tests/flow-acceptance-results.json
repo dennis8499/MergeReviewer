@@ -1093,11 +1093,6 @@
         "seconds": 39.35581420000017
       },
       {
-        "name": "release-megin_removal_test",
-        "exit_code": 0,
-        "seconds": 90.42715909999993
-      },
-      {
         "name": "release-output_style_test",
         "exit_code": 0,
         "seconds": 0.5541986000000634

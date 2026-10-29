@@ -223,7 +223,7 @@ $merge-reviewer VSCode工作區="C:\Work\Shop.code-workspace" 專案名稱=Order
 | `quick`／自動主分支 | 不支援；明確填三個必要輸入。 |
 | `tag`／SHA／HEAD／直接比較 | 不支援；選實際分支，不自動轉換。 |
 | `scope`／`target`／`group-root`／多起點 | 不支援；工作區提供背景資訊，永遠選一個儲存庫。 |
-| MR 任務／Megin 收據 | 不支援；介接元件需另行遷移。 |
+| 專用 MR 任務載荷 | 不支援；介接元件需另行遷移。 |
 | 證據／結果 v1／v2、`schema-4` 報告 | 新發布器只接受公開 v3；舊報告是歷史紀錄。 |
 | 儲存庫群組根目錄報告／多儲存庫明細 | 新版只在所選儲存庫發布單一 Merge Report；相關證據併入對應問題，覆蓋及搜尋紀錄供內部驗證。 |
 | 輸出 JSON／`--include-json` | 已移除；最終只發布 Markdown。 |

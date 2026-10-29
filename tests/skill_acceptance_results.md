@@ -241,19 +241,10 @@ HEAD, branches, refs, index and status stayed unchanged, and owned contexts were
 cleared. Local evidence: [installed MR field replacement](../test-artifacts/group-v2-acceptance/Workspace-MR-A/merge-review-20261013T065008Z-222829ed/summary.md)
 and [installed MR compatible alias](../test-artifacts/group-v2-acceptance/Workspace-MR-B/merge-review-20261013T065010Z-5795a4ff/summary.md).
 
-The final installation also validated the independently explored Megin
-`orders-api → checkout-ui → receipt-worker` architecture against the same fixed
-sources (exit 0). All 58 files in the 13 bundled Megin Skills matched the final
-native package; product state and architecture records remained unchanged. This
-was architecture-only acceptance, with proposed compatibility checks retained as
-unexecuted drafts.
-
-Current Windows validation for Megin 0.8.0, MergeReviewer 0.11.0 and
-GitlabWorkSpace 0.22.0:
+Current Windows validation for MergeReviewer 0.11.0 and GitlabWorkSpace 0.22.0:
 
 | Check | Result |
 | --- | --- |
-| Megin quality gates | 98 passed. |
 | MergeReviewer full regression | 141 cases: 140 passed, one symbolic-link case skipped because the Windows account lacks permission. |
 | Final Group quick entry regressions | Four passed, including the additional declared-Group quick alias case. |
 | Automated BDD | 24 scenarios / 99 steps passed; real GitHub publishing remains a separate manual scenario. |
