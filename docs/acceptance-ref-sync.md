@@ -1,17 +1,18 @@
 # 逐 ref 同步與審查流程：驗證紀錄
 
-本次工作樹以 `v0.19.0` 的 commit `16706dc7b402a0c61de82cf5c24878075e1d1cff` 為機械比較基準；以 `git archive --format=zip v0.19.0` 保存的基準 ZIP SHA-256 為 `cec02ec624c41933f3f37814942729f22dd1be44fe69cbdb485ac701e52e13f3`。其發布內容準備 commit 為 `e23ebf5ba18c1eb7d8b7b62f1d41aa73bb72688f`。既有 0.19.0 完整審查紀錄為 4/6 有效配對、中位耗時比 0.984，見 [0.19.0 發布紀錄](releases/v0.19.0.md)。
+早期工作樹曾以 `v0.19.0` 的 commit `16706dc7b402a0c61de82cf5c24878075e1d1cff` 為機械比較基準；以 `git archive --format=zip v0.19.0` 保存的基準 ZIP SHA-256 為 `cec02ec624c41933f3f37814942729f22dd1be44fe69cbdb485ac701e52e13f3`。其發布內容準備 commit 為 `e23ebf5ba18c1eb7d8b7b62f1d41aa73bb72688f`。既有 0.19.0 完整審查紀錄為 4/6 有效配對、中位耗時比 0.984，見 [0.19.0 發布紀錄](releases/v0.19.0.md)。本輪有效基準與門檻列於本文件底部。
 
 **本輪計畫驗收尚未全部通過。** 自動化測試或固定草稿重播不能證明模型語意品質，也不能代替完整審查時間。未知的純模型時間、工具外往返及完整審查時間均不以 helper 秒數估算。
 
 | 驗收項 | 目標 | 目前狀態 |
 | --- | --- | --- |
-| 多 Repo 完整審查 | 兩類案例各三組有效配對，耗時比中位數 ≤ 0.85 | 尚未執行；無完整審查時間數據 |
-| 大型多 Repo 暖快取 helper | 五組交替配對的耗時比中位數 ≤ 0.75 | 路徑優化後一輪為 0.697，通過；優化前 0.792 未通過，保留兩輪 |
-| 單 Repo、冷啟動與主要情境 | 配對耗時比中位數 ≤ 1.05 | 最新單 Repo 及大型三模式各五組均通過；早期單 Repo 陸續啟動為 1.071 未通過，其他主要情境未完成 |
-| 語意品質 | 指定 P0–P3、安全反例、消費端及敏感內容案例無新增回歸 | 尚未完成指定模型對照 |
-| 三模型技能可靠性 | `gpt-6.1-sol`、`gpt-6.1-terra`、`gpt-6-astra`，均 `high`，比較無技能／0.19.0／候選 | 尚未執行 |
-| 平台矩陣 | Windows／Linux 及既有 Python 版本 | 本機為 Windows、Python 3.14；其餘尚未執行 |
+| 大型多 Repo 完整審查 | 內部變更及跨 Repo 變更各五組配對，中位耗時比 ≤ 0.90 | 尚未執行；無本輪完整審查時間數據 |
+| 大型多 Repo helper 暖快取 | 五組交替配對的耗時比中位數 ≤ 0.80 | 本輪待測；先前 0.20.0 快照紀錄僅為歷史量測 |
+| 大型多 Repo helper 冷啟動、陸續啟動 | 五組交替配對的耗時比中位數 ≤ 0.90 | 本輪待測；先前 0.20.0 快照紀錄僅為歷史量測 |
+| 單 Repo 完整審查 | 各主要情境五組配對，中位耗時比 ≤ 1.05 | 尚未執行；無本輪完整審查時間數據 |
+| 語意品質 | P0–P3、安全反例、消費端、AGENTS 範圍與敏感內容均通過獨立稽核 | 尚未完成指定模型對照 |
+| 三模型技能可靠性 | `gpt-6.1-sol`、`gpt-6.1-terra`、`gpt-6-astra`，均 `high`；比較無技能／0.20.1／候選 | 尚未執行 |
+| 平台矩陣 | Windows Python 3.10 與 3.14 | 本機為 Windows、Python 3.14；本輪 CI 尚未執行 |
 
 ## 已有檢查
 
@@ -57,6 +58,8 @@
 
 ## 可重播的 helper 測量
 
+以下原始 helper 數據是舊 0.20.0 快照的歷史紀錄。本輪工具要求傳入已固定的 0.20.1 skill，並核對版本與完整內容 hash。
+
 `tests/benchmark_flow.py` 按 cold／warm／staggered 模式交替執行，每個版本使用獨立 runtime，記錄準備、讀取／搜尋、驗證／發布、Git 程序數、CLI 次數、stdout／stderr、網路等待及各次原始結果。`--mechanical-v1` 在一次性 benchmark context 模擬舊 v1 政策，以同一已撰寫 v3 草稿比較機械變更；不代表新版 v2 語意判斷已通過。此選項僅供基準工具使用，不改寫實際審查 context。
 
 這裡的 cold 指新的 reviewer runtime；工具不清除作業系統的檔案快取。staggered 是先前收據仍有效時的陸續獨立啟動，重疊執行另由並行測試涵蓋。
@@ -66,14 +69,16 @@
 提供已實際審查的固定 scenario 後執行：
 
 ~~~powershell
-python -X utf8 -B tests/benchmark_flow.py --baseline "<封存的 0.19.0 來源>" --fixture-root "<固定 Git 工作區>" --scenario "<已審查 scenario.json>" --output-dir "<新的結果目錄>" --repeats 5 --mechanical-v1
+python -X utf8 -B tests/benchmark_flow.py --baseline "<驗收根目錄>/skills/baseline" --fixture-root "<固定 Git 工作區>" --scenario "<已審查 scenario.json>" --output-dir "<新的結果目錄>" --repeats 5
 ~~~
 
-大型 fixture 增加 `--large-multi-repo`，工具確認至少 12 個 Repo、12,000 個固定 head 檔案，再對暖快取套用 0.75；其他情境套用 1.05。比較使用各組 candidate／baseline 比值的中位數，而非兩個中位數相除。結果差異、失敗紀錄及全部原始數據應保留，不能挑最快重試。runner 要求必要讀取與命中在量測範圍內完整返回；需要未量測續讀時直接拒絕該次驗收。
+大型 fixture 增加 `--large-multi-repo`，工具確認至少 12 個 Repo、12,000 個固定 head 檔案，再對暖快取套用 0.80、冷啟動與陸續啟動套用 0.90；單 Repo 主要情境維持 1.05。比較使用各組 candidate／baseline 比值的中位數，而非兩個中位數相除。結果差異、失敗紀錄及全部原始數據應保留，不能挑最快重試。runner 要求必要讀取與命中在量測範圍內完整返回；需要未量測續讀時直接拒絕該次驗收。
 
 若同一輪操作無法在上限內完整返回，可用 `--operations-per-step 5` 等固定批次大小重播；兩版使用相同的操作順序與批次，所有增加的 step 往返與輸出均計時。`--warm-first` 只改變三種模式的量測順序，不減少配對。這些選項不把落盤摘要當作已讀，若任何批次仍需未量測的續讀，仍拒絕驗收。
 
-## 三模型與完整審查的待執行矩陣
+## 舊版 0.19.0 三模型比較矩陣（歷史）
+
+以下排程、命令與結果記錄的是先前以 0.19.0 為基準的矩陣；本輪有效基準、門檻及命令見本文件底部的「2026-10-29 全面優化實作與驗收狀態」。
 
 `tests/merge_acceptance_matrix.py` 是本輪專用的 parent-owned 驗收工具，不會呼叫模型或替審查者產生結論。它安排 117 個品質案例（13 類案例 × 三個模型 × 無技能／0.19.0／候選版），以及 `gpt-6.1-sol`、`high` 設定下的 18 次完整審查（大型內部變更、跨 Repo 變更、單 Repo 各三組雙版本配對）。新增案例包含一般 P2／P3、安全修復反例、內部值流入事件，以及兩個分支各自正常但合併後失敗的情境；父層 oracle 不放進審查工作區。
 
@@ -97,3 +102,45 @@ python tests/merge_acceptance_matrix.py summarize --root "<驗收根目錄>" --o
 每個父層 audit 需對照 oracle、報告及實際執行紀錄，明確填寫 `semantic.passed`、非空 `semantic.observations`、該案例在 `DIMENSIONS` 指定的布林判定，以及 `mechanical_checks` 的 `fixed_sources`、`no_secret_sentinel`、`no_post_publication_edits`、`expected_review_outcome`、`model_reasoning_verified`、`correct_skill_condition`、`no_gitlab_api`、`no_unexpected_remote`。例如 P0 案例的語意判定需同時填 `required_findings` 與 `actionability`。工具另核對報告 hash、計時收據和敏感字串；它不能憑結構檢查推導語意正確性。各版本的失敗都保留，無技能或舊版的失敗可供比較，候選版則須通過全部指定品質案例。
 
 彙整只對正確模型、設定、固定來源及語意／證據核對均通過的配對計時：兩類大型案例各須三組，中位配對耗時比須 ≤ 0.85，三種主要情境各自中位數須 ≤ 1.05。單一模型結果、缺少樣本或額外重試不會補足其他條件。此彙整只涵蓋模型品質與完整審查時間；helper、平台矩陣及封裝仍須分別通過。
+
+## 2026-10-29 全面優化實作與驗收狀態
+
+本節記錄新一輪優化；前文的歷史結果與失敗均保留，不作為本輪通過證據。
+
+### 固定基準
+
+- Git commit：`e2430b69b005226a1d77402bb090289c74e31dc2`
+- 技能版本：`0.20.1`
+- `skills/merge-reviewer` 全目錄（正規化相對路徑排序，逐檔 SHA-256 彙總）的固定內容 digest：`2a1d524800860595248ae232dc8ec3aec228ea71e620bd262a08ec44335e1d6a`
+- 矩陣會從這個本機 commit 封存技能，並逐一驗證 commit、版本與 `SKILL.md` hash。候選版使用準備時固定的技能 hash。
+
+### 預定門檻（尚待實測）
+
+| 情境 | 五組交替配對的中位比值 | 狀態 |
+|---|---:|---|
+| 大型多 Repo，內部變更完整審查 | 候選／基準 ≤ 0.90 | 待測 |
+| 大型多 Repo，跨 Repo 變更完整審查 | 候選／基準 ≤ 0.90 | 待測 |
+| 單 Repo 各主要情境完整審查 | 候選／基準 ≤ 1.05 | 待測 |
+| 大型多 Repo helper 暖快取 | 候選／基準 ≤ 0.80 | 待測 |
+| 大型多 Repo helper 冷啟動、陸續啟動 | 候選／基準 ≤ 0.90 | 待測 |
+| 固定本機來源／間接 Repo 在快照後的遠端存取 | 0 | 待測 |
+| 本流程 GitLab API 呼叫 | 0 | 待測 |
+
+完整審查時間從 agent 開始操作到報告完成，包含模型分析、工具往返、續讀與草稿修正。Helper 時間獨立列出。Helper 收據觀測 Git 程序數、fetch 命令數、Git 程序時間、同步等待、封裝等待、快取命中、start／step／finish 時間與完整驗證數；fetch 命令數不冒充實際連線數，實際連線證據目前標示為未觀測，模型分析時間與 token 數維持未知。
+
+### 本輪功能驗證狀態
+
+- 驗收矩陣固定使用上述 commit/hash，完整審查速度採五組交替配對，並設獨立單 Repo 5% 回歸上限。
+- 新矩陣共 309 項：每模型／技能條件 31 個品質執行（279 項），以及 `local`、`mixed`、`single` 各五組 baseline／candidate 完整審查配對（30 項）。P0、所有安全反例及跨分支案例在每個模型／技能條件下各重複三次。
+- 盲測新增適用的根目錄 `AGENTS.md` 規則、巢狀不適用規則及相反的 README 干擾指示案例，含破壞性變更與相容安全變更兩種 oracle。
+- 本輪從固定 commit 建立基準，不再傳入舊 `--baseline-skill` 路徑：
+
+  ```powershell
+  python -X utf8 -B tests/merge_acceptance_matrix.py prepare --root "<全新且位於 Repo 外的驗收根目錄>" --candidate-skill skills/merge-reviewer
+  ```
+
+- 先前探索選取的 13 個測試有 4 項通過、9 項受 Windows 沙箱的 Git transport 限制；這是歷史探索結果，不代表本輪候選版完整驗收。
+- 尚未完成的驗收包括網路與 TTL 邊界矩陣、固定證據與搜尋等價矩陣、Windows／Python 3.10／3.14 CI，以及三模型 `high` 設定的無 Skill／基準 Skill／候選 Skill 盲測。P0、安全反例與跨分支整合案例仍需各重複三次。
+- 關鍵漏報、誤報、錯誤宣告完成或敏感資料外洩任一發生時，品質閘門不通過。所有失敗與重跑都須留存。
+
+本輪必須同時通過效能、來源政策、語意品質與相容性門檻後才能標記完成；目前各測量門檻仍是目標，不能引用既有 helper 的局部加速紀錄代替。

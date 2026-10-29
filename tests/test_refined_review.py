@@ -28,6 +28,57 @@ class BoundaryV2Tests(ReviewFixture):
         self.make_repo("consumer")
         self.commit()
 
+    def test_coordinated_peer_snapshots_run_in_two_isolated_workers(self):
+        self.make_repo("consumer-two")
+        current, peak = 0, 0
+        lock = threading.Lock()
+        original = workspace.add_source
+
+        def delayed(context, repo, name, reference, runner, **kwargs):
+            nonlocal current, peak
+            if repo["path"] != str(self.repo) and name == "head":
+                with lock:
+                    current += 1
+                    peak = max(peak, current)
+                threading.Event().wait(.1)
+                try:
+                    return original(context, repo, name, reference, runner, **kwargs)
+                finally:
+                    with lock:
+                        current -= 1
+            return original(context, repo, name, reference, runner, **kwargs)
+
+        arguments = review_flow.parser().parse_args(["start", "--workspace", str(self.root),
+            "--project", str(self.repo), "--base", "main", "--head", "feature"])
+        with mock.patch.object(workspace, "add_source", side_effect=delayed):
+            result = review_flow.start(arguments)
+        self.addCleanup(review_session.cleanup_if_owned, result["context_dir"])
+        self.assertEqual(2, peak)
+        self.assertEqual(3, len(result["repositories"]))
+
+    def test_unavailable_peer_snapshot_keeps_multi_repo_context_incomplete(self):
+        original = workspace.add_source
+
+        def fail_peer(context, repo, name, reference, runner, **kwargs):
+            if Path(repo["path"]).resolve() != self.repo.resolve() and name == "head":
+                raise api.ReviewContextError("synthetic missing peer object")
+            return original(context, repo, name, reference, runner, **kwargs)
+
+        with mock.patch.object(workspace, "add_source", side_effect=fail_peer):
+            _context, manifest = self.capture()
+        peer = next(row for row in manifest["repositories"] if row["path"] != str(self.repo.resolve()))
+        self.assertEqual("error", peer["state"])
+        self.assertFalse(manifest["context_complete"])
+        self.assertTrue(any(peer["id"] in gap for gap in manifest["context_gaps"]))
+
+    def test_object_format_is_probed_once_when_each_snapshot_is_sealed(self):
+        with mock.patch.object(api, "run_git", wraps=api.run_git) as run:
+            _context, manifest = self.capture()
+        probes = [call for call in run.call_args_list
+                  if call.args[1] == ["rev-parse", "--show-object-format"]]
+        captured = sum(row["state"] == "captured" for row in manifest["repositories"])
+        self.assertEqual(captured, len(probes))
+
     def contained(self):
         context, manifest = self.capture(policy=contract_boundary.V2_POLICY)
         root = manifest["required_coverage"][0]
@@ -103,10 +154,31 @@ class BoundaryV2Tests(ReviewFixture):
 
     def test_compact_draft_expands_only_recorded_read_lines(self):
         context, manifest, draft = self.contained()
+        compact_template = review_flow.draft_template(manifest, "compact")
+        self.assertEqual(review_authoring.SCHEMA, compact_template["schema"])
+        self.assertNotIn("report_layout", compact_template)
+        self.assertTrue(all("change_id" in row and "path" not in row for row in compact_template["coverage"]))
+        expanded_template = review_authoring.expand(compact_template, manifest, context)
+        self.assertEqual([tuple(row[key] for key in ("repo", "source", "path"))
+                          for row in manifest["required_coverage"]],
+                         [tuple(row[key] for key in ("repo", "source", "path"))
+                          for row in expanded_template["coverage"]])
+        initial = review_flow.initial_read_requests(manifest)
+        reads = [row for row in initial if row["op"] == "read"]
+        self.assertTrue(any(row["source"] == "base" for row in reads))
+        self.assertTrue(any(row["source"] == "head" for row in reads))
+        self.assertTrue(any(row["op"] == "patch" for row in initial))
+        self.assertTrue(any(row["op"] == "instructions" for row in initial))
+        self.assertEqual(len(reads), len({(row["repo"], row["source"], row["path"]) for row in reads}))
         root = manifest["required_coverage"][0]
-        outcome = workspace.ordered_step(context, manifest, [{"id": "read-change", "op": "read",
-            "repo": root["repo"], "source": root["source"], "path": root["path"],
-            "line_start": 1, "line_end": 1}], api)
+        operation = {"id": "read-change", "op": "read", "repo": root["repo"],
+                     "source": root["source"], "path": root["path"], "line_start": 1, "line_end": 1}
+        def copy_link(source, target):
+            Path(target).write_bytes(Path(source).read_bytes())
+        with mock.patch.object(review_runtime.os, "link", side_effect=copy_link):
+            initial_result = workspace.ordered_step(context, manifest, initial, api)
+            self.assertTrue(initial_result["complete"])
+            outcome = workspace.ordered_step(context, manifest, [operation], api)
         self.assertTrue(outcome["complete"])
         compact = copy.deepcopy(draft)
         compact["schema"] = review_authoring.SCHEMA
@@ -129,12 +201,35 @@ class BoundaryV2Tests(ReviewFixture):
         with self.assertRaisesRegex(workspace_report.DraftValidationError, "conflicts with technical_trigger"):
             workspace_report.validate(conflicting, manifest, context)
 
+    def test_initial_read_requests_reuse_one_fixed_path_index(self):
+        _context, manifest, _draft = self.contained()
+
+        class CountedFiles(list):
+            iterations = 0
+
+            def __iter__(self):
+                self.iterations += 1
+                return super().__iter__()
+
+        selected = workspace.repository(manifest, manifest["selected_repo"])
+        counted = {}
+        for name, source in selected["sources"].items():
+            source["files"] = counted[name] = CountedFiles(source["files"])
+        requests = review_flow.initial_read_requests(manifest)
+        used = {row["source"] for row in requests if row["op"] == "read"}
+        self.assertTrue(requests)
+        self.assertTrue({"base", "head"} <= used)
+        self.assertTrue(all(counted[name].iterations == 1 for name in used))
+
     def test_compact_multi_repo_draft_checks_and_publishes_through_facade(self):
         args = review_flow.parser().parse_args(["start", "--workspace", str(self.root), "--project", str(self.repo),
-                                               "--base", "main", "--head", "feature"])
+                                               "--base", "main", "--head", "feature", "--draft-format", "compact"])
         start = review_flow.start(args)
         context, runtime, identifier = Path(start["context_dir"]), Path(start["runtime_root"]), start["request_id"]
         self.addCleanup(review_session.cleanup_if_owned, context)
+        self.assertEqual(review_authoring.SCHEMA, json.loads((context / "draft.json").read_text(encoding="utf-8"))["schema"])
+        self.assertTrue(Path(start["initial_reads_file"]).is_file())
+        self.assertGreater(start["initial_read_count"], 0)
         manifest = workspace.load(context)
         root = manifest["required_coverage"][0]
         outcome = review_flow.step(runtime, identifier, [{"id": "read-change", "op": "read", "repo": root["repo"],
@@ -177,6 +272,21 @@ class BoundaryV2Tests(ReviewFixture):
         with mock.patch.object(api, "run_git_capture", side_effect=AssertionError("persistent result was not reused")):
             self.assertEqual(combined, [fresh.run(repo, "head", query) for query in queries])
 
+    def test_batched_search_supports_utf8_paths_and_queries(self):
+        self.commit("付款欄位 = '資料值'\n", "中文-é.txt")
+        context, manifest = self.capture()
+        repo = workspace.repository(manifest, manifest["selected_repo"])
+        queries = ["付款欄位", "資料值"]
+        requests = [{"repo": repo["id"], "source": "head", "query": query} for query in queries]
+        cache = workspace.FixedSearchCache(context, api)
+        with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
+            cache.prefetch(manifest, requests)
+            combined = [cache.run(repo, "head", query) for query in queries]
+        independent = [workspace.FixedSearchCache(context, api).run(repo, "head", query) for query in queries]
+        self.assertEqual(independent, combined)
+        self.assertEqual(1, sum(call.args[1][0] == "grep" for call in calls.call_args_list))
+        self.assertTrue(all("付款欄位" in result[1] for result in combined))
+
     def test_unicode_separator_does_not_create_phantom_evidence_lines(self):
         self.commit("contract = 'new\u0085value'\nsecond = 2\n")
         context, manifest, draft = self.contained()
@@ -186,7 +296,7 @@ class BoundaryV2Tests(ReviewFixture):
         self.assertIn("\u0085", result["lines"][0]["text"])
         self.assertTrue(workspace_report.validate(draft, manifest, context)["review_complete"])
 
-    def test_unusual_path_uses_independent_searches(self):
+    def test_ordinary_utf8_path_uses_batched_search(self):
         self.commit("contract = 'new'\n", relative="特殊 路徑.py")
         context, manifest, _ = self.contained()
         repo = workspace.repository(manifest, manifest["selected_repo"])
@@ -196,8 +306,23 @@ class BoundaryV2Tests(ReviewFixture):
         with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
             cache.prefetch(manifest, requests)
             values = [cache.run(repo, "head", query) for query in queries]
-        self.assertEqual(2, sum(call.args[1][0] == "grep" for call in calls.call_args_list))
+        self.assertEqual(1, sum(call.args[1][0] == "grep" for call in calls.call_args_list),
+                         [call.args[1] for call in calls.call_args_list])
         self.assertEqual(values, [workspace.FixedSearchCache(context, api).run(repo, "head", query) for query in queries])
+
+    def test_special_path_uses_independent_searches(self):
+        self.commit("contract = 'new'\n", relative="unusual (file).py")
+        context, manifest, _ = self.contained()
+        repo = workspace.repository(manifest, manifest["selected_repo"])
+        cache = workspace.FixedSearchCache(context, api)
+        queries = ["contract", "new"]
+        requests = [{"repo": repo["id"], "source": "head", "query": query} for query in queries]
+        with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
+            cache.prefetch(manifest, requests)
+            values = [cache.run(repo, "head", query) for query in queries]
+        self.assertEqual(2, sum(call.args[1][0] == "grep" for call in calls.call_args_list))
+        self.assertEqual(values, [workspace.FixedSearchCache(context, api).run(repo, "head", query)
+                                  for query in queries])
 
 
 class ProjectionTests(unittest.TestCase):
@@ -278,6 +403,50 @@ class ProjectionTests(unittest.TestCase):
 
 
 class RefCoordinationTests(unittest.TestCase):
+    def setUp(self):
+        # These cases exercise the local lock/sync logic. The sandbox places
+        # temp roots below this checkout, while production correctly rejects
+        # runtimes inside any Git Repo.
+        def local_runtime(path, *args, **kwargs):
+            value = Path(path)
+            if kwargs.get("create"):
+                value.mkdir(parents=True, exist_ok=True)
+            return value
+
+        for patcher in (
+                mock.patch.object(review_coordinator, "runtime", side_effect=local_runtime),
+                mock.patch.object(review_coordinator, "plain", side_effect=lambda path: Path(path)),
+                mock.patch.object(review_coordinator.git_network_lease, "_plain_directory",
+                                  side_effect=lambda path: Path(path))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_pack_slots_allow_two_workers_and_nested_pack_is_reentrant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = review_coordinator.runtime(Path(directory) / "runtime", create=True)
+            owner = review_coordinator.Coordination(root, uuid.uuid4().hex)
+            barrier = threading.Barrier(2)
+            lock = threading.Lock()
+            active, peak = 0, 0
+
+            def pack(index):
+                nonlocal active, peak
+                with owner.packing():
+                    with owner.packing():
+                        with lock:
+                            active += 1
+                            peak = max(peak, active)
+                        if index < 2:
+                            barrier.wait(timeout=5)
+                        threading.Event().wait(.05)
+                        with lock:
+                            active -= 1
+
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                list(pool.map(pack, range(3)))
+            self.assertEqual(2, peak)
+            self.assertGreaterEqual(owner.timings["packing_wait_seconds"], 0)
+
     def test_ttl_exact_boundary_and_invalidation_during_fetch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = review_coordinator.runtime(Path(directory) / "runtime", create=True)

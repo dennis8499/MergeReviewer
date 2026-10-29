@@ -7,6 +7,14 @@ metadata:
 
 # Merge Reviewer
 
+## 必須遵守的來源與審查規則
+
+- `main`、`feature/payment` 等未加 remote 前綴的分支只解析為本機 ref；不得從 upstream 推定需要同步。只有明確指定 `origin/main` 這類遠端 ref 才能依五分鐘同步收據同步該 ref；`--refresh` 只更新本次指定且需要更新的 ref。
+- 間接 Repo 一律固定並審查本機 `HEAD`。分支審查不呼叫 GitLab MR、分支或檔案 API。快照完成後，讀取、搜尋、修稿、`check`、`finish` 與恢復都使用本機固定證據；來源不足就列出缺口並維持未完成。
+- 單 Repo 必須檢查每個變更、相關呼叫端、base/head、適用的 merge-parent 與 merge-preview。多 Repo 只有一個受審 Repo，其餘 Repo 只用於契約消費端追查；按證據標示 `contained`、`propagates` 或 `unresolved`。
+- 只回報本次變更引入、可重現或可由固定證據推導且可修正的缺陷，保留 P0–P3，說明觸發條件、影響範圍、修正方向與 Repo／來源／SHA／路徑／行號。區分靜態推導與實際重現，遮蔽敏感值；排除既有問題、已修復問題及安全重構誤報。
+- 逐層套用根目錄與巢狀 `AGENTS.md`：只採用涵蓋目標路徑的規則，並檢查相反的安全範例。零命中、保存 artifact、helper 成功都不能代替語意判斷或表示審查完成；必要證據未讀完、關鍵路徑 unresolved 或安全反例未核對時不得標記完成。
+
 由執行本 Skill 的 agent 依 Codex Code Review 準則判斷本次引入的可修正問題及 P0–P3；helper 準備固定證據、驗證覆蓋及發布。helper 成功不代表語意審查完成。正常啟動無條件破壞整批持久資料的 P0 例子及條件性影響的 P1 邊界，見[審查規則](references/review-rules.md)。
 
 開始時讀[審查規則](references/review-rules.md)，使用 start 回傳的固定索引與草稿。操作或續讀 artifact 查[操作範例](references/session-workflow.md)；多 Repo 判定前讀[契約邊界](references/contract-boundaries.md)；填精簡草稿查[草稿格式](references/authoring.md)，舊草稿查[v3 契約](references/workspace-review.md)。同層 `../output-style/SKILL.md` 存在時套用其情境風格，否則用[報告風格](references/report-style.md)。適用的 `AGENTS.md` 以固定內容為準。
@@ -16,7 +24,7 @@ metadata:
 ## 1. start：固定證據與草稿
 
 ~~~powershell
-python "<skill-dir>/scripts/review_session.py" start --workspace "<declared-root>" --project "<Repo-name-or-path>" --base "<base>" --head "<head>"
+python "<skill-dir>/scripts/review_session.py" start --workspace "<declared-root>" --project "<Repo-name-or-path>" --base "<base>" --head "<head>" --draft-format compact
 ~~~
 
 已宣告 `.code-workspace` 時加 `--workspace-file "<file>"`。群組根目錄預設使用 Repo 外的 `.review-runtime/`；根目錄本身是 Git Repo 時指定 Repo 外可寫的 `--runtime-root`。工作台提供的 runtime／auth-scope 一併沿用。
@@ -30,10 +38,10 @@ python "<skill-dir>/scripts/review_session.py" start --workspace "<declared-root
 ## 2. step：閱讀、判斷及必要追查
 
 ~~~powershell
-python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" --request-id "<id>" --requests-file "<context>/round-1.json"
+python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" --request-id "<id>" --requests-file "<initial_reads_file>"
 ~~~
 
-每輪合併已知固定讀取、契約註冊及搜尋；各操作給唯一 ID，先登錄父契約，再登錄子契約及搜尋。
+首輪將 start 產生的 `initial_reads_file` 原樣交給 step，先讀取已擷取 diff、適用的 `AGENTS.md`、改動檔及必要 base／head／merge-preview／parent 內容；逐項讀完再決定動態呼叫鏈追查。後續每輪合併固定讀取、契約註冊及搜尋；各操作給唯一 ID，先登錄父契約，再登錄子契約及搜尋。
 
 逐一判斷 `required_coverage`、`required_merge_views`，讀取基礎版本、最終內容及必要 parent。二進位、刪除、改名及 submodule 也需明確判定；`ancestor-noop/v1` 的空集合依 helper 推導。
 

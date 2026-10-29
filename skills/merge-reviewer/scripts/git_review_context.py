@@ -20,6 +20,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -90,6 +92,8 @@ GIT_TIMEOUT_SECONDS = contextvars.ContextVar(
 )
 NETWORK_ACTIVITY = contextvars.ContextVar("merge_reviewer_network_activity", default=None)
 CAPTURE_PHASE = contextvars.ContextVar("merge_reviewer_capture_phase", default="local-preflight")
+GIT_PROCESS_ACTIVITY = contextvars.ContextVar("merge_reviewer_git_process_activity", default=None)
+_GIT_ACTIVITY_LOCK = threading.Lock()
 
 
 def empty_network_activity() -> dict[str, int]:
@@ -100,6 +104,25 @@ def empty_network_activity() -> dict[str, int]:
 def network_activity() -> dict[str, int]:
     """Return capture-scoped fetch command counts, never connection counts."""
     return dict(NETWORK_ACTIVITY.get() or empty_network_activity())
+
+
+def empty_git_process_activity() -> dict[str, float | int]:
+    return {"command_count": 0, "fetch_command_count": 0, "process_seconds": 0.0}
+
+
+def git_process_activity() -> dict[str, float | int]:
+    """Return observed Git process counts and time; it is not connection evidence."""
+    return dict(GIT_PROCESS_ACTIVITY.get() or empty_git_process_activity())
+
+
+def _record_git_process(args: Sequence[str], elapsed: float) -> None:
+    activity = GIT_PROCESS_ACTIVITY.get()
+    if activity is None:
+        return
+    with _GIT_ACTIVITY_LOCK:
+        activity["command_count"] += 1
+        activity["fetch_command_count"] += int(bool(args) and args[0] == "fetch")
+        activity["process_seconds"] += max(0.0, elapsed)
 
 
 def capture_phase(value: str) -> None:
@@ -134,6 +157,7 @@ def run_git(
     if not (args and args[0] == "fetch"):
         # Older Git ignores GIT_NO_LAZY_FETCH; deny implicit transports too.
         command_env["GIT_ALLOW_PROTOCOL"] = ""
+    started = time.perf_counter()
     try:
         runner = git_network_lease.run if args and args[0] == "fetch" else subprocess.run
         options = {}
@@ -155,10 +179,12 @@ def run_git(
             **options,
         )
     except subprocess.TimeoutExpired as exc:
+        _record_git_process(args, time.perf_counter() - started)
         raise ReviewContextError(
             f"Git 指令逾時（{GIT_TIMEOUT_SECONDS.get():g} 秒）：git {' '.join(args)}",
             hint="請確認 repository、磁碟或遠端連線狀態；可使用 --git-timeout 增加等待時間後重試。",
         ) from exc
+    _record_git_process(args, time.perf_counter() - started)
     if check and completed.returncode != 0:
         stderr = completed.stderr.decode("utf-8", errors="replace")
         raise GitCommandError(args, completed.returncode, stderr)
@@ -182,6 +208,7 @@ def run_git_capture(
     command_env["GIT_NO_REPLACE_OBJECTS"] = "1"
     command_env["GIT_TERMINAL_PROMPT"] = "0"
     command_env["GIT_ALLOW_PROTOCOL"] = ""
+    started = time.perf_counter()
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -192,11 +219,13 @@ def run_git_capture(
             timeout=GIT_TIMEOUT_SECONDS.get(),
         )
     except subprocess.TimeoutExpired as exc:
+        _record_git_process(args, time.perf_counter() - started)
         message = (
             f"Git 指令逾時（{GIT_TIMEOUT_SECONDS.get():g} 秒）："
             f"git {' '.join(args)}"
         )
         return 124, "", message
+    _record_git_process(args, time.perf_counter() - started)
     return (
         completed.returncode,
         completed.stdout.decode("utf-8", errors="replace"),
@@ -211,6 +240,7 @@ def git_ok(repo: Path, args: Sequence[str]) -> bool:
     command_env["GIT_NO_REPLACE_OBJECTS"] = "1"
     command_env["GIT_TERMINAL_PROMPT"] = "0"
     command_env["GIT_ALLOW_PROTOCOL"] = ""
+    started = time.perf_counter()
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -221,10 +251,12 @@ def git_ok(repo: Path, args: Sequence[str]) -> bool:
             timeout=GIT_TIMEOUT_SECONDS.get(),
         )
     except subprocess.TimeoutExpired as exc:
+        _record_git_process(args, time.perf_counter() - started)
         raise ReviewContextError(
             f"Git 指令逾時（{GIT_TIMEOUT_SECONDS.get():g} 秒）：git {' '.join(args)}",
             hint="請確認 repository 狀態；可使用 --git-timeout 增加等待時間後重試。",
         ) from exc
+    _record_git_process(args, time.perf_counter() - started)
     return completed.returncode == 0
 
 
@@ -1115,7 +1147,17 @@ def _build_manifest(args: argparse.Namespace, *, frozen_refs: Mapping[str, Any] 
     workspace_file = normalize_path(args.workspace_file) if args.workspace_file else None
     if workspace_file and not workspace_file.exists():
         raise ReviewContextError(f"VS Code workspace 不存在：{workspace_file}")
-    repo, repositories = choose_repository(workspace, workspace_file, args.project)
+    discovery = getattr(args, "_workspace_discovery", None)
+    if discovery:
+        declared, original_file, roots, repositories, seed, original_digest = discovery
+        current_digest = hashlib.sha256(workspace_file.read_bytes()).hexdigest() if workspace_file else None
+        if workspace != declared or workspace_file != original_file or current_digest != original_digest:
+            raise ReviewContextError("workspace identity changed during repository discovery")
+        repo = normalize_path(args.project)
+        if repo != seed or repo not in repositories or not any(repo.is_relative_to(root) for root in roots):
+            raise ReviewContextError("selected Repo differs from the verified workspace discovery")
+    else:
+        repo, repositories = choose_repository(workspace, workspace_file, args.project)
     before = before_snapshot if before_snapshot is not None else snapshot(repo)
     base_input, head_input = args.base, args.head
     pinned = frozen_refs if frozen_refs is not None else pin_branch_refs(repo, args)

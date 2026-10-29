@@ -29,9 +29,33 @@ class SearchReuseTests(ReviewFixture):
             self.assertTrue(workspace.ordered_step(context, manifest, [dict(operation, id="second")], api)["complete"])
         self.assertEqual(1, sum(call.args[1][0] == "grep" for call in run.call_args_list))
         self.assertEqual(2, len({row["id"] for row in manifest["searches"][-2:]}))
+        with mock.patch.object(api, "run_git_capture", side_effect=AssertionError("completed checkpoint was replayed")):
+            reused = workspace.ordered_step(context, manifest, [operation], api)
+        self.assertTrue(reused["operations"][0]["reused"])
         with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as run:
             workspace_report.validate(draft, manifest, context)
         self.assertTrue(any(call.args[1][0] == "grep" for call in run.call_args_list))
+
+    def test_local_refs_do_not_fetch_or_follow_configured_upstream(self):
+        api.run_git(self.repo, ["remote", "add", "origin", str(self.root / "missing-remote.git")])
+        api.run_git(self.repo, ["config", "branch.feature.remote", "origin"])
+        api.run_git(self.repo, ["config", "branch.feature.merge", "refs/heads/feature"])
+        with mock.patch.object(api, "run_git", wraps=api.run_git) as run:
+            context, manifest = self.capture(base="main", head="feature")
+        self.assertEqual(0, manifest["network_activity"]["fetch_attempt_count"])
+        self.assertFalse(any(call.args[1][0] == "fetch" for call in run.call_args_list))
+
+    def test_steps_and_publication_replay_only_frozen_local_evidence(self):
+        context, manifest = self.capture()
+        draft = self.draft(context, manifest)
+        contract = manifest["changed_contracts"][0]
+        operation = {"id": "frozen-search", "op": "search", "query": contract["symbol"],
+                     "contract": contract["id"],
+                     "repo": [manifest["selected_repo"]]}
+        with mock.patch.object(api, "run_git", wraps=api.run_git) as run:
+            self.assertTrue(workspace.ordered_step(context, manifest, [operation], api)["complete"])
+            workspace_report.validate(draft, manifest, context)
+        self.assertFalse(any(call.args[1][0] == "fetch" for call in run.call_args_list))
 
     def test_corrupt_cache_is_discarded_and_tampered_ledger_is_rejected(self):
         context, manifest = self.capture()

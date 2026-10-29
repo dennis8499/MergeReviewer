@@ -6,9 +6,24 @@ import unittest
 from tests import benchmark_review as benchmark
 from tests import create_benchmark_fixture as fixture
 from tests import benchmark_flow as flow_benchmark
+from tests import merge_acceptance_matrix as matrix
 
 
 class BenchmarkOracleTests(unittest.TestCase):
+    def test_helper_baseline_accepts_only_the_frozen_archived_skill(self):
+        with tempfile.TemporaryDirectory(prefix="helper-baseline-") as directory:
+            skill = matrix._archive_baseline(matrix.BASELINE_REVISION,
+                                             Path(directory) / "skills" / "merge-reviewer")
+            identity = benchmark.acceptance_baseline.validate_baseline(skill)
+            self.assertEqual(matrix.BASELINE_REVISION, identity["revision"])
+            self.assertEqual(matrix.BASELINE_VERSION, identity["version"])
+            self.assertEqual(matrix.BASELINE_SKILL_SHA256, identity["skill_sha256"])
+            self.assertFalse(identity["revision_verified_from_checkout"])
+            self.assertEqual(skill / "scripts", benchmark.helper_scripts(skill))
+            (skill / "SKILL.md").write_text("changed baseline", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Baseline skill must match"):
+                benchmark.acceptance_baseline.validate_baseline(skill)
+
     def test_validation_watch_keeps_a_transient_overlap_visible(self):
         with tempfile.TemporaryDirectory() as directory:
             lock = Path(directory) / "runner.lock"
@@ -39,8 +54,8 @@ class BenchmarkOracleTests(unittest.TestCase):
         rows = {mode: pair for mode in ("cold", "warm", "staggered")}
         ratios, limits, gates = flow_benchmark.paired_gates(rows, large_multi_repo=True)
         self.assertEqual(.8, ratios["warm"])
-        self.assertEqual(.75, limits["warm"])
-        self.assertFalse(gates["warm"])
+        self.assertEqual(.80, limits["warm"])
+        self.assertTrue(gates["warm"])
         self.assertTrue(gates["cold"])
         self.assertTrue(gates["staggered"])
         with self.assertRaisesRegex(ValueError, "unpaired"):

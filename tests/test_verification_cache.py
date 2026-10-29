@@ -23,6 +23,34 @@ class VerificationCacheTests(ReviewFixture):
         self.assertEqual(1, sum(command[0] == "cat-file" for command in commands))
         self.assertFalse(any(command[0] == "hash-object" for command in commands))
 
+    def test_source_path_inventory_is_indexed_once_per_read_operation(self):
+        context, manifest = self.capture()
+        seed = workspace.repository(manifest, manifest["selected_repo"])
+        source = seed["sources"]["head"]
+
+        class CountedInventory(list):
+            iterations = 0
+
+            def __iter__(self):
+                self.iterations += 1
+                return super().__iter__()
+
+        inventory = CountedInventory(source["files"])
+        source["files"] = inventory
+        cache = workspace.FixedSourceCache(context, api)
+        self.assertEqual(b"contract = 'new'\n", cache.read(seed, "head", "app.py"))
+        self.assertEqual(b"contract = 'new'\n", cache.read(seed, "head", "app.py"))
+        self.assertEqual(1, inventory.iterations)
+
+    def test_changed_indexed_path_rebuilds_before_accepting_a_read(self):
+        context, manifest = self.capture()
+        seed = workspace.repository(manifest, manifest["selected_repo"])
+        cache = workspace.FixedSourceCache(context, api)
+        cache.read(seed, "head", "app.py")
+        seed["sources"]["head"]["files"][0]["path"] = "renamed.py"
+        with self.assertRaisesRegex(ValueError, "path is not a fixed blob"):
+            cache.read(seed, "head", "app.py")
+
     def test_cached_reads_recheck_each_fixed_snapshot_child_for_links(self):
         context, manifest = self.capture()
         seed = workspace.repository(manifest, manifest["selected_repo"])

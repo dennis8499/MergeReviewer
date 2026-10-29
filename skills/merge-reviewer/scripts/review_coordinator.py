@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import threading
 import time
 import uuid
 
@@ -168,7 +169,9 @@ class Coordination:
         self.notify, self.refresh, self.auth_scope = notify, refresh, auth_scope
         self.cancel_file = self.root / "jobs" / (request_id + ".cancel")
         self.pins, self.syncs, self.pack_hits = {}, [], 0
-        self._packing = 0
+        self._packing = threading.local()
+        self._phase_lock = threading.Lock()
+        self._metrics_lock = threading.Lock()
         self._last_phase = None
         self._phase_started = time.perf_counter()
         self.timings = {}
@@ -205,16 +208,27 @@ class Coordination:
 
     def phase(self, value, **fields):
         self.check()
-        tick = time.perf_counter()
-        if self._last_phase:
-            previous = self._last_phase[0]
-            self.timings[previous] = self.timings.get(previous, 0) + tick - self._phase_started
-        self._phase_started = tick
-        signature = (value, fields)
-        changed = self._last_phase != signature
-        self._last_phase = signature
-        if self.notify and changed:
-            self.notify(value, fields)
+        with self._phase_lock:
+            tick = time.perf_counter()
+            if self._last_phase:
+                previous = self._last_phase[0]
+                self.timings[previous] = self.timings.get(previous, 0) + tick - self._phase_started
+            self._phase_started = tick
+            signature = (value, fields)
+            changed = self._last_phase != signature
+            self._last_phase = signature
+            if self.notify and changed:
+                self.notify(value, fields)
+
+    def finish_phase(self):
+        """Close the active phase so ready/published metrics include its tail."""
+        with self._phase_lock:
+            tick = time.perf_counter()
+            if self._last_phase:
+                previous = self._last_phase[0]
+                self.timings[previous] = self.timings.get(previous, 0) + tick - self._phase_started
+            self._phase_started = tick
+            self._last_phase = None
 
     @contextmanager
     def activate(self):
@@ -226,30 +240,43 @@ class Coordination:
 
     @contextmanager
     def packing(self):
-        if self._packing:
-            yield
+        depth = getattr(self._packing, "depth", 0)
+        if depth:
+            self._packing.depth = depth + 1
+            try:
+                yield
+            finally:
+                self._packing.depth -= 1
             return
+        waiting = time.perf_counter()
         deadline = time.monotonic() + 180
         chosen = None
-        while chosen is None:
-            self.check()
-            for slot in range(2):
-                lock = FileLock(self.root / "pack-slots" / f"{slot}.lock")
-                if lock.acquire(blocking=False):
-                    chosen = lock
-                    break
-            if chosen is None:
-                self.phase("waiting-pack")
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("Local snapshot packing quota is busy.")
-                time.sleep(.05)
-        self._packing += 1
         try:
-            self.phase("snapshot-capture")
+            while chosen is None:
+                self.check()
+                for slot in range(2):
+                    lock = FileLock(self.root / "pack-slots" / f"{slot}.lock")
+                    if lock.acquire(blocking=False):
+                        chosen = lock
+                        break
+                if chosen is None:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Local snapshot packing quota is busy.")
+                    time.sleep(.05)
+        finally:
+            with self._metrics_lock:
+                self.timings["packing_wait_seconds"] = (self.timings.get("packing_wait_seconds", 0)
+                                                         + time.perf_counter() - waiting)
+        self._packing.depth = 1
+        started = time.perf_counter()
+        try:
             yield
         finally:
-            self._packing -= 1
+            self._packing.depth = 0
             chosen.release()
+            with self._metrics_lock:
+                self.timings["packing_seconds"] = (self.timings.get("packing_seconds", 0)
+                                                   + time.perf_counter() - started)
 
     def sync(self, repo, remote, targets, api, fetch):
         self._in_sync = True
@@ -434,10 +461,10 @@ class Coordination:
             self.check()
             if entry.exists():
                 try:
-                    self._restore_peer(context, repo, entry, api)
+                    with self.packing():
+                        self._restore_peer(context, repo, entry, api)
                     os.utime(entry, None)
-                    self.pack_hits += 1
-                    return
+                    return True
                 except (ValueError, KeyError, TypeError, OSError, api.ReviewContextError):
                     from review_workspace import safe_path
                     destination = safe_path(context, f"repos/{repo['id']}/snapshot.git")
@@ -468,6 +495,7 @@ class Coordination:
                 if temporary.exists():
                     remove_owned(temporary, cache_root)
         self._prune_packs()
+        return False
 
     def _restore_peer(self, context, repo, entry, api):
         from review_workspace import safe_path, source_environment, require, write_snapshot_refs

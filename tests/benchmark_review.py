@@ -1,9 +1,9 @@
 """Compare helper cost using an authored fixed-source review, never model decisions.
 
-Run with --baseline pointing to an unchanged source checkout, --fixture-root to
-the isolated Git workspace, and --scenario to a JSON object containing ordered
-contracts, reads, searches and the actual review draft. All output goes to
---output-dir. The same fixed commits/draft are used for both implementations.
+Run with --baseline pointing to the exact frozen source checkout or extracted
+skill directory, --fixture-root to the isolated Git workspace, and --scenario
+to a JSON object containing ordered contracts, reads, searches and the actual
+review draft. The baseline version and full skill hash are checked before timing.
 """
 from __future__ import annotations
 
@@ -21,10 +21,18 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+if __package__:
+    from . import acceptance_baseline
+else:
+    import acceptance_baseline
 
 
 def write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def helper_scripts(source):
+    return acceptance_baseline.skill_root(source) / "scripts"
 
 
 def invoke():
@@ -87,7 +95,7 @@ def restore_transport(value):
 
 
 def measure(source, fixture, scenario, destination, optimized):
-    scripts = source / "skills/merge-reviewer/scripts"
+    scripts = helper_scripts(source)
     metrics_path = destination / "command-metrics.json"
     totals = Counter()
 
@@ -178,7 +186,8 @@ def measure(source, fixture, scenario, destination, optimized):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", type=Path, required=True)
+    parser.add_argument("--baseline", type=Path, required=True,
+                        help="Exact e2430b6 checkout root or copied skills/baseline directory")
     parser.add_argument("--fixture-root", type=Path, required=True)
     parser.add_argument("--scenario", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -186,6 +195,7 @@ def main():
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error("--repeats must be positive")
+    baseline_identity = acceptance_baseline.validate_baseline(args.baseline)
     scenario = json.loads(args.scenario.read_text(encoding="utf-8"))
     args.output_dir.mkdir(parents=True, exist_ok=True)
     runs = {"baseline": [], "optimized": []}
@@ -197,7 +207,7 @@ def main():
             label = "optimized" if optimized else "baseline"
             destination = args.output_dir / f"{label}-{repetition + 1}"
             destination.mkdir()
-            row, artifacts = measure(ROOT if optimized else args.baseline.resolve(),
+            row, artifacts = measure(ROOT if optimized else baseline_identity["skill_root"],
                                      args.fixture_root.resolve(), scenario, destination, optimized)
             if expected is None:
                 expected = artifacts
@@ -208,7 +218,8 @@ def main():
     medians = {label: {key: statistics.median(row[key] for row in rows)
                        for key in rows[0] if key not in ("counts", "total_counts")}
                for label, rows in runs.items()}
-    result = {"repeats": args.repeats, "normalized_artifacts_equal": True,
+    result = {"repeats": args.repeats, "baseline_identity": baseline_identity,
+              "normalized_artifacts_equal": True,
               "model_review_seconds": None,
               "note": "Replays an authored draft; measures helpers, not repeated model reasoning.",
               "medians": medians, "runs": runs}

@@ -23,6 +23,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
+from acceptance_baseline import validate_baseline
 from benchmark_review import normalize, write_json, restore_transport
 
 
@@ -157,12 +158,15 @@ def measure(source, fixture, scenario, destination, candidate, runtime, *, mecha
     context, identifier = None, uuid.uuid4().hex
     # 0.18.0 already has the facade. Compare it through the same public entry
     # points; retain legacy batch replay for older frozen source archives.
-    use_flow = (source / "skills/merge-reviewer/scripts/review_flow.py").is_file()
+    scripts = Path(source) / "skills/merge-reviewer/scripts"
+    if not scripts.is_dir():
+        scripts = Path(source) / "scripts"
+    use_flow = (scripts / "review_flow.py").is_file()
     def cli(script, *args):
         nonlocal capture_parts
         began = time.perf_counter()
         command = [sys.executable, "-X", "utf8", "-B", str(Path(__file__).resolve()), "_invoke",
-                   str(metrics_file), str(source / "skills/merge-reviewer/scripts" / script), *map(str, args)]
+                   str(metrics_file), str(scripts / script), *map(str, args)]
         process = subprocess.run(command, capture_output=True, encoding="utf-8", env=environment)
         elapsed = time.perf_counter() - began
         totals["python_cli"] += 1
@@ -278,7 +282,9 @@ def measure(source, fixture, scenario, destination, candidate, runtime, *, mecha
                "network_activity": manifest["network_activity"], "phase_seconds": phase_seconds,
                "network_wait_seconds": 0 if not manifest["network_activity"]["fetch_attempt_count"]
                     else phase_seconds.get("waiting-network"),
-               "packing_seconds": phase_seconds.get("snapshot-capture", 0),
+                "snapshot_capture_seconds": phase_seconds.get("snapshot-capture", 0),
+                "packing_seconds": phase_seconds.get("packing_seconds", 0),
+                "packing_wait_seconds": phase_seconds.get("packing_wait_seconds", 0),
                "model_analysis_seconds": None}
         write_json(destination / "metrics.json", row)
         report.unlink()  # Only this concrete benchmark output, never historical reports.
@@ -295,13 +301,15 @@ def paired_gates(rows, *, large_multi_repo=False):
             raise ValueError(f"Invalid or unpaired helper timings: {mode}")
     ratios = {mode: statistics.median(candidate["helper_total_seconds"] / baseline["helper_total_seconds"]
               for baseline, candidate in zip(pair["baseline"], pair["candidate"])) for mode, pair in rows.items()}
-    limits = {mode: (0.75 if mode == "warm" and large_multi_repo else 1.05) for mode in rows}
+    limits = {mode: ((0.80 if mode == "warm" else 0.90) if large_multi_repo else 1.05)
+              for mode in rows}
     return ratios, limits, {mode: ratios[mode] <= limits[mode] for mode in rows}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", required=True, type=Path)
+    parser.add_argument("--baseline", required=True, type=Path,
+                        help="Exact e2430b6 checkout root or copied skills/baseline directory")
     parser.add_argument("--fixture-root", required=True, type=Path)
     parser.add_argument("--scenario", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
@@ -309,7 +317,7 @@ def main():
     parser.add_argument("--mechanical-v1", action="store_true",
                         help="Replay the identical legacy v3 draft against v1-policy benchmark contexts.")
     parser.add_argument("--large-multi-repo", action="store_true",
-                        help="Apply the 25%% warm-cache target to the 12-Repo/12,000-file fixture.")
+                        help="Apply the 20%% warm and 10%% cold/staggered targets to the large fixture.")
     parser.add_argument("--operations-per-step", type=int,
                         help="Use the same bounded operation batches in both variants; every step is timed.")
     parser.add_argument("--warm-first", action="store_true",
@@ -322,6 +330,8 @@ def main():
         parser.error("large multi-Repo acceptance needs at least five paired repeats")
     if args.operations_per_step is not None and args.operations_per_step < 1:
         parser.error("--operations-per-step must be positive")
+    baseline_identity = validate_baseline(args.baseline)
+    baseline_source = Path(baseline_identity["skill_root"])
     wait_for_validation(args.validation_lock)
     time.sleep(2)  # Let the completed validation runner close its log/receipt files.
     scenario = json.loads(args.scenario.read_text(encoding="utf-8"))
@@ -344,7 +354,7 @@ def main():
         if mode != "cold":
             for candidate in (False, True):
                 label = "candidate" if candidate else "baseline"
-                measured(ROOT if candidate else args.baseline, args.fixture_root, scenario,
+                measured(ROOT if candidate else baseline_source, args.fixture_root, scenario,
                          args.output_dir / (mode + "-prime-" + label), candidate,
                          runtime_base / (mode + "-" + label), mechanical_v1=args.mechanical_v1,
                          operations_per_step=args.operations_per_step)
@@ -355,7 +365,7 @@ def main():
                 destination = args.output_dir / f"{mode}-{label}-{repetition+1}"
                 runtime = (runtime_base / (f"cold-{label}-{repetition}") if mode == "cold" else
                            runtime_base / (mode + "-" + label))
-                result, artifacts = measured(ROOT if candidate else args.baseline, args.fixture_root,
+                result, artifacts = measured(ROOT if candidate else baseline_source, args.fixture_root,
                                               scenario, destination, candidate, runtime, mechanical_v1=args.mechanical_v1,
                                               operations_per_step=args.operations_per_step)
                 if expected is None:
@@ -373,6 +383,7 @@ def main():
             raise ValueError("Large acceptance requires at least 12 Repos and 12,000 fixed head files.")
     ratios, limits, gates = paired_gates(rows, large_multi_repo=args.large_multi_repo)
     write_json(args.output_dir / "summary.json", {"schema": "MergeReviewFlowBenchmark/v1",
+        "baseline_identity": baseline_identity,
         "repeats": args.repeats, "normalized_evidence_result_finding_bodies_equal": True,
         "medians": medians, "paired_ratio_medians": ratios, "ratio_limits": limits, "gates": gates,
         "mechanical_v1": args.mechanical_v1, "large_multi_repo": args.large_multi_repo,

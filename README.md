@@ -61,13 +61,13 @@ python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
 python scripts/package_release.py --tag v0.20.1
 ~~~
 
-CI 維持 Linux／Windows × Python 3.10／3.14 矩陣；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及必要 Python helpers，不包含測試及舊收據 runtime。
+CI 使用 Windows 的 Python 3.10 與 3.14 兩個矩陣格；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及必要 Python helpers，不包含測試及舊收據 runtime。
 
-main 與手動驗證會保存完整矩陣證據及 Linux／Python 3.14 的正式 ZIP，附件保留十四天。推送版本 tag 時，CI 只重用七天內、同一個最終 commit、工作流程及依賴識別均相同的 main 證據；證據或附件缺漏就重跑完整矩陣。發布直接使用已驗證的 ZIP，已有相同 tag／附件可安全重試，內容不同則停止。PR 與本機測試紀錄不能取代正式 CI 證據。
+main 與手動驗證會保存完整矩陣證據及 Windows／Python 3.14 的正式 ZIP，附件保留十四天。推送版本 tag 時，CI 只重用七天內、同一個最終 commit、工作流程及依賴識別均相同的 main 證據；證據或附件缺漏就重跑完整矩陣。
 
 自動測試驗證介面、證據、延伸、報告及清理；[語意品質案例](tests/review_quality_cases.md)與[實際技能紀錄](tests/skill_acceptance_results.md)另行驗收。Helper 通過不代表模型審查品質已通過。
 
-[效能重播工具](tests/benchmark_review.py)以相同固定提交與實際審查草稿比較舊新版，預設各量測五次並比對完整證據及報告。輸出分階段耗時與 Python／Git 命令數；這是 helper 效能量測，模型分析時間與語意品質另行記錄。參數見 `python -X utf8 -B tests/benchmark_review.py --help`。
+[helper 配對驗收工具](tests/benchmark_flow.py)以相同固定來源與實際審查草稿跑 cold／warm／staggered 五組配對，逐次比對證據、驗證結果與 finding 內容；baseline 必須使用驗收矩陣封存並核對 hash 的 `skills/baseline`。大型多 Repo 使用 `--large-multi-repo`，套用暖快取 ≤0.80、冷啟動與陸續啟動 ≤0.90 門檻；單 Repo 各情境門檻為 ≤1.05。這是 helper 效能量測，模型分析時間與語意品質另行驗收。低階固定 scenario 重播工具及參數見 `python -X utf8 -B tests/benchmark_review.py --help`。
 
 [三階段效能重播](tests/benchmark_flow.py)比較凍結 baseline 與候選入口的冷啟動、暖快取及陸續啟動，逐次核對完整固定證據與問題內容。已有 facade 的 baseline 走相同入口；更舊版本才走相容批次 CLI。歷史量測與品質限制保留在 [0.18.0 驗收紀錄](tests/flow-acceptance-results.md)，不能代替新版驗收。
 
@@ -86,3 +86,14 @@ main 與手動驗證會保存完整矩陣證據及 Linux／Python 3.14 的正式
 - [分支證據與 v3 契約](skills/merge-reviewer/references/workspace-review.md)
 
 執行配額、快取及相容入口見 [操作與負載](skills/merge-reviewer/references/runtime-controls.md)；設計背景見 [執行最佳化](docs/runtime-optimization.md)。升級時使用完整 ZIP，避免混合不同版本的 helper。
+## 完整審查效能與品質驗收
+
+候選版以固定的 `e2430b69b005226a1d77402bb090289c74e31dc2`／MergeReviewer 0.20.1 為基準。驗收排程採五組交錯配對；大型多 Repo 完整審查比值中位數須 ≤0.90，單 Repo 須 ≤1.05，helper 暖快取須 ≤0.80、冷啟動與陸續啟動須 ≤0.90。這些都是待量測的目標，須同時通過獨立語意稽核才算達標。
+
+請在所有 Git Repo 之外準備全新驗收矩陣。預設會封裝指定 commit，並在建立案例前驗證技能內容雜湊：
+
+```powershell
+python -X utf8 -B tests/merge_acceptance_matrix.py prepare --root <fresh-matrix-root> --candidate-skill skills/merge-reviewer
+```
+
+量測及稽核門檻見 [acceptance-ref-sync.md](docs/acceptance-ref-sync.md)。CI 目前涵蓋 Windows 上的 Python 3.10 與 3.14。

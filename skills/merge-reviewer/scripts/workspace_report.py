@@ -116,6 +116,7 @@ def validate_coverage_policy(manifest, context, api):
 def prefetch_validation_sources(cache, manifest, draft=None):
     """Speculate only; the normal validators still check every citation in order."""
     requests = {}
+    index = cache.index
     repos = {repo.get("id"): repo for repo in manifest.get("repositories", []) if isinstance(repo, dict)}
 
     def collect(value):
@@ -123,7 +124,8 @@ def prefetch_validation_sources(cache, manifest, draft=None):
             repo, source, path = value.get("repo"), value.get("source"), value.get("path")
             if all(isinstance(item, str) and item for item in (repo, source, path)):
                 entry = repos.get(repo, {}).get("sources", {}).get(source, {})
-                if any(item.get("path") == path and item.get("kind") == "blob" for item in entry.get("files", [])):
+                matches = index.entries(entry, path) if isinstance(entry, dict) and "files" in entry else []
+                if len(matches) == 1 and matches[0].get("kind") == "blob":
                     requests[(repo, source, path)] = {"repo": repo, "source": source, "path": path}
             for item in value.values():
                 collect(item)
@@ -142,7 +144,7 @@ def prefetch_validation_sources(cache, manifest, draft=None):
         except (ValueError, KeyError, TypeError, OSError, RuntimeError):
             # Malformed/unavailable citations must fail at their original
             # validation position; no partial speculative content is trusted.
-            return FixedSourceCache(cache.context, cache.api)
+            return FixedSourceCache(cache.context, cache.api, index=index)
     return cache
 
 

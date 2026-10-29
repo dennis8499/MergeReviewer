@@ -133,6 +133,78 @@ def draft_template(manifest):
             "tests_executed": [], "tests_not_executed": ["本次尚未執行專案測試。"], "limitations": []}
 
 
+_draft_template_v3 = draft_template
+
+
+def draft_template(manifest, draft_format="v3"):
+    if draft_format == "v3":
+        return _draft_template_v3(manifest)
+    if draft_format != "compact":
+        raise ValueError("draft format must be v3 or compact")
+    import contract_boundary
+    result = _draft_template_v3(manifest)
+    result["schema"] = "merge-reviewer-authoring/v1"
+    result.pop("report_layout", None)
+    changes = {tuple(item["root"].get(key) for key in ("repo", "source", "path")): item["id"]
+               for item in contract_boundary.changes(manifest)}
+    for row in result["coverage"]:
+        key = tuple(row.get(name) for name in ("repo", "source", "path"))
+        identifier = changes.get(key)
+        if identifier:
+            row.pop("repo", None)
+            row.pop("source", None)
+            row.pop("path", None)
+            row["change_id"] = identifier
+    return result
+
+
+def initial_read_requests(manifest):
+    """Build the initial diff, instruction, changed-source and parent reads."""
+    import review_workspace as workspace
+
+    repo = next(row for row in manifest["repositories"] if row["id"] == manifest["selected_repo"])
+    requests, seen = [], set()
+    index = workspace.FixedSourceIndex()
+
+    def add_request(op, **values):
+        requests.append({"id": f"init-{len(requests) + 1:06}", "op": op, **values})
+
+    # Start returns these fixed artifacts so the first helper round can read
+    # the diff and applicable instructions alongside source files.
+    add_request("instructions", repo=repo["id"])
+    for patch in repo.get("patches", []):
+        add_request("patch", repo=repo["id"], path=patch)
+
+    def blobs(source_name, path):
+        source = repo.get("sources", {}).get(source_name)
+        if not isinstance(source, dict):
+            return []
+        return [item for item in index.entries(source, path) if item.get("kind") == "blob"]
+
+    def add(source_name, path):
+        matches = blobs(source_name, path)
+        key = (repo["id"], source_name, path)
+        if len(matches) != 1 or key in seen:
+            return
+        seen.add(key)
+        add_request("read", repo=repo["id"], source=source_name, path=path)
+
+    for root in manifest.get("required_coverage", []):
+        if root.get("repo") != repo["id"]:
+            continue
+        path = root.get("path")
+        for source_name in ("base", "head", "merge-preview"):
+            add(source_name, path)
+        if not any(blobs(name, path) for name in ("base", "head", "merge-preview")):
+            add("merge-base", path)
+    for view in manifest.get("required_merge_views", []):
+        if not view.get("parent_content_available"):
+            continue
+        for path in view.get("paths", []):
+            add("parent-" + view["parent"], path)
+    return requests
+
+
 def remaining(draft):
     if not isinstance(draft, dict):
         return {}
@@ -176,7 +248,10 @@ def check(root, identifier):
     except (OSError, ValueError) as exc:
         return {"request_id": identifier, "errors": [{"code": "authoring.invalid-json", "pointer": "", "path": "draft", "message": str(exc)}],
                 "ready_for_finish": False, "evidence_verified": False, "git_commands": 0}, 3
+    started = time.perf_counter()
     value = diagnostics(draft, manifest, context)
+    update(root, identifier, metrics={**job.get("metrics", {}),
+                                     "check_diagnostic_seconds": time.perf_counter() - started})
     return {"request_id": identifier, "context_retained": True, **value}, 0 if value["ready_for_finish"] else 3
 
 
@@ -232,6 +307,7 @@ def prune_jobs(root):
 def start(args):
     import git_review_context as api
     import review_workspace as workspace
+    request_started = time.perf_counter()
     root = resolve_runtime(args.workspace, args.runtime_root, create=True)
     identifier = args.request_id or uuid.uuid4().hex
     args.request_id = identifier
@@ -240,11 +316,13 @@ def start(args):
     inputs = {"workspace": str(Path(args.workspace).resolve()), "project": args.project,
               "base": args.base, "head": args.head,
               "workspace_file": str(Path(args.workspace_file).resolve()) if args.workspace_file else None,
-              "auth_scope": args.auth_scope, "refresh": args.refresh, "no_fetch": args.no_fetch}
+              "auth_scope": args.auth_scope, "refresh": args.refresh, "no_fetch": args.no_fetch,
+              "draft_format": args.draft_format}
     fingerprint = coordination.digest(inputs)
     lock = coordination.FileLock(path.with_suffix(".owner.lock"))
     if not lock.acquire(blocking=False):
         return status(root, identifier)
+    git_activity_token = api.GIT_PROCESS_ACTIVITY.set(api.empty_git_process_activity())
     context = None
     active = None
     manifest = None
@@ -256,7 +334,8 @@ def start(args):
             return status(root, identifier)
         job = {"schema": SCHEMA, "request_id": identifier, "runtime_root": str(root),
                "state": "running", "phase": "preflight", "started_at": now(),
-               "updated_at": now(), "pid": os.getpid(), "inputs": inputs, "input_digest": fingerprint}
+                "updated_at": now(), "pid": os.getpid(), "inputs": inputs, "input_digest": fingerprint,
+                "draft_format": args.draft_format}
         coordination.atomic(path, job)
         def notify(phase, fields):
             update(root, identifier, phase=phase, **fields)
@@ -264,6 +343,7 @@ def start(args):
                   file=sys.stderr, flush=True)
         active = coordination.Coordination(root, identifier, notify, args.refresh, args.auth_scope)
         notify("preflight", {"runtime_root": str(root)})
+        discovery_started = time.perf_counter()
         declared = Path(inputs["workspace"])
         workspace_file = Path(inputs["workspace_file"]) if inputs["workspace_file"] else None
         workspace_digest = hashlib.sha256(workspace_file.read_bytes()).hexdigest() if workspace_file else None
@@ -272,17 +352,20 @@ def start(args):
         seed, repositories = api.choose_repository(declared, workspace_file, args.project, repositories=repositories)
         if workspace_file and hashlib.sha256(workspace_file.read_bytes()).hexdigest() != workspace_digest:
             raise ValueError("Workspace file changed during repository discovery.")
+        discovery_seconds = time.perf_counter() - discovery_started
         if any(root.is_relative_to(repo.resolve()) for repo in repositories):
             raise ValueError("Review runtime must be outside every declared Git Repo.")
         inputs["project"] = str(seed.resolve())
         update(root, identifier, inputs=inputs)
+        preflight_started = time.perf_counter()
         preflight(root)
         preflight(seed / "review-reports")
         if any(api.remote_target_for_ref(seed, value) for value in (args.base, args.head)):
             preflight(coordination.git_network_lease.runtime_root())
         context = review_session.create_session(runtime_root=root, request_id=identifier)
+        preflight_seconds = time.perf_counter() - preflight_started
         update(root, identifier, context_dir=str(context), draft_path=str(context / "draft.json"))
-        arguments = ["--workspace", inputs["workspace"], "--project", args.project,
+        arguments = ["--workspace", inputs["workspace"], "--project", inputs["project"],
                      "--base", args.base, "--head", args.head, "--git-timeout", str(args.git_timeout)]
         if args.workspace_file:
             arguments.extend(["--workspace-file", args.workspace_file])
@@ -296,20 +379,25 @@ def start(args):
             manifest = api.build_manifest(capture)
             active.check()
             active.phase("review")
-        coordination.atomic(context / "draft.json", draft_template(manifest))
+        coordination.atomic(context / "draft.json", draft_template(manifest, args.draft_format))
         selected = workspace.repository(manifest, manifest["selected_repo"])
         patches = []
         for patch in sorted((context / f"repos/{selected['id']}/native").glob("*.patch")):
             patches.append({"path": patch.relative_to(context).as_posix(),
                             "bytes": patch.stat().st_size})
         instructions = workspace.instructions(context, manifest, selected["id"], None, api)
+        initial_reads = initial_read_requests(manifest)
+        initial_reads_path = context / "initial-reads.json"
+        coordination.atomic(initial_reads_path, initial_reads)
         guide = {"schema": "MergeReviewStart/v1", "request_id": identifier, "runtime_root": str(root),
                  "state": "ready", "context_dir": str(context), "draft_path": str(context / "draft.json"),
                  "selected_repo": manifest["selected_repo"], "repositories": repo_index(manifest),
                  "contract_scope_policy": manifest.get("contract_scope_policy"),
                  "required_coverage": manifest["required_coverage"],
                  "boundary_changes": manifest.get("boundary_changes", []),
-                 "required_merge_views": manifest["required_merge_views"], "patches": patches,
+                  "required_merge_views": manifest["required_merge_views"], "patches": patches,
+                  "draft_format": args.draft_format, "initial_reads_file": str(initial_reads_path),
+                  "initial_read_count": len(initial_reads),
                  "instructions": instructions["instructions"], "context_gaps": manifest["context_gaps"],
                  "network_activity": manifest["network_activity"], "sync_activity": manifest.get("sync_activity", []),
                  "pack_cache_hits": active.pack_hits,
@@ -329,10 +417,25 @@ def start(args):
                                             "change_id": "<boundary change ID>", "query": "<local use>"}},
                  "authoring_schema": "merge-reviewer-authoring/v1"}
         coordination.atomic(context / "start.json", guide)
+        active.finish_phase()
+        git_metrics = api.git_process_activity()
+        metrics = {"request_total_seconds": time.perf_counter() - request_started,
+                   "discovery_seconds": discovery_seconds, "preflight_seconds": preflight_seconds,
+                   "capture_seconds": time.perf_counter() - began,
+                   "phase_seconds": dict(active.timings),
+                   "sync_wait_seconds": active.timings.get("waiting-network", 0),
+                   "packing_seconds": active.timings.get("packing_seconds", 0),
+                   "snapshot_pack_wait_seconds": active.timings.get("packing_wait_seconds", 0),
+                   "pack_cache_hits": active.pack_hits,
+                   "git_command_count": git_metrics["command_count"],
+                   "fetch_command_count": git_metrics["fetch_command_count"],
+                   "git_process_seconds": git_metrics["process_seconds"],
+                   "fetch_connection_evidence": "not-observed",
+                   "model_analysis_seconds": None, "model_token_count": None}
         update(root, identifier, state="ready", phase="review", selected_repo=selected["id"],
                network_activity=manifest["network_activity"], sync_activity=manifest.get("sync_activity", []),
                pack_cache_hits=active.pack_hits,
-               metrics={"capture_seconds": time.perf_counter() - began, "phase_seconds": active.timings})
+               metrics=metrics)
         prune_jobs(root)
         return guide
     except Exception as exc:
@@ -349,6 +452,7 @@ def start(args):
     finally:
         if active:
             active.release_syncs()
+        api.GIT_PROCESS_ACTIVITY.reset(git_activity_token)
         lock.release()
 
 
@@ -586,6 +690,7 @@ def finish(root, identifier):
         if job["state"] not in ("ready", "reviewing", "validating"):
             raise ValueError("Session cannot be published.")
         started = time.perf_counter()
+        timing = {"draft_preparation_seconds": 0.0}
         def staged(output, receipt):
             if (root / "jobs" / (identifier + ".cancel")).exists():
                 raise coordination.Cancelled("Review cancelled before the report commit.")
@@ -594,10 +699,13 @@ def finish(root, identifier):
         def published(output):
             update(root, identifier, state="published", phase="complete", report_path=str(output),
                    finished_at_epoch=time.time(), metrics={**job.get("metrics", {}),
-                       "validation_publish_seconds": time.perf_counter() - started})
+                        **timing, "validation_publish_seconds": time.perf_counter() - validation_started,
+                        "finish_total_seconds": time.perf_counter() - started})
         try:
             if (root / "jobs" / (identifier + ".cancel")).exists():
                 raise coordination.Cancelled("Review cancelled before publication.")
+            manifest = workspace.load(context)
+            draft_started = time.perf_counter()
             draft_path = context / "draft.json"
             try:
                 draft = coordination.read_json(draft_path)
@@ -606,23 +714,28 @@ def finish(root, identifier):
             else:
                 import review_authoring
                 try:
-                    expanded = review_authoring.expand(draft, workspace.load(context), context)
+                    expanded = review_authoring.expand(draft, manifest, context)
                 except (KeyError, TypeError, ValueError, OSError) as exc:
                     expanded, errors = draft, [f"draft input: {coordination.safe_error(exc)}"]
                 else:
                     errors = draft_errors(expanded)
                 # This inspection reads saved JSON only. Final evidence verification
                 # remains mandatory after authoring errors have been repaired.
-                inspected = diagnostics(expanded, workspace.load(context), context)
+                inspected = diagnostics(expanded, manifest, context)
                 errors.extend(f"{row['path']}: {row['message']}" for row in inspected["errors"])
                 errors = list(dict.fromkeys(errors))
             if errors:
-                workspace_report.validate_captured_evidence(workspace.load(context), context)
+                workspace_report.validate_captured_evidence(manifest, context)
+                timing["draft_preparation_seconds"] = time.perf_counter() - draft_started
+                update(root, identifier, metrics={**job.get("metrics", {}), **timing,
+                                                 "finish_total_seconds": time.perf_counter() - started})
                 update(root, identifier, state="reviewing", phase="draft-repair", errors=errors)
                 return {"request_id": identifier, "context_retained": True, "errors": errors,
                         "remaining": remaining(draft)}, 3
             update(root, identifier, state="validating", phase="validation",
                    draft_sha256=hashlib.sha256(draft_path.read_bytes()).hexdigest())
+            timing["draft_preparation_seconds"] = time.perf_counter() - draft_started
+            validation_started = time.perf_counter()
             with review_runtime.writer(context):
                 review_report.publish_report(context, draft_path, retain_on_validation_error=True,
                                              on_stage_receipt=staged, on_published=published, cleanup_context=False)
@@ -679,6 +792,7 @@ def parser():
     value.add_argument("--project")
     value.add_argument("--base")
     value.add_argument("--head")
+    value.add_argument("--draft-format", choices=("compact", "v3"), default="v3")
     value.add_argument("--requests-file", type=Path)
     value.add_argument("--refresh", action="store_true")
     value.add_argument("--auth-scope", default=os.environ.get("GITLAB_WORKSPACE_AUTH_SCOPE", ""))

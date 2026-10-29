@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import copy
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+import contextvars
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -168,6 +170,43 @@ def fixed_bytes(context: Path, repo: dict, name: str, path: str, api) -> bytes:
     return data
 
 
+class FixedSourceIndex:
+    """Operation-local path lookup over the fixed inventory.
+
+    It retains references to inventory rows so blob/mode tampering is still
+    checked by each content lookup.  A replaced or resized inventory is
+    re-indexed; suspicious misses and changed rows trigger one defensive rebuild.
+    """
+
+    def __init__(self):
+        self._indexes = {}
+
+    def _build(self, source):
+        files = source["files"]
+        require(isinstance(files, list), "fixed source inventory is malformed")
+        paths = {}
+        for entry in files:
+            require(isinstance(entry, dict) and isinstance(entry.get("path"), str),
+                    "fixed source inventory entry is malformed")
+            paths.setdefault(entry["path"], []).append((entry, entry["path"]))
+        self._indexes[id(source)] = (source, files, len(files), paths)
+        return paths
+
+    def entries(self, source, path):
+        files = source.get("files")
+        require(isinstance(files, list), "fixed source inventory is malformed")
+        indexed = self._indexes.get(id(source))
+        if indexed is None or indexed[0] is not source or indexed[1] is not files or indexed[2] != len(files):
+            paths = self._build(source)
+        else:
+            paths = indexed[3]
+        bucket = paths.get(path, [])
+        if not bucket or any(entry.get("path") != original for entry, original in bucket):
+            paths = self._build(source)
+            bucket = paths.get(path, [])
+        return [entry for entry, _ in bucket]
+
+
 class FixedSourceCache:
     """Verified fixed content shared only within one read/validation operation.
 
@@ -175,11 +214,12 @@ class FixedSourceCache:
     entry, repository, or object location therefore cannot reuse older bytes.
     """
 
-    def __init__(self, context: Path, api):
+    def __init__(self, context: Path, api, *, index=None):
         self.context = Path(context).resolve()
         self.api = api
         self._content = {}
         self._patches = {}
+        self.index = index if index is not None else FixedSourceIndex()
 
     def _source_key(self, repo, name, path):
         safe_path(self.context, path)
@@ -197,7 +237,7 @@ class FixedSourceCache:
 
     def read(self, repo: dict, source_name: str, path: str) -> bytes:
         key, source = self._source_key(repo, source_name, path)
-        matches = [f for f in source["files"] if f["path"] == path]
+        matches = self.index.entries(source, path)
         require(len(matches) == 1 and matches[0]["kind"] == "blob", "path is not a fixed blob")
         entry = matches[0]
         if repo.get("snapshot") is not None:
@@ -226,7 +266,7 @@ class FixedSourceCache:
             if repo.get("snapshot") is None or not isinstance(path, str) or "\n" in path or "\r" in path:
                 continue
             key, source = self._source_key(repo, name, path)
-            matches = [entry for entry in source["files"] if entry["path"] == path]
+            matches = self.index.entries(source, path)
             require(len(matches) == 1 and matches[0]["kind"] == "blob", "path is not a fixed blob")
             entry = matches[0]
             key = json.dumps(("read", key, entry["blob_sha"], entry.get("mode"), entry["kind"]), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -248,7 +288,7 @@ class FixedSourceCache:
     def changed_patch(self, repo: dict, comparison_source_name: str, baseline: str, path: str) -> str:
         key, source = self._source_key(repo, comparison_source_name, path)
         entries = tuple((entry["blob_sha"], entry.get("mode"), entry["kind"])
-                        for entry in source["files"] if entry["path"] == path)
+                        for entry in self.index.entries(source, path))
         key = json.dumps(("changed-patch", key, entries, baseline, tuple(self.api.DIFF_FLAGS)),
                          ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if key not in self._patches:
@@ -274,6 +314,41 @@ class FixedSearchCache:
         self.api = api
         self._results = {}
         self.persistent = persistent
+        self._quote_paths = {}
+
+    def _quote_path(self, repo, environment):
+        inherited = tuple(sorted((key, value) for key, value in os.environ.items() if key.startswith("GIT_")))
+        key = (str(repo), inherited, tuple(sorted(environment.items())))
+        if key not in self._quote_paths:
+            code, output, _ = self.api.run_git_capture(repo,
+                ["config", "--bool", "--get", "core.quotePath"], env=environment)
+            self._quote_paths[key] = not (code == 0 and output.strip().lower() == "false")
+        return self._quote_paths[key]
+
+    @staticmethod
+    def _ordinary_path(path):
+        return (isinstance(path, str) and bool(path) and
+                all((char in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./ -"
+                     if char.isascii() else char.isprintable()) for char in path))
+
+    @staticmethod
+    def _quoted_path(path, quote_path):
+        raw = path.encode("utf-8")
+        quote = any(value in raw for value in (b" ", b'"', b"\\", b"\t", b"\n", b"\r"))
+        quote = quote or any(value < 32 or value == 127 or (quote_path and value >= 127) for value in raw)
+        if not quote:
+            return path
+        escapes = {7: r"\a", 8: r"\b", 9: r"\t", 10: r"\n", 11: r"\v", 12: r"\f", 13: r"\r",
+                   34: r'\"', 92: r"\\"}
+        result = []
+        for value in raw:
+            if value in escapes:
+                result.append(escapes[value])
+            elif value < 32 or value == 127 or (quote_path and value >= 127):
+                result.append("\\" + format(value, "03o"))
+            else:
+                result.append(chr(value))
+        return '"' + "".join(result) + '"'
 
     def _save(self, key, result):
         if not self.persistent:
@@ -295,13 +370,14 @@ class FixedSearchCache:
         inherited = {key: value for key, value in os.environ.items() if key.startswith("GIT_")}
         environment_identity = hashlib.sha256(json.dumps((inherited, environment), ensure_ascii=False,
                                                         sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        quote_path = self._quote_path(git_repo, environment)
         key = json.dumps((str(self.context), repo["id"], str(Path(repo["path"]).resolve()),
                           str(git_repo), source_name, source["ref"], source["tree_sha"],
-                          source.get("objects"), repo.get("snapshot"), environment_identity,
+                          source.get("objects"), repo.get("snapshot"), environment_identity, quote_path,
                           SEARCH_FLAGS, query), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         snapshot = repo.get("snapshot")
         frozen = isinstance(snapshot, dict) and snapshot.get("policy") == SNAPSHOT_POLICY
-        return key, source, environment, git_repo, frozen
+        return key, source, environment, git_repo, frozen, quote_path
 
     def prefetch(self, manifest, requests):
         """Batch safe literal patterns; preserve the original Git output per query."""
@@ -313,12 +389,12 @@ class FixedSearchCache:
                 repo = repository(manifest, request["repo"])
                 name, query = request["source"], request["query"]
                 if (not isinstance(query, str) or not query or
-                        any(ord(char) < 32 or ord(char) > 126 for char in query)):
+                        any(ord(char) < 32 or ord(char) == 127 for char in query)):
                     continue
-                key, source, environment, git_repo, frozen = self._identity(repo, name, query)
-                # Git's normal grep quotes unusual paths. Only reconstruct its
-                # output where NUL-delimited filenames are byte-for-byte equal.
-                if not frozen or any(not re.fullmatch(r"[A-Za-z0-9_./ -]+", item["path"])
+                key, source, environment, git_repo, frozen, quote_path = self._identity(repo, name, query)
+                # Recreate Git's default C-style path rendering from NUL records;
+                # control and unusual punctuation paths continue through Git one by one.
+                if not frozen or any(not self._ordinary_path(item["path"])
                                      for item in source["files"]):
                     continue
                 if self.persistent and safe_path(self.context, "search-cache/" +
@@ -326,7 +402,7 @@ class FixedSearchCache:
                     continue
                 group_key = (repo["id"], name, source["ref"])
                 group = groups.setdefault(group_key, {"repo": git_repo, "source": source,
-                                                       "env": environment, "queries": {}})
+                                                       "env": environment, "quote_path": quote_path, "queries": {}})
                 group["queries"][query] = key
             except (ValueError, KeyError, TypeError, OSError, self.api.ReviewContextError):
                 continue
@@ -356,7 +432,12 @@ class FixedSearchCache:
                     if len(parts) != 3 or not parts[1].isdigit():
                         valid = False
                         break
-                    original = ":".join(parts) + "\n"
+                    ref, separator, filename = parts[0].partition(":")
+                    if not separator:
+                        valid = False
+                        break
+                    quoted = self._quoted_path(filename, group["quote_path"])
+                    original = f"{ref}:{quoted}:{parts[1]}:{parts[2]}\n"
                     for query, _ in chunk:
                         if query in parts[2]:
                             matches[query].append(original)
@@ -367,7 +448,7 @@ class FixedSearchCache:
                         self._save(key, self._results[key])
 
     def run(self, repo: dict, source_name: str, query: str) -> tuple[int, str, str]:
-        key, source, environment, git_repo, frozen = self._identity(repo, source_name, query)
+        key, source, environment, git_repo, frozen, _quote_path = self._identity(repo, source_name, query)
         cache_path = (safe_path(self.context, "search-cache/" + hashlib.sha256(key.encode("utf-8")).hexdigest() + ".json")
                       if self.persistent and frozen else None)
         if frozen and self.persistent and key not in self._results and cache_path.is_file():
@@ -727,8 +808,6 @@ def build(args, api) -> dict:
             record["head_sha"] = api.verified_commit(actual, "HEAD")
             if candidate != seed:
                 require(record["head_sha"], "related Repo has no HEAD commit")
-            object_format = str(api.run_git(actual, ["rev-parse", "--show-object-format"])).strip()
-            require(object_format in ("sha1", "sha256"), "unsupported Git object format")
             record["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
         except (ValueError, OSError, api.ReviewContextError) as exc:
             if candidate == seed:
@@ -766,45 +845,70 @@ def build(args, api) -> dict:
     manifest["refs_pinned_at"] = datetime.now(timezone.utc).isoformat()
     # All branch/peer object IDs are now fixed; sealing stays offline.
     api.capture_phase("snapshot-capture")
-    for record in manifest["repositories"]:
-        if record["state"] == "error":
-            continue
+    def capture_record(record):
+        """Capture one already pinned Repo into its private evidence directory."""
         candidate = actual = Path(record["path"])
-        try:
-            tree_cache = CaptureTreeCache(context, api)
-            if candidate != seed and not active:
-                record["before"] = api.snapshot(actual)
-            if candidate == seed:
-                branch_snapshot(context, record, args, api, tree_cache=tree_cache, frozen_refs=branch_refs)
-                native = record["native"]
-                preview = native.get("merge_preview", {})
-                if (native["head_sha"] == native["merge_base"] and not native["changed_files"]
-                        and preview.get("status") == "clean"
-                        and preview.get("tree_sha") == record["sources"]["base"]["tree_sha"]):
-                    api.capture_phase("ancestor-proof")
-                    record["ancestor_path"] = capture_ancestor_path(actual, native["base_sha"], native["head_sha"], api)
-                    api.capture_phase("snapshot-capture")
+        tree_cache = CaptureTreeCache(context, api)
+        if candidate != seed and not active:
+            record["before"] = api.snapshot(actual)
+        if candidate == seed:
+            branch_snapshot(context, record, args, api, tree_cache=tree_cache, frozen_refs=branch_refs)
+            native = record["native"]
+            preview = native.get("merge_preview", {})
+            if (native["head_sha"] == native["merge_base"] and not native["changed_files"]
+                    and preview.get("status") == "clean"
+                    and preview.get("tree_sha") == record["sources"]["base"]["tree_sha"]):
+                api.capture_phase("ancestor-proof")
+                record["ancestor_path"] = capture_ancestor_path(actual, native["base_sha"], native["head_sha"], api)
+                api.capture_phase("snapshot-capture")
+        else:
+            record["review_source"] = "head"
+            def build_peer():
+                add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
+                seal_snapshot(context, record, api, tree_cache=tree_cache)
+            if active:
+                record["_pack_cache_hit"] = active.peer(context, record, api, build_peer)
             else:
-                record["review_source"] = "head"
-                def build_peer():
-                    add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
-                    seal_snapshot(context, record, api, tree_cache=tree_cache)
-                if active:
-                    active.peer(context, record, api, build_peer)
-                else:
-                    add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
-            # Coordinated peers are read exclusively by their already pinned
-            # commit. Their working tree/index and later HEAD cannot select
-            # evidence; sealing independently checks the copied object closure.
-            # Keep the original live-tree drift checks for the legacy CLI.
-            if candidate != seed and not active:
-                require(record["before"] == api.snapshot(actual), "Repo changed during capture; rebuild context")
-            if candidate == seed or not active:
-                seal_snapshot(context, record, api, tree_cache=tree_cache,
-                              extra_commit_objects=record.get("ancestor_path", ()))
+                add_source(context, record, "head", record["head_sha"], api, tree_cache=tree_cache)
+        # Coordinated peers are read exclusively by their already pinned
+        # commit. Their working tree/index and later HEAD cannot select
+        # evidence; sealing independently checks the copied object closure.
+        # Keep the original live-tree drift checks for the legacy CLI.
+        if candidate != seed and not active:
+            require(record["before"] == api.snapshot(actual), "Repo changed during capture; rebuild context")
+        if candidate == seed or not active:
+            seal_snapshot(context, record, api, tree_cache=tree_cache,
+                          extra_commit_objects=record.get("ancestor_path", ()))
+
+    def peer_outcome(record):
+        try:
+            capture_record(record)
         except (ValueError, OSError, api.ReviewContextError) as exc:
-            if candidate == seed:
-                raise
+            return exc
+        return None
+
+    selected_outcome = peer_outcome(selected)
+    if selected_outcome:
+        raise selected_outcome
+    peers = [record for record in manifest["repositories"]
+             if record["id"] != selected["id"] and record["state"] != "error"]
+    outcomes = []
+    if active and len(peers) > 1:
+        # Each worker owns one Repo record, tree cache and evidence directory.
+        # The selected Repo and every peer HEAD were fixed before this pool runs.
+        with ThreadPoolExecutor(max_workers=min(2, len(peers)), thread_name_prefix="review-snapshot") as pool:
+            futures = []
+            for record in peers:
+                worker_context = contextvars.copy_context()
+                futures.append(pool.submit(worker_context.run, peer_outcome, record))
+            outcomes = [future.result() for future in futures]
+    else:
+        outcomes = [peer_outcome(record) for record in peers]
+    for record, outcome in zip(peers, outcomes):
+        cache_hit = record.pop("_pack_cache_hit", False)
+        if active and cache_hit:
+            active.pack_hits += 1
+        if outcome is not None:
             record["state"] = "error"
             record["review_source"] = "head"
             # A failed candidate has no sealed evidence; never expose borrowed
@@ -812,9 +916,9 @@ def build(args, api) -> dict:
             record["sources"] = {}
             record["instructions"] = []
             record.pop("snapshot", None)
-            record["limitations"].append(str(exc))
-        if candidate == seed:
-            manifest["context_gaps"].extend(f"{record['id']}: {gap}" for gap in record["limitations"])
+            record["limitations"].append(str(outcome))
+    for record in manifest["repositories"]:
+        manifest["context_gaps"].extend(f"{record['id']}: {gap}" for gap in record["limitations"])
     api.capture_phase("manifest-finalize")
     manifest["required_coverage"] = required_coverage(manifest)
     manifest["boundary_changes"] = contract_boundary.changes(manifest)
@@ -1171,8 +1275,13 @@ def ordered_step(context, manifest, operations, api):
     content, searches = FixedSourceCache(context, api), FixedSearchCache(context, api, persistent=True)
     results = []
     search_requests = []
+    checkpoints = manifest.get("operations", {})
+    def already_checkpointed(operation):
+        return (isinstance(operation, dict) and isinstance(operation.get("id"), str)
+                and operation["id"] in checkpoints)
     for operation in operations:
-        if not isinstance(operation, dict) or operation.get("op") != "search":
+        if (not isinstance(operation, dict) or operation.get("op") != "search"
+                or already_checkpointed(operation)):
             continue
         selected = operation.get("repo") or [row["id"] for row in manifest["repositories"]]
         if not isinstance(selected, list):
@@ -1189,7 +1298,8 @@ def ordered_step(context, manifest, operations, api):
     # ordered position, so a later malformed read cannot discard a valid prefix.
     requests = []
     for operation in operations:
-        if isinstance(operation, dict) and operation.get("op") == "read":
+        if (isinstance(operation, dict) and operation.get("op") == "read"
+                and not already_checkpointed(operation)):
             args = {k: v for k, v in operation.items() if k not in ("id", "op")}
             try:
                 validate_read_request(args)

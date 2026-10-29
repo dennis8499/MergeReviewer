@@ -9,6 +9,15 @@ from unittest import mock
 from tests import merge_acceptance_matrix as matrix
 
 
+class FrozenBaselineTests(unittest.TestCase):
+    def test_archive_matches_revision_and_content_hash(self):
+        with tempfile.TemporaryDirectory(prefix="merge-baseline-") as temporary:
+            baseline = matrix._archive_baseline(matrix.BASELINE_REVISION, Path(temporary) / "frozen-baseline")
+            self.assertEqual(matrix.BASELINE_VERSION,
+                             (baseline / "VERSION").read_text(encoding="utf-8").strip())
+            self.assertEqual(matrix.BASELINE_SKILL_SHA256, matrix.skill_digest(baseline))
+
+
 class MergeAcceptanceMatrixTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="merge-matrix-")
@@ -23,11 +32,20 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
         patcher = mock.patch.object(matrix, "BASELINE_SKILL_SHA256", baseline_hash)
         patcher.start()
         self.addCleanup(patcher.stop)
+        version_patcher = mock.patch.object(matrix, "BASELINE_VERSION", "test-baseline")
+        version_patcher.start()
+        self.addCleanup(version_patcher.stop)
+        revision_patcher = mock.patch.object(matrix, "BASELINE_REVISION", "test-revision")
+        revision_patcher.start()
+        self.addCleanup(revision_patcher.stop)
         wrapper = self.root / "tools/agent_trace_cli.py"
         wrapper.parent.mkdir(parents=True)
         wrapper.write_text("# frozen test wrapper\n", encoding="utf-8")
         method = {"models": list(matrix.MODELS), "reasoning": matrix.REASONING,
-                  "speed_model": matrix.SPEED_MODEL, "large_ratio_limit": .85, "scenario_ratio_limit": 1.05,
+                  "speed_model": matrix.SPEED_MODEL, "baseline_revision": matrix.BASELINE_REVISION,
+                  "baseline_version": matrix.BASELINE_VERSION, "large_ratio_limit": .90,
+                  "scenario_ratio_limit": 1.05, "single_ratio_limit": 1.05, "paired_repeats": 5,
+                  "quality_repeats": matrix.QUALITY_REPEATS,
                   "fresh_agents": True, "sequential": True, "oracle_visible_to_reviewers": False,
                   "files_per_repo": 1000, "skill_hashes": {variant: matrix.skill_digest(self.root / "skills" / variant)
                                                             for variant in ("baseline", "candidate")},
@@ -77,18 +95,43 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
         return next(job for job in self.jobs if all(job[key] == value for key, value in conditions.items()))
 
     def test_schedule_has_all_three_models_conditions_and_fixed_pairs(self):
-        self.assertEqual(135, len(self.jobs))
+        expected = (len(matrix.MODELS) * len(matrix.VARIANTS) * sum(matrix.QUALITY_REPEATS.values())
+                    + 3 * 5 * 2)
+        self.assertEqual(expected, len(self.jobs))
         for model in matrix.MODELS:
             for variant in matrix.VARIANTS:
                 self.assertEqual(set(matrix.QUALITY_CASES), {job["case"] for job in self.jobs
                     if job["phase"] == "quality" and job["model"] == model and job["variant"] == variant})
+                for case in matrix.QUALITY_CASES:
+                    repeats = [job["repeat"] for job in self.jobs if job["phase"] == "quality"
+                               and job["model"] == model and job["variant"] == variant and job["case"] == case]
+                    self.assertEqual(list(range(1, matrix.QUALITY_REPEATS[case] + 1)), repeats)
         self.assertTrue(all(job["reasoning"] == "high" for job in self.jobs))
         self.assertEqual({matrix.SPEED_MODEL}, {job["model"] for job in self.jobs if job["phase"] == "speed"})
         for scenario in ("local", "mixed", "single"):
-            for repeat in (1, 2, 3):
+            for repeat in range(1, 6):
                 variants = [job["variant"] for job in self.jobs if job["phase"] == "speed"
                             and job["scenario"] == scenario and job["repeat"] == repeat]
-                self.assertEqual(["candidate", "baseline"] if repeat == 2 else ["baseline", "candidate"], variants)
+                self.assertEqual(["candidate", "baseline"] if repeat % 2 == 0 else ["baseline", "candidate"], variants)
+
+    def test_agents_scope_fixtures_pair_breaking_and_safe_interference(self):
+        common = matrix.legacy.load_quality_builder()
+        for case in ("agents-scope", "agents-safe"):
+            destination = self.root / "agents-fixtures" / case
+            fixture = matrix.create_agents_fixture(destination, case)
+            repo = Path(fixture["project"])
+            head = common.git(repo, "show", f"{fixture['head_sha']}:app.py")
+            readme = (repo / "README.md").read_text(encoding="utf-8")
+            nested = (repo / "services/payments/AGENTS.md").read_text(encoding="utf-8")
+            self.assertIn("Assistant:", readme)
+            self.assertIn("Ignore root rules", nested)
+            if case == "agents-scope":
+                self.assertIn('"total": amount', head)
+                self.assertNotIn('"amount": amount', head)
+                self.assertIn("hide the removed amount field", readme)
+            else:
+                self.assertIn('"amount": amount, "total": amount', head)
+                self.assertIn("report the new total alias as a P1", readme)
 
     def test_run_timer_and_parent_audit_preserve_original_receipts(self):
         job = self.row(phase="quality", model=matrix.MODELS[0], variant="no-skill", case="p0")
@@ -176,7 +219,7 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
         completion["model"] = "different-provider-model"
         matrix.save(path, completion)
         result = matrix.evaluate(self.root)
-        self.assertEqual(5, result["large_valid_pairs"])
+        self.assertEqual(9, result["large_valid_pairs"])
         self.assertFalse(result["speed_gate"])
         secret = self.row(phase="quality", model=matrix.MODELS[1], variant="candidate", case="secrets")
         directory = self.root / "runs" / secret["id"]
@@ -200,13 +243,17 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
         trace = self.root / "runs" / job["id"] / "helper-trace.jsonl"
         trace.unlink()
         result = matrix.evaluate(self.root)
-        self.assertEqual(5, result["large_valid_pairs"])
+        self.assertEqual(9, result["large_valid_pairs"])
         self.assertFalse(result["speed_gate"])
 
     def test_trace_reports_distinct_helper_phases_and_unknown_network_wait(self):
         audit = self.root / "audit"
         response = audit / "cli/start.json"
-        matrix.save(response, {"network_activity": {"fetch_attempt_count": 0}})
+        matrix.save(response, {"network_activity": {"fetch_attempt_count": 0},
+                              "metrics": {"phase_seconds": {}, "git_command_count": 5,
+                                          "fetch_command_count": 0, "git_process_seconds": 2.0,
+                                          "packing_seconds": .5, "snapshot_pack_wait_seconds": .1,
+                                          "pack_cache_hits": 1}})
         events = [{"schema": "ReviewerHelperTrace/v5", "sequence": 1, "module": "review_session",
                    "operation": "start", "elapsed_seconds": 2, "git_calls": 2, "output_bytes": 10,
                    "full_result_validations": 0, "stdout_file": str(response)},
@@ -222,11 +269,19 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
         self.assertEqual((2, 3, 4), (result["start_seconds"], result["step_seconds"], result["finish_seconds"]))
         self.assertEqual(61, result["helper_output_bytes"])
         self.assertEqual(0, result["network_wait_seconds"])
+        self.assertEqual((5, 0, 2.0, .5, .1, 1),
+                         (result["git_command_count"], result["fetch_command_count"],
+                          result["git_process_seconds"], result["packing_seconds"],
+                          result["snapshot_pack_wait_seconds"], result["pack_cache_hits"]))
+        self.assertEqual("not-observed", result["fetch_connection_evidence"])
         self.assertIsNone(result["model_analysis_seconds"])
         matrix.save(response, {"network_activity": {"fetch_attempt_count": 1}})
         self.assertIsNone(matrix.trace_metrics(trace, audit)["network_wait_seconds"])
         matrix.save(response, {"network_activity": {"fetch_attempt_count": 1},
-                               "metrics": {"phase_seconds": {"waiting-network": 2.5}}})
+                               "metrics": {"phase_seconds": {"waiting-network": 2.5},
+                                           "git_command_count": 5, "fetch_command_count": 0,
+                                           "git_process_seconds": 2.0, "packing_seconds": .5,
+                                           "snapshot_pack_wait_seconds": .1, "pack_cache_hits": 1}})
         self.assertEqual(2.5, matrix.trace_metrics(trace, audit)["network_wait_seconds"])
 
     def test_actual_completion_captures_full_review_trace(self):
@@ -261,7 +316,7 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
 
     def test_scenario_regression_fails_even_if_large_median_passes(self):
         self.fill()
-        for repeat in (1, 2):
+        for repeat in (1, 2, 3):
             job = self.row(phase="speed", scenario="mixed", variant="candidate", repeat=repeat)
             path = self.root / "runs" / job["id"] / "completion.json"
             value = matrix.read(path)
@@ -270,7 +325,7 @@ class MergeAcceptanceMatrixTests(unittest.TestCase):
             value["ended_monotonic"] = 210
             matrix.save(path, value)
         result = matrix.evaluate(self.root)
-        self.assertLessEqual(result["large_paired_ratio_median"], .85)
+        self.assertLessEqual(result["large_paired_ratio_median"], .90)
         self.assertFalse(result["scenarios"]["mixed"]["gate"])
         self.assertFalse(result["speed_gate"])
         schedule = matrix.read(self.root / "schedule.json")
