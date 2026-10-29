@@ -1,5 +1,12 @@
 # Change log
 
+## 0.20.2 — 2026-10-29
+
+- Reduce repeated Git work during fixed-source review with batched reads and reusable verified search results; finish still independently validates its evidence.
+- Keep selected Repo ancestor no-op coverage independent from unavailable peer Repos while leaving the overall review incomplete when workspace evidence is missing.
+- Run release validation and build the canonical package on Windows with Python 3.10 and 3.14; remove obsolete Megin receipt references.
+- Synthetic helper measurements do not establish full model review speed or semantic quality; see [release notes](docs/releases/v0.20.2.md) for the remaining acceptance limits.
+
 ## 0.19.0 — 2026-10-23
 
 - Publish the cumulative 0.18.0/0.19.0 changes with the explicitly accepted model-quality and performance limitations documented in [release notes](docs/releases/v0.19.0.md). The original acceptance result remains failed; release CI is a separate required gate.

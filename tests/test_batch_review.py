@@ -270,13 +270,15 @@ class BatchReviewTests(ReviewFixture):
                 mock.patch.object(workspace, "save", wraps=workspace.save) as saves:
             actual = workspace.batch_search(context, before, requests, api)
         self.assertEqual({"searches": expected}, actual)
-        self.assertEqual(len(before["repositories"]), calls.call_count)
+        self.assertEqual(len(before["repositories"]), sum(
+            call.args[1][0] == "grep" for call in calls.call_args_list))
         self.assertEqual(len(requests), saves.call_count)
         self.assertEqual(["S-0001", "S-0002", "S-0003", "S-0004"],
                          [row["id"] for row in actual["searches"]])
         with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
             workspace.batch_search(context, before, requests, api)
-        self.assertEqual(len(before["repositories"]), calls.call_count)
+        self.assertEqual(len(before["repositories"]), sum(
+            call.args[1][0] == "grep" for call in calls.call_args_list))
 
     def test_batch_search_checks_contract_even_when_the_query_is_cached(self):
         self.make_repo("consumer")
@@ -288,7 +290,8 @@ class BatchReviewTests(ReviewFixture):
         with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
             with self.assertRaisesRegex(ValueError, "registered --contract"):
                 workspace.batch_search(context, manifest, requests, api)
-        self.assertEqual(len(manifest["repositories"]), calls.call_count)
+        self.assertEqual(len(manifest["repositories"]), sum(
+            call.args[1][0] == "grep" for call in calls.call_args_list))
         self.assertEqual(len(manifest["repositories"]), len(workspace.load(context)["searches"]))
 
     def test_batch_search_does_not_cache_failures_or_live_backed_sources(self):
@@ -298,6 +301,8 @@ class BatchReviewTests(ReviewFixture):
         attempted = []
 
         def fail_first(*args, **kwargs):
+            if args[1][0] != "grep":
+                return original(*args, **kwargs)
             attempted.append(True)
             return (128, "", "transient error") if len(attempted) == 1 else original(*args, **kwargs)
 
@@ -312,7 +317,7 @@ class BatchReviewTests(ReviewFixture):
         cache = workspace.FixedSearchCache(context, api)
         with mock.patch.object(api, "run_git_capture", wraps=api.run_git_capture) as calls:
             self.assertEqual(cache.run(repo, "head", "contract"), cache.run(repo, "head", "contract"))
-        self.assertEqual(2, calls.call_count)
+        self.assertEqual(2, sum(call.args[1][0] == "grep" for call in calls.call_args_list))
 
     def test_search_cache_rechecks_owned_storage_and_isolates_source_and_query(self):
         context, manifest = self.capture()
@@ -323,11 +328,11 @@ class BatchReviewTests(ReviewFixture):
             self.assertEqual(first, cache.run(repo, "head", "contract"))
             cache.run(repo, "base", "contract")
             cache.run(repo, "head", "no-match")
-            self.assertEqual(3, calls.call_count)
+            self.assertEqual(3, sum(call.args[1][0] == "grep" for call in calls.call_args_list))
             repo["sources"]["head"]["objects"] = "missing"
             with self.assertRaisesRegex(ValueError, "outside its frozen"):
                 cache.run(repo, "head", "contract")
-            self.assertEqual(3, calls.call_count)
+            self.assertEqual(3, sum(call.args[1][0] == "grep" for call in calls.call_args_list))
 
 
 class FixedSourceCacheTests(ReviewFixture):

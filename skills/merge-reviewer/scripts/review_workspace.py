@@ -979,8 +979,13 @@ def ancestor_noop(manifest: dict) -> bool:
         return False
     require(tree == sources["base"].get("tree_sha"), "ancestor preview differs from the base tree")
     if not (native.get("context_complete") is True and native.get("review_complete") is True
-            and not (repo.get("limitations") or native.get("context_gaps") or native.get("review_limitations")
-                     or manifest.get("context_gaps"))):
+            and not (repo.get("limitations") or native.get("context_gaps") or native.get("review_limitations"))):
+        return False
+    workspace_gaps = manifest.get("context_gaps")
+    other_repo_prefixes = tuple(
+        f"{candidate['id']}: " for candidate in manifest["repositories"] if candidate["id"] != repo["id"])
+    if not isinstance(workspace_gaps, list) or not all(
+            isinstance(gap, str) and gap.startswith(other_repo_prefixes) for gap in workspace_gaps):
         return False
     path = repo.get("ancestor_path")
     require(isinstance(path, list) and path
