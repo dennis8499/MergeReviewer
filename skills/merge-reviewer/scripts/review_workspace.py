@@ -708,8 +708,13 @@ def instructions(context, manifest, repo_id, path, api, *, cache=None):
 
 def branch_snapshot(context: Path, repo: dict, args, api, *, tree_cache=None, frozen_refs=None):
     native_args = copy.copy(args)
-    native_args.workspace, native_args.workspace_file = repo["path"], None
-    native_args.project = repo["path"]
+    repo_path = api.normalize_path(repo["path"])
+    native_args.workspace, native_args.workspace_file = str(repo_path), None
+    native_args.project = str(repo_path)
+    # This call works on one Repo that the workspace pass has already
+    # discovered and validated. Scope its proof to that Repo because the
+    # original workspace discovery may cover a parent directory.
+    native_args._workspace_discovery = (repo_path, None, (repo_path,), (repo_path,), repo_path, None)
     native_args.context_dir = str(safe_path(context, f"repos/{repo['id']}/native"))
     native = api._build_manifest(native_args, frozen_refs=frozen_refs, before_snapshot=repo.get("before"))
     repo["native"] = native
@@ -743,6 +748,8 @@ def validate_root(path: Path, api) -> Path:
     git_root = str(api.run_git(resolved, ["rev-parse", "--show-toplevel"])).strip()
     require(git_root and Path(git_root).resolve() == resolved,
             "Repo path must be its Git root")
+    object_format = str(api.run_git(resolved, ["rev-parse", "--show-object-format"])).strip()
+    require(object_format in ("sha1", "sha256"), "unsupported Git object format")
     return resolved
 
 

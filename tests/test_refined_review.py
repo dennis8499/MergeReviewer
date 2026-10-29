@@ -269,7 +269,14 @@ class BoundaryV2Tests(ReviewFixture):
         separate = [workspace.FixedSearchCache(context, api).run(repo, "head", query) for query in queries]
         self.assertEqual(separate, combined)
         fresh = workspace.FixedSearchCache(context, api, persistent=True)
-        with mock.patch.object(api, "run_git_capture", side_effect=AssertionError("persistent result was not reused")):
+        original = api.run_git_capture
+
+        def reject_search(repo_path, arguments, **kwargs):
+            if arguments and arguments[0] == "grep":
+                raise AssertionError("persistent result was not reused")
+            return original(repo_path, arguments, **kwargs)
+
+        with mock.patch.object(api, "run_git_capture", side_effect=reject_search):
             self.assertEqual(combined, [fresh.run(repo, "head", query) for query in queries])
 
     def test_batched_search_supports_utf8_paths_and_queries(self):
