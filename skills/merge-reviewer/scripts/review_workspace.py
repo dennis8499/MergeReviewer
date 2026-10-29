@@ -591,7 +591,9 @@ def _seal_snapshot(context: Path, repo: dict, api, *, tree_cache=None, extra_com
     source_repo = Path(repo["path"])
     relative = f"repos/{repo['id']}/snapshot.git"
     destination = safe_path(context, relative)
-    object_format = str(api.run_git(source_repo, ["rev-parse", "--show-object-format"])).strip()
+    object_format = repo.get("_preflight_object_format")
+    if object_format is None:
+        object_format = str(api.run_git(source_repo, ["rev-parse", "--show-object-format"])).strip()
     require(object_format in ("sha1", "sha256"), "unsupported Git object format")
     api.run_git(context, ["init", "--bare", f"--object-format={object_format}", str(destination)])
     object_ids = set()
@@ -748,8 +750,6 @@ def validate_root(path: Path, api) -> Path:
     git_root = str(api.run_git(resolved, ["rev-parse", "--show-toplevel"])).strip()
     require(git_root and Path(git_root).resolve() == resolved,
             "Repo path must be its Git root")
-    object_format = str(api.run_git(resolved, ["rev-parse", "--show-object-format"])).strip()
-    require(object_format in ("sha1", "sha256"), "unsupported Git object format")
     return resolved
 
 
@@ -812,6 +812,9 @@ def build(args, api) -> dict:
             manifest["seed_repos"] = [record["id"]]
         try:
             actual = validate_root(candidate, api)
+            object_format = str(api.run_git(actual, ["rev-parse", "--show-object-format"])).strip()
+            require(object_format in ("sha1", "sha256"), "unsupported Git object format")
+            record["_preflight_object_format"] = object_format
             record["head_sha"] = api.verified_commit(actual, "HEAD")
             if candidate != seed:
                 require(record["head_sha"], "related Repo has no HEAD commit")
@@ -925,6 +928,7 @@ def build(args, api) -> dict:
             record.pop("snapshot", None)
             record["limitations"].append(str(outcome))
     for record in manifest["repositories"]:
+        record.pop("_preflight_object_format", None)
         manifest["context_gaps"].extend(f"{record['id']}: {gap}" for gap in record["limitations"])
     api.capture_phase("manifest-finalize")
     manifest["required_coverage"] = required_coverage(manifest)
