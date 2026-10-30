@@ -4,7 +4,7 @@
 
 # MergeReviewer 詳細使用指南
 
-適用版本：**0.15.0**。主要讀者是使用 Codex 執行合併前審查的開發者；進階流程供工具維護者使用。
+適用版本：**0.20.3**。主要讀者是使用 Codex 執行合併前審查的開發者；進階流程供工具維護者使用。
 
 內容：安裝 → 第一次審查 → 參數 → 常見情境 → 多儲存庫判定 → 報告 → 疑難排解 → 升級 → 手動輔助程式。
 
@@ -24,7 +24,7 @@ python --version
 
 ### 安裝 ZIP 或原始碼
 
-使用 `merge-reviewer-0.15.0.zip`，解壓後得到 `merge-reviewer` 資料夾。發布套件見 [GitHub Releases](https://github.com/dennis8499/MergeReviewer/releases)；尚未發布時，可在原始碼根目錄執行 `python scripts/package_release.py --tag v0.15.0`，取得 `dist/merge-reviewer-0.15.0.zip`。
+使用 `merge-reviewer-0.20.3.zip`，解壓後得到 `merge-reviewer` 資料夾。發布套件見 [GitHub Releases](https://github.com/dennis8499/MergeReviewer/releases)；尚未發布時，可在原始碼根目錄執行 `python scripts/package_release.py --tag v0.20.3`，取得 `dist/merge-reviewer-0.20.3.zip`。
 
 以下假設目前目錄已解壓：
 
@@ -45,7 +45,7 @@ Test-Path -LiteralPath (Join-Path $skillTarget "references\usage.md")
 Get-Content -LiteralPath (Join-Path $skillTarget "VERSION")
 ~~~
 
-兩個 `Test-Path` 應為 `True`，`VERSION` 應為 0.15.0。原始碼安裝把來源換成 `.\skills\merge-reviewer`；macOS／Linux 使用相同技能目錄規則與對應檔案複製工具。
+兩個 `Test-Path` 應為 `True`，`VERSION` 應為 0.20.3。原始碼安裝把來源換成 `.\skills\merge-reviewer`；macOS／Linux 使用相同技能目錄規則與對應檔案複製工具。
 
 在 Codex 技能清單確認 **Merge Reviewer（合併審查）**。若仍未載入，重新開始工作階段，確認清單及安裝路徑。
 
@@ -183,7 +183,7 @@ $merge-reviewer VSCode工作區="C:\Work\Shop.code-workspace" 專案名稱=Order
 
 ## 6. Merge Report 解讀
 
-報告首行直接呈現合併建議、狀態與摘要，接著列 P0–P3 數量；依序包含「比較資訊、問題、範圍與限制、下一步、技術審查紀錄」。完整欄位與證據規則見[報告風格](report-style.md#報告與聊天結果)。
+新草稿先以 H1 顯示 Repo 名稱，再於「審查結論」下呈現合併建議、狀態、摘要及 P0–P3 數量。新草稿使用五個 H2：「審查結論、問題總攬、問題詳情（工程師參考）、範圍與限制、技術審查紀錄（工程師參考）」；比較資訊與固定版本收合於技術紀錄，下一步列在「範圍與限制」下的 H3。未標記 `engineering-review/v1` 的舊 v3 草稿保留相容版面，從合併建議與摘要開始，並以「比較資訊、問題、範圍與限制、下一步、技術審查紀錄」作為 H2。完整欄位與證據規則見[報告風格](report-style.md#報告與聊天結果)。
 
 目前 agent 統一依 Codex Code Review 準則判斷，不另呼叫原生審查引擎，也不設定或變更執行模型。單次仍只有一組 Repo／base／head；所有其他 Repo 固定當前本機 HEAD。先選定全部 SHA，再封裝快照，全部必要快照完成後才開始語意審查。本機分支不連雲端；明確遠端分支按 remote 合併為一次精確 fetch。後續 ref 變動不自動重取或重審。
 
@@ -228,7 +228,7 @@ $merge-reviewer VSCode工作區="C:\Work\Shop.code-workspace" 專案名稱=Order
 | 儲存庫群組根目錄報告／多儲存庫明細 | 新版只在所選儲存庫發布單一 Merge Report；相關證據併入對應問題，覆蓋及搜尋紀錄供內部驗證。 |
 | 輸出 JSON／`--include-json` | 已移除；最終只發布 Markdown。 |
 
-GitlabWorkSpace **0.24.4** 整合 MergeReviewer **0.15.0** 的原生分支審查介面。仍固定 **MergeReviewer 0.11.0** 的舊版工作台須更新完整 VSIX／組合包；不要將 0.15.0 直接覆蓋到其依賴 MR／`quick`／收據的目錄。獨立技能可直接依本指南安裝完整新版。
+歷史整合參考：GitlabWorkSpace **0.24.4** 整合 MergeReviewer **0.15.0** 的原生分支審查介面。仍固定 **MergeReviewer 0.11.0** 的舊版工作台須更新完整 VSIX／組合包；不要將 0.15.0 直接覆蓋到其依賴 MR／`quick`／收據的目錄。這組版本號描述舊工作台的相容性，不是本指南適用版本；獨立技能請依本指南安裝目前版本。
 
 ## 9. 進階：手動輔助程式
 

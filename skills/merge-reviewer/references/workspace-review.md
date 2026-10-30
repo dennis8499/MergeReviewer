@@ -14,7 +14,7 @@ python "<skill-dir>/scripts/git_review_context.py" --workspace "<root>" --projec
 
 其他欄位：`workspace_roots`、`extension_reason`、`review_basis=codex-native`、`repositories`、`required_coverage`、`changed_contracts`、`searches`、`context_gaps`。所選儲存庫記錄兩個分支的固定版本、差異、合併父提交與合併預覽；其他儲存庫只擷取自身本機 HEAD。`network_activity` 的四項計數及 `fetches` 的單位見[操作與負載](runtime-controls.md)。
 
-新 context 加上 `snapshot_policy=frozen-start/v1`、`refs_pinned_at`、`capture_completed_at` 及 `workspace_instructions`。各成功擷取的 Repo 帶有 `snapshot`（`policy`、owned 相對 `git_dir`、`captured_at`、`object_format`）及固定 `instructions` 索引；所有來源的 `objects` 都指向該 owned Git 證據庫。普通非 thin pack 保存所需 commit、完整 tree/blob 及預覽物件，不借用原 Repo objects、不依賴原分支或後續 fetch。準備階段完成前仍需完整取得物件；完成後雲端／本機更新、force push、原 Repo GC 或工作區宣告變動不會替換或使這份快照失效。
+新 context 加上 `snapshot_policy=frozen-start/v1`、`refs_pinned_at`、`capture_completed_at` 及 `workspace_instructions`。各成功擷取的 Repo 帶有 `snapshot`（`policy`、owned 相對 `git_dir`、`captured_at`、`object_format`）及固定 `instructions` 索引；`object_format` 支援 `sha1` 與 `sha256`。每個候選 Repo 在分支同步與快照擷取前，先確認路徑是實際 Git 根目錄並驗證 object format；所選 Repo 預檢失敗會停止準備，peer 預檢失敗會列為 context gap。快照使用已驗證的格式初始化 owned Git 證據庫。所有來源的 `objects` 都指向該 owned Git 證據庫。普通非 thin pack 保存所需 commit、完整 tree/blob 及預覽物件，不借用原 Repo objects、不依賴原分支或後續 fetch。準備階段完成前仍需完整取得物件；完成後雲端／本機更新、force push、原 Repo GC 或工作區宣告變動不會替換或使這份快照失效。
 
 準備時先固定入口 base／head 與所有其他 Repo 當前本機 HEAD，再使用這些 SHA 封裝全部快照；其間 ref 移動不切換已選版本，必要物件遺失則明確失敗、不自動重取。快照紀錄的是準備階段選定的各個 SHA，跨 Repo 不宣稱同一瞬間的原子擷取。報告列出準備起迄時間並只適用於這次固定版本；不自動重審或補抓新版本。缺少 `snapshot_policy` 的舊 v3 context 維持原本發布前漂移驗證，不能視為自足快照。
 
@@ -233,7 +233,7 @@ v3 必填欄位、`engineering-review/v1` 完整性驗證與 CLI 維持相容。
 python "<skill-dir>/scripts/review_report.py" --context-dir "<context>" --result "<context>/draft.json" --retain-on-validation-error
 ~~~
 
-只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。正文前段的「比較資訊」列出所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）。問題證據附完整固定 ref；多儲存庫延伸證據整合於同一份報告。
+只發布一個 Markdown Merge Report，預設路徑是 `<所選Repo>/review-reports/merge-review-<時間戳>-<基礎分支commit前8碼>-<比較分支commit前8碼>.md`。時間戳採 UTC 發布時間及微秒；檔名提交使用固定的 `base`／`head` 分支頂端 SHA 前 8 碼。未標記的舊 v3 草稿採相容版面，「比較資訊」列於正文前段，包含所選 Repo／本機路徑、兩個輸入分支與實際 ref、8 碼 commit、合併方向及主要差異範圍（共同祖先 → 比較分支）。問題證據附完整固定 ref；多儲存庫延伸證據整合於同一份報告。
 
 新草稿的 Markdown 使用 engineering-review/v1 五個 H2，結論呈現 `review_status`、`priority_counts`；比較資訊與版本放技術紀錄、下一步放範圍下的 H3。舊無標記草稿保留原版面；限制中呈現 `extension_status=disabled|complete|incomplete`。固定版本、逐檔覆蓋、跨儲存庫判定、功能鏈、搜尋及契約完整驗證後保留於同一份報告末尾的 `<details>` 技術紀錄；必要缺口與人工核對區維持展開。下一步為空時明確顯示無額外行動。搜尋僅列識別、來源、契約、狀態與命中數，不複製原始命中內容。設定與私鑰片段省略、認證或連線行遮蔽；仍先完整驗證 ref／行號，再保留原始內容 SHA-256，不能以遮蔽掩蓋無效證據。發布器標準輸出只回傳完整報告路徑。
 

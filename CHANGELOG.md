@@ -1,9 +1,14 @@
 # Change log
 
+## 0.20.3 — 2026-10-30
+
+- Synchronize current installation guidance, release ZIP and version examples, report-layout compatibility notes, and snapshot preflight documentation with the implementation. Preserve dated release and acceptance records as historical snapshots.
+
 ## 0.20.2 — 2026-10-29
 
 - Reduce repeated Git work during fixed-source review with batched reads and reusable verified search results; finish still independently validates its evidence.
 - Keep selected Repo ancestor no-op coverage independent from unavailable peer Repos while leaving the overall review incomplete when workspace evidence is missing.
+- Validate discovered Repo roots and supported Git object formats (`sha1` or `sha256`) before branch fetch and snapshot capture, then initialize each evidence snapshot with the validated format.
 - Run release validation and build the canonical package on Windows with Python 3.10 and 3.14; remove obsolete Megin receipt references.
 - Synthetic helper measurements do not establish full model review speed or semantic quality; see [release notes](docs/releases/v0.20.2.md) for the remaining acceptance limits.
 
