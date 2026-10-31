@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 import uuid
@@ -20,8 +21,41 @@ LIMIT = 24 * 1024
 TERMINAL = {"published", "failed", "cancelled"}
 
 
+class MeasuredFileLock:
+    """FileLock that exposes acquisition delay for per-attempt metrics."""
+
+    def __init__(self, path):
+        self.lock = coordination.FileLock(path)
+        self.wait_seconds = 0.0
+
+    def __enter__(self):
+        started = time.perf_counter()
+        self.lock.acquire()
+        self.wait_seconds = time.perf_counter() - started
+        return self
+
+    def __exit__(self, *_):
+        self.lock.release()
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _line_count_key(manifest, request):
+    """Bind remembered line counts to the exact fixed Repo/source/blob."""
+    repo = next((item for item in manifest.get("repositories", [])
+                 if item.get("id") == request.get("repo")), None)
+    source_name = request.get("source") or (repo or {}).get("review_source")
+    source = (repo or {}).get("sources", {}).get(source_name, {})
+    path = request.get("path")
+    entry = next((item for item in source.get("files", [])
+                  if item.get("path") == path and item.get("kind") == "blob"), None)
+    if not entry:
+        return None
+    identity = {"repo": repo["id"], "source": source_name, "ref": source.get("ref"),
+                "path": path, "blob_sha": entry.get("blob_sha")}
+    return hashlib.sha256(review_runtime.canonical(identity)).hexdigest()
 
 
 def resolve_runtime(workspace=None, explicit=None, create=False):
@@ -106,6 +140,17 @@ def status(root, identifier):
     return result
 
 
+def capabilities():
+    """Machine-readable protocol discovery for workbenches and agent hosts."""
+    return {"schema": "MergeReviewCapabilities/v1", "protocol_version": 1,
+            "draft_formats": ["compact", "v3"],
+            "features": {"artifact_scopes": ["context", "runtime"],
+                         "read_only_artifact_view": True,
+                         "request_preflight": True,
+                         "incremental_resume": True,
+                         "phase_metrics": True}}
+
+
 def repo_index(manifest):
     return [{"repo": item["id"], "name": item["name"], "role": item["role"], "state": item["state"],
              "sources": {name: {"ref": source["ref"]} for name, source in item["sources"].items()}}
@@ -113,7 +158,7 @@ def repo_index(manifest):
 
 
 def draft_template(manifest):
-    return {"schema": "merge-reviewer-workspace-result/v3", "report_layout": "engineering-review/v1",
+    result = {"schema": "merge-reviewer-workspace-result/v3", "report_layout": "engineering-review/v1",
             "summary": "",
             "coverage": [{**row, "status": "not-reviewed", "reason": "尚未完成語意審查。",
                           "evidence": []} for row in manifest["required_coverage"]],
@@ -131,6 +176,12 @@ def draft_template(manifest):
                 for item in manifest.get("boundary_changes", []) if manifest.get("extension_enabled")],
             "findings": [], "pending_confirmations": [], "next_steps": [],
             "tests_executed": [], "tests_not_executed": ["本次尚未執行專案測試。"], "limitations": []}
+    selected = next((repo for repo in manifest.get("repositories", [])
+                     if repo.get("id") == manifest.get("selected_repo")), {})
+    final = selected.get("sources", {}).get("merge-preview", selected.get("sources", {}).get("head", {}))
+    for row in result["merge_parent_review"]:
+        row["final_ref"] = final.get("ref")
+    return result
 
 
 _draft_template_v3 = draft_template
@@ -205,6 +256,260 @@ def initial_read_requests(manifest):
     return requests
 
 
+def operation_preflight(operations, manifest=None, line_counts=None):
+    """Check request structure before any speculative source or search reads."""
+    if not isinstance(operations, list) or not operations:
+        return {"next_index": 0, "code": "authoring.invalid-requests",
+                "pointer": "/operations", "error": "operations must be a nonempty array"}
+    allowed = {
+        "read": {"repo", "source", "path", "line_start", "line_end", "around_line", "context_lines"},
+        "instructions": {"repo", "path"}, "inventory": {"repo", "source"},
+        "patch": {"repo", "path", "line_start", "line_end"},
+        "register-contract": {"contract"},
+        "search": {"query", "repo", "source", "contract", "change_id"},
+        "view": {"artifact", "pointer", "offset", "page_size", "string_offset"},
+    }
+    seen_ids = set()
+    repositories = {item.get("id"): item for item in (manifest or {}).get("repositories", [])}
+    for index, operation in enumerate(operations):
+        base = f"/operations/{index}"
+        if not isinstance(operation, dict):
+            return {"next_index": index, "code": "authoring.invalid-operation",
+                    "pointer": base, "error": "operation must be an object"}
+        identifier = operation.get("id")
+        if not isinstance(identifier, str) or not identifier or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", identifier):
+            return {"next_index": index, "code": "authoring.invalid-operation-id",
+                    "pointer": base + "/id", "operation_id": identifier,
+                    "error": "operation needs a unique id (letters, digits, underscore or hyphen)"}
+        if identifier in seen_ids:
+            return {"next_index": index, "code": "authoring.duplicate-operation-id",
+                    "pointer": base + "/id", "operation_id": identifier,
+                    "error": "operation IDs must be unique within one request"}
+        seen_ids.add(identifier)
+        kind = operation.get("op")
+        if kind not in allowed:
+            return {"next_index": index, "code": "authoring.unsupported-operation",
+                    "pointer": base + "/op", "operation_id": identifier,
+                    "error": "unsupported operation; expected one of " + ", ".join(allowed)}
+        extra = set(operation) - (allowed[kind] | {"id", "op"})
+        if extra:
+            name = sorted(extra)[0]
+            message = "fields is output-only; it cannot select a JSON pointer" if name == "fields" else "unknown operation argument: " + name
+            return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                    "pointer": base + "/" + name.replace("~", "~0").replace("/", "~1"),
+                    "operation_id": identifier, "error": message}
+        args = {key: value for key, value in operation.items() if key not in ("id", "op")}
+        string_fields = {"repo", "source", "path", "query", "contract", "change_id", "artifact", "pointer"}
+        for name in string_fields & args.keys():
+            if kind == "search" and name == "repo" or kind == "register-contract" and name == "contract":
+                continue
+            value = args[name]
+            if value is not None and not isinstance(value, str):
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": f"{base}/{name}", "operation_id": identifier,
+                        "error": name + " must be text"}
+        if kind == "search" and args.get("repo") is not None and not (
+                isinstance(args["repo"], list) and all(isinstance(repo, str) for repo in args["repo"])):
+            return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                    "pointer": base + "/repo", "operation_id": identifier,
+                    "error": "search repo must be an array of Repo IDs"}
+        if manifest is not None:
+            if kind == "search":
+                requested_repos = (args["repo"] if args.get("repo") is not None
+                                   else list(repositories))
+            elif kind == "inventory":
+                requested_repos = [args["repo"]] if args.get("repo") else list(repositories)
+            else:
+                requested_repos = [args.get("repo")]
+            for repo_id in requested_repos:
+                if repo_id not in repositories:
+                    return {"next_index": index, "code": "authoring.unknown-repository",
+                            "pointer": base + "/repo", "operation_id": identifier,
+                            "error": "Repo ID is not present in the captured review"}
+            if kind in ("read", "patch", "instructions") and not args.get("repo"):
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": base + "/repo", "operation_id": identifier,
+                        "error": kind + " needs a Repo ID"}
+            if kind in ("read", "patch") and args.get("repo") in repositories:
+                repo = repositories[args["repo"]]
+                source_name = args.get("source") or repo.get("review_source")
+                if source_name not in repo.get("sources", {}):
+                    return {"next_index": index, "code": "authoring.unknown-source",
+                            "pointer": base + "/source", "operation_id": identifier,
+                            "error": "source is not present in the captured review"}
+                if kind == "read" and args.get("path"):
+                    source = repo["sources"][source_name]
+                    if not any(item.get("path") == args["path"] and item.get("kind") == "blob"
+                               for item in source.get("files", [])):
+                        return {"next_index": index, "code": "authoring.unknown-path",
+                                "pointer": base + "/path", "operation_id": identifier,
+                                "error": "path is not a fixed blob in this source"}
+                    line_count = (line_counts or {}).get(_line_count_key(manifest, args))
+                    if (type(args.get("line_start")) is int and args["line_start"] >= 1
+                            and type(args.get("line_end")) is int
+                            and args["line_end"] >= args["line_start"] and type(line_count) is int
+                            and args["line_end"] > line_count):
+                        return {"next_index": index, "code": "evidence.line-range-out-of-bounds",
+                                "pointer": base + "/line_end", "operation_id": identifier,
+                                "line_count": line_count,
+                                "error": f"line_end exceeds fixed file line count ({line_count})",
+                                "hint": f"line_end must be at most {line_count}; use around_line for a bounded excerpt."}
+            if kind in ("search", "inventory") and args.get("source") is not None:
+                targets = [repositories[repo_id] for repo_id in requested_repos]
+                if targets and any(args["source"] not in item.get("sources", {}) for item in targets):
+                    return {"next_index": index, "code": "authoring.unknown-source",
+                            "pointer": base + "/source", "operation_id": identifier,
+                            "error": "source is not present in every selected Repo"}
+        if kind == "search" and (not isinstance(args.get("query"), str) or not args.get("query")):
+            return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                    "pointer": base + "/query", "operation_id": identifier,
+                    "error": "search query must be nonempty text"}
+        if kind == "register-contract" and not isinstance(args.get("contract"), dict):
+            return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                    "pointer": base + "/contract", "operation_id": identifier,
+                    "error": "register-contract needs one contract object"}
+        if kind in ("read", "patch"):
+            if ("line_start" in args) != ("line_end" in args):
+                bad = "line_start" if "line_start" not in args else "line_end"
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": base + "/" + bad, "operation_id": identifier,
+                        "error": "line_start and line_end must be supplied together as integers"}
+            first, last = args.get("line_start"), args.get("line_end")
+            if first is not None and (type(first) is not int or type(last) is not int or first < 1 or last < first):
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": base + "/line_start", "operation_id": identifier,
+                        "error": "line range must satisfy 1 <= line_start <= line_end"}
+            if kind == "read" and args.get("around_line") is not None and (type(args["around_line"]) is not int or args["around_line"] < 1):
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": base + "/around_line", "operation_id": identifier,
+                        "error": "around_line must be a positive integer"}
+            if kind == "read" and args.get("context_lines") is not None and (type(args["context_lines"]) is not int or args["context_lines"] < 0):
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": base + "/context_lines", "operation_id": identifier,
+                        "error": "context_lines must be a nonnegative integer"}
+            if kind == "read" and args.get("around_line") is not None and first is not None:
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": base + "/around_line", "operation_id": identifier,
+                        "error": "around_line cannot accompany exact bounds"}
+        if kind in ("read", "patch") and not args.get("path"):
+            return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                    "pointer": base + "/path", "operation_id": identifier, "error": kind + " needs a path"}
+        if kind in ("read", "patch") and not args.get("repo"):
+            return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                    "pointer": base + "/repo", "operation_id": identifier, "error": kind + " needs a Repo ID"}
+        if kind == "instructions" and not args.get("repo"):
+            return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                    "pointer": base + "/repo", "operation_id": identifier,
+                    "error": "instructions needs a Repo ID"}
+        if kind == "view":
+            if not args.get("artifact"):
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": base + "/artifact", "operation_id": identifier,
+                        "error": "view needs an artifact SHA-256"}
+            if args.get("pointer", "") and not args["pointer"].startswith("/"):
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": base + "/pointer", "operation_id": identifier,
+                        "error": "view pointer must be empty or a JSON pointer"}
+            for name, minimum in (("offset", 0), ("string_offset", 0), ("page_size", 1)):
+                if name in args and (type(args[name]) is not int or args[name] < minimum
+                                     or name == "page_size" and args[name] > 1000):
+                    return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                            "pointer": base + "/" + name, "operation_id": identifier,
+                            "error": name + " is outside the supported integer range"}
+    return None
+
+
+def _pack_receipt(context, manifest):
+    import review_workspace as workspace
+    packs = []
+    for repo in manifest.get("repositories", []):
+        if repo.get("state") != "captured" or not isinstance(repo.get("snapshot"), dict):
+            continue
+        pack_dir = workspace.evidence_repository(context, repo) / "objects" / "pack"
+        if not pack_dir.exists():
+            continue
+        for item in sorted(pack_dir.iterdir()):
+            if item.is_symlink() or not item.is_file():
+                raise ValueError("Captured pack directory contains an unexpected entry")
+            packs.append({"path": item.relative_to(context).as_posix(), "size": item.stat().st_size,
+                          "sha256": coordination.file_digest(item)})
+    return packs
+
+
+def capture_integrity_receipt(context, manifest, previous=None):
+    packs = previous.get("packs") if isinstance(previous, dict) else None
+    if packs is None:
+        packs = _pack_receipt(context, manifest)
+    return {"schema": "MergeReviewEvidenceReceipt/v1",
+            "manifest_sha256": hashlib.sha256((Path(context) / "manifest.json").read_bytes()).hexdigest(),
+            "packs": packs}
+
+
+def refresh_integrity_receipt(context, manifest, previous=None):
+    return capture_integrity_receipt(context, manifest, previous)
+
+
+def verify_retry_integrity(context, manifest, job):
+    """Hash mutable evidence only on a recovery path; full publish checks remain mandatory."""
+    receipt = job.get("evidence_receipt")
+    if not isinstance(receipt, dict) or receipt.get("schema") != "MergeReviewEvidenceReceipt/v1":
+        import workspace_report
+        workspace_report.validate_captured_evidence(manifest, context)
+        return capture_integrity_receipt(context, manifest)
+    manifest_hash = hashlib.sha256((Path(context) / "manifest.json").read_bytes()).hexdigest()
+    current_packs = _pack_receipt(context, manifest)
+    if current_packs != receipt.get("packs"):
+        import workspace_report
+        workspace_report.validate_captured_evidence(manifest, context)
+        raise ValueError("Captured pack bytes differ from the saved integrity receipt")
+    if manifest_hash != receipt.get("manifest_sha256"):
+        import workspace_report
+        workspace_report.validate_captured_evidence(manifest, context)
+        return {**receipt, "manifest_sha256": manifest_hash}
+    return receipt
+
+
+def verify_step_manifest_receipt(context, manifest, job):
+    receipt = job.get("evidence_receipt")
+    if not isinstance(receipt, dict) or receipt.get("schema") != "MergeReviewEvidenceReceipt/v1":
+        import workspace_report
+        workspace_report.validate_captured_evidence(manifest, context)
+        return capture_integrity_receipt(context, manifest)
+    current = hashlib.sha256((Path(context) / "manifest.json").read_bytes()).hexdigest()
+    if current != receipt.get("manifest_sha256"):
+        import workspace_report
+        workspace_report.validate_captured_evidence(manifest, context)
+        return {**receipt, "manifest_sha256": current}
+    return receipt
+
+
+def verify_step_packs(context, manifest, job):
+    receipt = job.get("evidence_receipt")
+    if not isinstance(receipt, dict) or receipt.get("schema") != "MergeReviewEvidenceReceipt/v1":
+        return verify_retry_integrity(context, manifest, job)
+    if _pack_receipt(context, manifest) != receipt.get("packs"):
+        import workspace_report
+        workspace_report.validate_captured_evidence(manifest, context)
+        raise ValueError("Captured pack bytes differ from the saved integrity receipt")
+    return receipt
+
+
+def git_metrics_after(metrics, phase, activity):
+    result = dict(metrics or {})
+    rows = list(result.get("git_command_phases", []))
+    rows.append({"phase": phase, "command_count": activity.get("command_count", 0),
+                 "fetch_command_count": activity.get("fetch_command_count", 0),
+                 "process_seconds": activity.get("process_seconds", 0.0)})
+    result["git_command_phases"] = rows[-200:]
+    result["git_command_count"] = result.get("git_command_count", 0) + activity.get("command_count", 0)
+    result["fetch_command_count"] = result.get("fetch_command_count", 0) + activity.get("fetch_command_count", 0)
+    result["git_process_seconds"] = result.get("git_process_seconds", 0.0) + activity.get("process_seconds", 0.0)
+    result["fetch_connection_evidence"] = "not-observed"
+    result.setdefault("model_analysis_seconds", None)
+    result.setdefault("model_token_count", None)
+    return result
+
+
 def remaining(draft):
     if not isinstance(draft, dict):
         return {}
@@ -232,6 +537,30 @@ def diagnostics(draft, manifest, context=None):
 
 
 def check(root, identifier):
+    import git_review_context as api
+    token = api.GIT_PROCESS_ACTIVITY.set(api.empty_git_process_activity())
+    started = time.perf_counter()
+    result = None
+    metrics = None
+    try:
+        result = _check_once(root, identifier)
+    finally:
+        activity = api.git_process_activity()
+        api.GIT_PROCESS_ACTIVITY.reset(token)
+        try:
+            job = coordination.read_json(job_path(root, identifier))
+            metrics = git_metrics_after(job.get("metrics", {}), "check", activity)
+            metrics["check_diagnostic_seconds"] = (job.get("metrics", {}).get("check_diagnostic_seconds", 0.0)
+                                                    + time.perf_counter() - started)
+            update(root, identifier, metrics=metrics)
+        except (OSError, ValueError, KeyError):
+            pass
+    if result is not None and metrics is not None:
+        result[0]["metrics"] = metrics
+    return result
+
+
+def _check_once(root, identifier):
     """Collect authoring gaps without running Git or marking evidence verified."""
     import review_workspace as workspace
     job = coordination.read_json(job_path(root, identifier))
@@ -248,10 +577,7 @@ def check(root, identifier):
     except (OSError, ValueError) as exc:
         return {"request_id": identifier, "errors": [{"code": "authoring.invalid-json", "pointer": "", "path": "draft", "message": str(exc)}],
                 "ready_for_finish": False, "evidence_verified": False, "git_commands": 0}, 3
-    started = time.perf_counter()
     value = diagnostics(draft, manifest, context)
-    update(root, identifier, metrics={**job.get("metrics", {}),
-                                     "check_diagnostic_seconds": time.perf_counter() - started})
     return {"request_id": identifier, "context_retained": True, **value}, 0 if value["ready_for_finish"] else 3
 
 
@@ -326,6 +652,7 @@ def start(args):
     context = None
     active = None
     manifest = None
+    job_created = False
     try:
         if path.exists():
             existing = coordination.read_json(path)
@@ -337,6 +664,7 @@ def start(args):
                 "updated_at": now(), "pid": os.getpid(), "inputs": inputs, "input_digest": fingerprint,
                 "draft_format": args.draft_format}
         coordination.atomic(path, job)
+        job_created = True
         def notify(phase, fields):
             update(root, identifier, phase=phase, **fields)
             print(json.dumps({"request_id": identifier, "phase": phase, **fields}, ensure_ascii=False),
@@ -418,6 +746,7 @@ def start(args):
                  "authoring_schema": "merge-reviewer-authoring/v1"}
         coordination.atomic(context / "start.json", guide)
         active.finish_phase()
+        evidence_receipt = capture_integrity_receipt(context, manifest)
         git_metrics = api.git_process_activity()
         metrics = {"request_total_seconds": time.perf_counter() - request_started,
                    "discovery_seconds": discovery_seconds, "preflight_seconds": preflight_seconds,
@@ -430,22 +759,34 @@ def start(args):
                    "git_command_count": git_metrics["command_count"],
                    "fetch_command_count": git_metrics["fetch_command_count"],
                    "git_process_seconds": git_metrics["process_seconds"],
+                   "git_command_phases": [{"phase": "start", "command_count": git_metrics["command_count"],
+                                           "fetch_command_count": git_metrics["fetch_command_count"],
+                                           "process_seconds": git_metrics["process_seconds"]}],
                    "fetch_connection_evidence": "not-observed",
                    "model_analysis_seconds": None, "model_token_count": None}
         update(root, identifier, state="ready", phase="review", selected_repo=selected["id"],
                network_activity=manifest["network_activity"], sync_activity=manifest.get("sync_activity", []),
                pack_cache_hits=active.pack_hits,
-               metrics=metrics)
+               metrics=metrics, evidence_receipt=evidence_receipt)
         prune_jobs(root)
         return guide
     except Exception as exc:
-        if path.exists():
+        if job_created and path.exists():
+            activity = api.git_process_activity()
+            previous = coordination.read_json(path)
+            metrics = git_metrics_after(previous.get("metrics", {}), "start", activity)
+            metrics.update(request_total_seconds=time.perf_counter() - request_started,
+                           phase_seconds=dict(active.timings) if active else {},
+                           sync_wait_seconds=active.timings.get("waiting-network", 0) if active else 0,
+                           packing_seconds=active.timings.get("packing_seconds", 0) if active else 0,
+                           snapshot_pack_wait_seconds=active.timings.get("packing_wait_seconds", 0) if active else 0,
+                           pack_cache_hits=active.pack_hits if active else 0)
             update(root, identifier, state="cancelled" if active and active.cancelled() else "failed",
                    phase="terminal", error=coordination.safe_error(exc), finished_at_epoch=time.time(),
                    network_activity=getattr(exc, "network_activity",
                                             manifest["network_activity"] if manifest else api.empty_network_activity()),
                    sync_activity=[{key: value for key, value in item.items() if key != "receipt"}
-                                  for item in active.syncs] if active else [])
+                                  for item in active.syncs] if active else [], metrics=metrics)
         if context and context.exists():
             review_session.cleanup_session(context)
         raise
@@ -456,7 +797,7 @@ def start(args):
         lock.release()
 
 
-def artifact_view(context, artifact, pointer="", offset=0, page_size=100, string_offset=0):
+def artifact_view(context, artifact, pointer="", offset=0, page_size=100, string_offset=0, scope="context"):
     value = review_runtime.load_view(context, artifact)
     if not isinstance(pointer, str) or pointer and not pointer.startswith("/"):
         raise ValueError("view pointer must be a JSON pointer.")
@@ -465,23 +806,110 @@ def artifact_view(context, artifact, pointer="", offset=0, page_size=100, string
         value = value[int(token)] if isinstance(value, list) else value[token]
     if type(offset) is not int or offset < 0 or type(page_size) is not int or not 1 <= page_size <= 1000:
         raise ValueError("Invalid view page.")
+
+    def escape(token):
+        return str(token).replace("~", "~0").replace("/", "~1")
+
+    def preview(item, item_pointer):
+        size = len(review_runtime.canonical(item))
+        if size <= LIMIT // 4:
+            return item, []
+        if isinstance(item, str):
+            text = item[:2048]
+            return {"omitted": True, "characters": len(item), "preview": text,
+                    "continue": view_continuation(context, artifact, item_pointer, 0,
+                                                  string_offset=len(text), scope=scope)}, [item_pointer]
+        if isinstance(item, list):
+            return {"omitted": True, "total": len(item),
+                    "continue": view_continuation(context, artifact, item_pointer, 0, scope=scope)}, [item_pointer]
+        if isinstance(item, dict):
+            fields, links, drilldowns = [], [], []
+            for key, child in item.items():
+                child_pointer = item_pointer + "/" + escape(key)
+                if len(review_runtime.canonical(child)) <= 1024 and len(review_runtime.canonical(fields)) < LIMIT // 5:
+                    fields.append({key: child})
+                else:
+                    links.append(key)
+                    drilldowns.append(view_continuation(context, artifact, child_pointer, 0, scope=scope))
+                if len(fields) >= 24:
+                    break
+            return {"omitted": True, "fields": fields, "more_fields": len(item) > len(fields) + len(links),
+                    "continue_fields": links, "drilldowns": drilldowns}, drilldowns
+        return {"omitted": True, "type": type(item).__name__, "bytes": size,
+                "continue": view_continuation(context, artifact, item_pointer, 0, scope=scope)}, [item_pointer]
+
     if isinstance(value, list):
         items = value[offset:offset + page_size]
         while len(review_runtime.canonical(items)) > LIMIT // 2 and len(items) > 1:
             items = items[:max(1, len(items) // 2)]
         end = offset + len(items)
-        return {"artifact": artifact, "pointer": pointer, "items": items,
+        drilldowns = []
+        bounded = []
+        for index, item in enumerate(items, offset):
+            projected, links = preview(item, pointer + "/" + str(index))
+            bounded.append(projected)
+            drilldowns.extend(link for link in links if isinstance(link, dict))
+        result = {"artifact": artifact, "pointer": pointer, "scope": scope, "items": items,
                 "total": len(value), "next_offset": end if end < len(value) else None,
-                "view_complete": end >= len(value)}
+                "view_complete": end >= len(value) and not drilldowns}
+        result["items"] = bounded
+        if drilldowns:
+            result["drilldowns"] = drilldowns
+        if result["next_offset"] is not None:
+            result["continue"] = view_continuation(context, artifact, pointer, end, page_size, scope=scope)
+        return result
     if isinstance(value, str):
         if type(string_offset) is not int or string_offset < 0:
             raise ValueError("Invalid string_offset.")
         text = value[string_offset:string_offset + 2048]
         end = string_offset + len(text)
-        return {"artifact": artifact, "pointer": pointer, "text": text,
+        result = {"artifact": artifact, "pointer": pointer, "scope": scope, "text": text,
                 "next_string_offset": end if end < len(value) else None, "view_complete": end >= len(value)}
-    return {"artifact": artifact, "pointer": pointer, "value": value,
-            "fields": list(value) if isinstance(value, dict) else None}
+        if result["next_string_offset"] is not None:
+            result["continue"] = view_continuation(context, artifact, pointer, 0, page_size,
+                                                   string_offset=end, scope=scope)
+        return result
+    projected, drilldowns = preview(value, pointer)
+    result = {"artifact": artifact, "pointer": pointer, "scope": scope, "value": projected,
+              "fields": [str(name)[:160] for name in list(value)[:40]] if isinstance(value, dict) else None,
+              "fields_total": len(value) if isinstance(value, dict) else None,
+              "view_complete": not drilldowns}
+    if drilldowns:
+        result["drilldowns"] = drilldowns
+    return result
+
+
+def view_continuation(context, artifact, pointer, offset, page_size=100, *, string_offset=None, scope="context"):
+    value = {"command": "review_session.py view", "artifact_scope": scope,
+             "artifact": artifact, "pointer": pointer, "offset": offset, "page_size": page_size}
+    if string_offset is not None:
+        value["string_offset"] = string_offset
+    context = Path(context)
+    if context.parent.name in ("sessions", "responses"):
+        value.update(runtime_root=str(context.parent.parent), request_id=context.name)
+    return value
+
+
+def artifact_location(root, identifier, artifact, scope=None):
+    """Resolve only already-existing artifacts; a read never creates a view directory."""
+    job = coordination.read_json(job_path(root, identifier))
+    context = job_context(root, identifier, job)
+    if scope not in (None, "context", "runtime"):
+        raise ValueError("artifact_scope must be context or runtime")
+    candidates = ([scope] if scope else ["context", "runtime"])
+    for candidate in candidates:
+        directory = context if candidate == "context" else response_context(root, identifier)
+        path = directory / "views" / (artifact + ".json")
+        if path.is_file():
+            return directory, candidate
+    raise FileNotFoundError("artifact was not found in the selected context or runtime scope")
+
+
+def read_artifact(root, identifier, artifact, *, scope=None, pointer="", offset=0,
+                  page_size=100, string_offset=0):
+    directory, selected_scope = artifact_location(root, identifier, artifact, scope)
+    result = artifact_view(directory, artifact, pointer, offset, page_size, string_offset, selected_scope)
+    return result, selected_scope
 
 
 def step_projection(value):
@@ -517,6 +945,7 @@ def step_projection(value):
 
 
 def compact(value, context):
+    scope = "runtime" if Path(context).parent.name == "responses" else "context"
     if isinstance(value, dict) and isinstance(value.get("operations"), list) and all(
             isinstance(item, dict) and "id" in item and "result" in item for item in value["operations"]):
         returned = {**value, "evidence_complete": True, "review_status": "agent-determined",
@@ -537,8 +966,8 @@ def compact(value, context):
         # results first. One large operation must not hide unrelated small ones.
         operations = value["operations"]
         rows = [{"id": operation.get("id"), "saved": True, "result_returned": False,
-                 "continue": {"op": "view", "artifact": artifact,
-                              "pointer": f"/operations/{index}/result", "offset": 0, "page_size": 100}}
+                 "continue": view_continuation(context, artifact, f"/operations/{index}/result", 0,
+                                                scope=scope)}
                 for index, operation in enumerate(operations)]
         partial = {**{key: item for key, item in value.items() if key != "operations"},
                    "schema": "MergeReviewEvidenceStep/v2", "artifact": artifact,
@@ -547,8 +976,8 @@ def compact(value, context):
         if len(review_runtime.canonical(partial)) >= LIMIT and len(rows) > 64:
             rows[:] = rows[:64]
             partial.update(operations_total=len(operations), operations_next_offset=len(rows),
-                           continue_operations={"op": "view", "artifact": artifact,
-                                                "pointer": "/operations", "offset": len(rows), "page_size": 64})
+                           continue_operations=view_continuation(context, artifact, "/operations", len(rows),
+                                                                 page_size=64, scope=scope))
         if len(review_runtime.canonical(partial)) < LIMIT:
             sizes = sorted(range(len(rows)), key=lambda index: len(review_runtime.canonical(operations[index])))
             for index in sizes:
@@ -575,7 +1004,7 @@ def compact(value, context):
         return item
     result = {"schema": "MergeReviewEvidenceSummary/v1", "artifact": artifact,
               "evidence_complete": True, "view_complete": False, "summary": sketch(value),
-              "continue": {"op": "view", "artifact": artifact, "pointer": "", "offset": 0, "page_size": 100}}
+              "continue": view_continuation(context, artifact, "", 0, scope=scope)}
     if isinstance(value, dict) and "evidence_verified" in value:
         result["evidence_verified"] = value["evidence_verified"]
         result["ready_for_finish"] = value.get("ready_for_finish", False)
@@ -594,18 +1023,54 @@ def step(root, identifier, operations, *, requests_file=None):
     import git_review_context as api
     import review_workspace as workspace
     path = job_path(root, identifier)
-    with coordination.FileLock(path.with_suffix(".owner.lock")):
+    lock_started = time.perf_counter()
+    owner_lock = coordination.FileLock(path.with_suffix(".owner.lock")).acquire()
+    lock_wait = time.perf_counter() - lock_started
+    git_token = api.GIT_PROCESS_ACTIVITY.set(api.empty_git_process_activity())
+    try:
         job = coordination.read_json(path)
         if job["state"] not in ("ready", "reviewing"):
             raise ValueError("Session is not ready for semantic review.")
         active = coordination.Coordination(root, identifier)
         context = job_context(root, identifier, job)
         started = time.perf_counter()
+        error_revalidation = 0.0
+        operation_seconds, operation_counts, operation_starts = {}, {}, {}
+        prefetch_starts = {}
+
+        def progress(stage, completed, total, operation):
+            if stage in ("prefetch-searches", "prefetch-reads"):
+                prefetch_starts[stage] = time.perf_counter()
+            elif stage.endswith("-complete"):
+                original = stage.removesuffix("-complete")
+                begun = prefetch_starts.pop(original, None)
+                if begun is not None:
+                    key = original.replace("prefetch-", "")
+                    operation_seconds[key] = operation_seconds.get(key, 0.0) + time.perf_counter() - begun
+            elif stage == "operation" and isinstance(operation, dict):
+                identifier = operation.get("id")
+                kind = operation.get("op", "unknown")
+                operation_starts[identifier] = (kind, time.perf_counter())
+                operation_counts[kind] = operation_counts.get(kind, 0) + 1
+                row = {"phase": "operation", "completed": completed, "total": total,
+                       "operation_id": identifier, "operation": kind}
+                update(root, job["request_id"], phase="review", progress=row)
+                print(json.dumps({"request_id": job["request_id"], **row}, ensure_ascii=False),
+                      file=sys.stderr, flush=True)
+            elif stage == "operation-complete" and isinstance(operation, dict):
+                identifier = operation.get("id")
+                active_operation = operation_starts.pop(identifier, None)
+                if active_operation:
+                    kind, began = active_operation
+                    operation_seconds[kind] = operation_seconds.get(kind, 0.0) + time.perf_counter() - began
+
         try:
             active.check()
             review_session.validate_session(context)
             with active.activate(), review_runtime.writer(context):
                 manifest = workspace.load(context)
+                receipt = verify_step_manifest_receipt(context, manifest, job)
+                job = {**job, "evidence_receipt": receipt}
                 input_error = None
                 if operations is None:
                     try:
@@ -614,28 +1079,100 @@ def step(root, identifier, operations, *, requests_file=None):
                         operations = coordination.read_json(requests_file)
                     except (OSError, ValueError) as exc:
                         input_error = coordination.safe_error(exc)
+                preflight_error = (operation_preflight(operations, manifest, job.get("line_counts"))
+                                   if input_error is None else None)
+                run_operations = (operations[:preflight_error["next_index"]]
+                                  if preflight_error is not None and isinstance(operations, list)
+                                  else [] if preflight_error is not None else operations)
                 result = ({"operations": [], "complete": False, "next_index": 0,
                            "error": input_error, "code": "authoring.invalid-requests-file",
                            "pointer": "/requests_file", "terminal": False, "recoverable": True,
                            "context_retained": True} if input_error is not None else
-                          workspace.ordered_step(context, manifest, operations, api))
+                          (workspace.ordered_step(context, manifest, run_operations, api, on_progress=progress)
+                           if run_operations else {"operations": [], "complete": True,
+                                                   "next_index": 0}))
+                for kind, began in operation_starts.values():
+                    operation_seconds[kind] = operation_seconds.get(kind, 0.0) + time.perf_counter() - began
+                operation_starts.clear()
+                if preflight_error is not None:
+                    result.update({key: value for key, value in preflight_error.items()
+                                   if key not in ("next_index", "line_count")})
+                    result.update(next_index=preflight_error["next_index"], complete=False,
+                                  terminal=False, recoverable=True, context_retained=True)
+                line_overflow = re.search(r"line_end exceeds fixed file line count \((\d+)\)",
+                                          result.get("error", ""))
+                if (line_overflow and isinstance(operations, list)
+                        and type(result.get("next_index")) is int
+                        and 0 <= result["next_index"] < len(operations)):
+                    line_counts = dict(job.get("line_counts", {}))
+                    cache_key = _line_count_key(manifest, operations[result["next_index"]])
+                    if cache_key:
+                        line_counts[cache_key] = int(line_overflow.group(1))
+                        job = update(root, identifier, line_counts=line_counts)
                 if not result["complete"] and not active.cancelled():
-                    import workspace_report
-                    workspace_report.validate_captured_evidence(manifest, context)
+                    known_authoring_error = (preflight_error is not None
+                                             or result.get("code", "").startswith("authoring.")
+                                             or result.get("code") == "evidence.line-range-out-of-bounds")
+                    if not known_authoring_error or input_error is not None:
+                        validation_started = time.perf_counter()
+                        receipt = verify_step_packs(context, manifest, job)
+                        error_revalidation = time.perf_counter() - validation_started
+                    else:
+                        result["error_revalidation_skipped"] = True
+                receipt = refresh_integrity_receipt(context, manifest, receipt)
         except Exception as exc:
+            metrics = git_metrics_after(job.get("metrics", {}), "step", api.git_process_activity())
+            metrics["step_seconds"] = job.get("metrics", {}).get("step_seconds", 0.0) + time.perf_counter() - started
+            metrics["read_search_seconds"] = metrics["step_seconds"]
+            metrics["error_revalidation_seconds"] = job.get("metrics", {}).get("error_revalidation_seconds", 0.0) + error_revalidation
+            metrics["error_revalidation_count"] = job.get("metrics", {}).get("error_revalidation_count", 0) + int(error_revalidation > 0)
+            metrics["lock_wait_seconds"] = job.get("metrics", {}).get("lock_wait_seconds", 0.0) + lock_wait
             update(root, identifier, state="cancelled" if active.cancelled() else "failed",
-                   phase="terminal", error=coordination.safe_error(exc), finished_at_epoch=time.time())
+                   phase="terminal", error=coordination.safe_error(exc), finished_at_epoch=time.time(),
+                   metrics=metrics)
             review_session.cleanup_session(context)
             raise
         if active.cancelled():
             review_session.cleanup_session(context)
-            update(root, identifier, state="cancelled", phase="terminal", finished_at_epoch=time.time())
+            metrics = git_metrics_after(job.get("metrics", {}), "step", api.git_process_activity())
+            update(root, identifier, state="cancelled", phase="terminal", finished_at_epoch=time.time(),
+                   metrics=metrics)
             return {**result, "complete": False, "cancelled": True}
-        update(root, identifier, state="reviewing", phase="input-repair" if input_error is not None else "review",
+        elapsed = time.perf_counter() - started
+        metrics = git_metrics_after(job.get("metrics", {}), "step", api.git_process_activity())
+        metrics["step_seconds"] = job.get("metrics", {}).get("step_seconds", 0.0) + elapsed
+        metrics["read_search_seconds"] = metrics["step_seconds"]
+        old_operation_seconds = dict(job.get("metrics", {}).get("operation_seconds", {}))
+        old_operation_counts = dict(job.get("metrics", {}).get("operation_counts", {}))
+        for key, value in operation_seconds.items():
+            old_operation_seconds[key] = old_operation_seconds.get(key, 0.0) + value
+        for key, value in operation_counts.items():
+            old_operation_counts[key] = old_operation_counts.get(key, 0) + value
+        metrics["operation_seconds"] = old_operation_seconds
+        metrics["operation_counts"] = old_operation_counts
+        metrics["read_seconds"] = (job.get("metrics", {}).get("read_seconds", 0.0)
+                                    + operation_seconds.get("read", 0.0)
+                                    + operation_seconds.get("reads", 0.0))
+        metrics["search_seconds"] = (job.get("metrics", {}).get("search_seconds", 0.0)
+                                     + operation_seconds.get("search", 0.0)
+                                     + operation_seconds.get("searches", 0.0))
+        metrics["read_count"] = job.get("metrics", {}).get("read_count", 0) + operation_counts.get("read", 0)
+        metrics["search_count"] = job.get("metrics", {}).get("search_count", 0) + operation_counts.get("search", 0)
+        metrics["error_revalidation_seconds"] = job.get("metrics", {}).get("error_revalidation_seconds", 0.0) + error_revalidation
+        metrics["error_revalidation_count"] = job.get("metrics", {}).get("error_revalidation_count", 0) + int(error_revalidation > 0)
+        metrics["error_revalidation_skipped_count"] = (job.get("metrics", {}).get(
+            "error_revalidation_skipped_count", 0) + int(bool(result.get("error_revalidation_skipped"))))
+        metrics["lock_wait_seconds"] = job.get("metrics", {}).get("lock_wait_seconds", 0.0) + lock_wait
+        update(root, identifier, state="reviewing", phase="input-repair" if input_error is not None or preflight_error else "review",
                last_step={"complete": result["complete"], "next_index": result["next_index"]},
-               metrics={**job.get("metrics", {}), "read_search_seconds":
-                        job.get("metrics", {}).get("read_search_seconds", 0) + time.perf_counter() - started})
+               evidence_receipt=receipt, metrics=metrics)
+        result["metrics"] = {"step_seconds": elapsed, "error_revalidation_seconds": error_revalidation,
+                             "error_revalidation_skipped": bool(result.get("error_revalidation_skipped")),
+                             "git_command_count": api.git_process_activity()["command_count"]}
         return result
+    finally:
+        api.GIT_PROCESS_ACTIVITY.reset(git_token)
+        owner_lock.release()
 
 
 def draft_errors(draft):
@@ -662,22 +1199,74 @@ def draft_errors(draft):
 
 
 def finish(root, identifier):
+    import git_review_context as api
+    activity_token = api.GIT_PROCESS_ACTIVITY.set(api.empty_git_process_activity())
+    started = time.perf_counter()
+    outcome = "failed"
+    try:
+        result = _finish_once(root, identifier)
+        outcome = "published" if result[1] == 0 else "draft-repair"
+        return result
+    finally:
+        elapsed = time.perf_counter() - started
+        activity = api.git_process_activity()
+        api.GIT_PROCESS_ACTIVITY.reset(activity_token)
+        try:
+            job = coordination.read_json(job_path(root, identifier))
+            metrics = git_metrics_after(job.get("metrics", {}), "finish", activity)
+            metrics["finish_total_seconds"] = elapsed
+            metrics["finish_attempt_count"] = job.get("metrics", {}).get("finish_attempt_count", 0) + 1
+            attempts = list(job.get("metrics", {}).get("finish_attempts", []))
+            attempts.append({"at": now(), "outcome": outcome, "seconds": elapsed,
+                             "git_command_count": activity.get("command_count", 0),
+                             "fetch_command_count": activity.get("fetch_command_count", 0),
+                             "lock_wait_seconds": job.get("metrics", {}).get("finish_lock_wait_last_seconds", 0.0),
+                             "error_revalidation_seconds": job.get("metrics", {}).get(
+                                 "finish_error_revalidation_seconds", 0.0),
+                             "draft_preparation_seconds": job.get("metrics", {}).get(
+                                 "draft_preparation_seconds", 0.0),
+                             "validation_publish_seconds": job.get("metrics", {}).get(
+                                 "validation_publish_seconds")})
+            metrics["finish_attempts"] = attempts[-100:]
+            update(root, identifier, metrics=metrics)
+        except (OSError, ValueError, KeyError):
+            pass
+
+
+def _finish_once(root, identifier):
     import review_report
     import review_workspace as workspace
     import workspace_report
     import report_receipt
     path = job_path(root, identifier)
-    with coordination.FileLock(path.with_suffix(".owner.lock")):
+    with MeasuredFileLock(path.with_suffix(".owner.lock")) as owner_lock:
         job = coordination.read_json(path)
+        metrics = dict(job.get("metrics", {}))
+        metrics["finish_lock_wait_seconds"] = metrics.get("finish_lock_wait_seconds", 0.0) + owner_lock.wait_seconds
+        metrics["finish_lock_wait_last_seconds"] = owner_lock.wait_seconds
+        metrics["finish_error_revalidation_seconds"] = 0.0
+        metrics["draft_preparation_seconds"] = 0.0
+        metrics["validation_publish_seconds"] = None
+        job = update(root, identifier, metrics=metrics)
         context = job_context(root, identifier, job)
         planned = job.get("planned_report")
+
+        def progress(stage, *, completed=0, total=0):
+            row = {"stage": stage, "completed": completed, "total": total,
+                   "at": now()}
+            update(root, identifier, progress=row)
+            print(json.dumps({"request_id": identifier, "phase": stage, **row}, ensure_ascii=False),
+                  file=sys.stderr, flush=True)
+
         def clean_published():
+            progress("cleanup", completed=0, total=1)
             try:
                 if context.is_dir():
                     review_session.cleanup_session(context)
                 update(root, identifier, cleanup_pending=False, cleanup_error=None)
             except (OSError, ValueError) as exc:
                 update(root, identifier, cleanup_pending=True, cleanup_error=coordination.safe_error(exc))
+            progress("cleanup", completed=1, total=1)
             return status(root, identifier), 0
         if job["state"] == "published":
             report_receipt.verify(job)
@@ -690,7 +1279,7 @@ def finish(root, identifier):
         if job["state"] not in ("ready", "reviewing", "validating"):
             raise ValueError("Session cannot be published.")
         started = time.perf_counter()
-        timing = {"draft_preparation_seconds": 0.0}
+        timing = {"draft_preparation_seconds": 0.0, "finish_error_revalidation_seconds": 0.0}
         def staged(output, receipt):
             if (root / "jobs" / (identifier + ".cancel")).exists():
                 raise coordination.Cancelled("Review cancelled before the report commit.")
@@ -704,7 +1293,11 @@ def finish(root, identifier):
         try:
             if (root / "jobs" / (identifier + ".cancel")).exists():
                 raise coordination.Cancelled("Review cancelled before publication.")
+            progress("draft-preparation", completed=0, total=1)
             manifest = workspace.load(context)
+            receipt = verify_step_manifest_receipt(context, manifest, job)
+            if receipt != job.get("evidence_receipt"):
+                job = update(root, identifier, evidence_receipt=receipt)
             draft_started = time.perf_counter()
             draft_path = context / "draft.json"
             try:
@@ -724,8 +1317,13 @@ def finish(root, identifier):
                 inspected = diagnostics(expanded, manifest, context)
                 errors.extend(f"{row['path']}: {row['message']}" for row in inspected["errors"])
                 errors = list(dict.fromkeys(errors))
+            progress("draft-preparation", completed=1, total=1)
             if errors:
-                workspace_report.validate_captured_evidence(manifest, context)
+                progress("evidence-recheck", completed=0, total=1)
+                integrity_started = time.perf_counter()
+                verify_retry_integrity(context, manifest, job)
+                timing["finish_error_revalidation_seconds"] = time.perf_counter() - integrity_started
+                progress("evidence-recheck", completed=1, total=1)
                 timing["draft_preparation_seconds"] = time.perf_counter() - draft_started
                 update(root, identifier, metrics={**job.get("metrics", {}), **timing,
                                                  "finish_total_seconds": time.perf_counter() - started})
@@ -736,11 +1334,24 @@ def finish(root, identifier):
                    draft_sha256=hashlib.sha256(draft_path.read_bytes()).hexdigest())
             timing["draft_preparation_seconds"] = time.perf_counter() - draft_started
             validation_started = time.perf_counter()
+            progress("validation", completed=0, total=1)
+
+            def publication_stage(_output, _digest):
+                progress("report-publication", completed=1, total=2)
+
             with review_runtime.writer(context):
                 review_report.publish_report(context, draft_path, retain_on_validation_error=True,
-                                             on_stage_receipt=staged, on_published=published, cleanup_context=False)
+                                             on_stage=publication_stage, on_stage_receipt=staged,
+                                             on_published=published, cleanup_context=False)
+            progress("validation", completed=1, total=1)
+            progress("report-publication", completed=2, total=2)
             return clean_published()
         except workspace_report.DraftValidationError as exc:
+            timing["finish_error_revalidation_seconds"] = max(
+                timing["finish_error_revalidation_seconds"],
+                time.perf_counter() - validation_started if "validation_started" in locals() else 0.0)
+            saved = coordination.read_json(path)
+            update(root, identifier, metrics={**saved.get("metrics", {}), **timing})
             update(root, identifier, state="reviewing", phase="draft-repair", errors=[str(exc)])
             return {"request_id": identifier, "context_retained": True, "errors": [str(exc)]}, 3
         except Exception as exc:
@@ -784,7 +1395,7 @@ def cancel(root, identifier):
 
 def parser():
     value = argparse.ArgumentParser(description=__doc__)
-    value.add_argument("command", choices=("start", "step", "check", "finish", "status", "cancel"))
+    value.add_argument("command", choices=("capabilities", "start", "step", "check", "finish", "status", "cancel", "view"))
     value.add_argument("--workspace")
     value.add_argument("--workspace-file")
     value.add_argument("--runtime-root")
@@ -799,6 +1410,8 @@ def parser():
     value.add_argument("--no-fetch", action="store_true")
     value.add_argument("--git-timeout", type=float, default=180)
     value.add_argument("--artifact", help="Read a persisted oversized terminal response with status")
+    value.add_argument("--artifact-scope", choices=("context", "runtime"),
+                       help="Choose the active context or terminal runtime artifact store")
     value.add_argument("--pointer", default="")
     value.add_argument("--offset", type=int, default=0)
     value.add_argument("--page-size", type=int, default=100)
@@ -813,8 +1426,12 @@ def main(argv=None):
     args = parser().parse_args(argv)
     code = 0
     runtime_response = False
+    context = None
+    paging_started = None
     try:
-        if args.command == "start":
+        if args.command == "capabilities":
+            result = capabilities()
+        elif args.command == "start":
             if not all((args.workspace, args.project, args.base, args.head)):
                 raise ValueError("start requires workspace, project, base and head.")
             result = start(args)
@@ -826,14 +1443,23 @@ def main(argv=None):
             root = resolve_runtime(args.workspace, args.runtime_root)
             if args.command == "status":
                 if args.artifact:
-                    job = coordination.read_json(job_path(root, args.request_id))
-                    job_context(root, args.request_id, job)
-                    response = response_context(root, args.request_id)
-                    result = artifact_view(response, args.artifact, args.pointer, args.offset,
-                                           args.page_size, args.string_offset)
-                    runtime_response = True
+                    paging_started = time.perf_counter()
+                    result, scope = read_artifact(root, args.request_id, args.artifact,
+                                                  scope=args.artifact_scope, pointer=args.pointer,
+                                                  offset=args.offset, page_size=args.page_size,
+                                                  string_offset=args.string_offset)
+                    runtime_response = scope == "runtime"
                 else:
                     result = status(root, args.request_id)
+            elif args.command == "view":
+                if not args.request_id or not args.artifact:
+                    raise ValueError("view requires --request-id and --artifact")
+                paging_started = time.perf_counter()
+                result, scope = read_artifact(root, args.request_id, args.artifact,
+                                              scope=args.artifact_scope, pointer=args.pointer,
+                                              offset=args.offset, page_size=args.page_size,
+                                              string_offset=args.string_offset)
+                runtime_response = scope == "runtime"
             elif args.command == "cancel":
                 result = cancel(root, args.request_id)
             elif args.command == "step":
@@ -843,19 +1469,25 @@ def main(argv=None):
                 result, code = check(root, args.request_id)
             else:
                 result, code = finish(root, args.request_id)
-            job = coordination.read_json(job_path(root, args.request_id))
-            context = (response if args.command == "status" and args.artifact else
-                       Path(job["context_dir"]) if job.get("context_dir") else None)
-        if context and context.exists():
+            if args.command not in ("capabilities",):
+                job = coordination.read_json(job_path(root, args.request_id))
+                context = (artifact_location(root, args.request_id, args.artifact, args.artifact_scope)[0]
+                           if args.command == "view" or args.command == "status" and args.artifact else
+                           Path(job["context_dir"]) if job.get("context_dir") else None)
+                if paging_started is not None:
+                    metrics = dict(job.get("metrics", {}))
+                    metrics["paging_seconds"] = metrics.get("paging_seconds", 0.0) + time.perf_counter() - paging_started
+                    metrics["paging_read_count"] = metrics.get("paging_read_count", 0) + 1
+                    update(root, args.request_id, metrics=metrics)
+        read_only_view = args.command == "view" or args.command == "status" and bool(args.artifact)
+        if context and context.exists() and not read_only_view:
             result = compact(result, context)
-        elif args.request_id and len(review_runtime.canonical(result)) >= LIMIT:
+        elif args.request_id and not read_only_view and len(review_runtime.canonical(result)) >= LIMIT:
             response = response_context(root, args.request_id, create=True)
             result = compact(result, response)
             runtime_response = True
         if runtime_response:
             result["response_scope"] = "runtime"
-            if isinstance(result.get("continue"), dict):
-                result["continue"] = {**result["continue"], "command": "status"}
             if len(review_runtime.canonical(result)) >= LIMIT:
                 result["summary"] = {"fields": list(result.get("summary", {}))[:16]}
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))

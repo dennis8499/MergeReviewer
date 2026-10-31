@@ -100,6 +100,21 @@ class WorkspaceReviewTests(ReviewFixture):
         with self.assertRaisesRegex(ValueError, "changed lines"):
             workspace.register_contract(context, manifest, item, api)
 
+    def test_deleted_symbol_can_anchor_the_comparison_left_deletion(self):
+        git(self.repo, "rm", "app.py")
+        git(self.repo, "commit", "-m", "remove contract symbol")
+        context, manifest = self.capture()
+        root = next(row for row in manifest["required_coverage"] if row["source"] == "head")
+        seed = workspace.repository(manifest, manifest["selected_repo"])
+        anchor = {"repo": seed["id"], "source": "merge-base",
+                  "ref": seed["sources"]["merge-base"]["ref"], "path": "app.py",
+                  "line_start": 1, "line_end": 1}
+        item = {"id": "C-deleted", "kind": "behavior", "search_scope": "workspace",
+                "symbol": "contract", "root": root, "evidence": anchor,
+                "search_terms": [{"query": "contract", "reason": "錨定本次刪除的原始符號。"}]}
+        result = workspace.register_contract(context, manifest, item, api)
+        self.assertEqual("C-deleted", result["id"])
+
     def test_propagated_alias_requires_its_own_fixed_anchor_and_connected_node(self):
         write_text(self.consumer / "app.py", "contract = 'old'\nalias = contract\n")
         git(self.consumer, "add", ".")

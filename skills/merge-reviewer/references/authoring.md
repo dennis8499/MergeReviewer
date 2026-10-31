@@ -1,10 +1,12 @@
 # 精簡草稿
 
-使用 `merge-reviewer-authoring/v1` 可減少重複欄位；既有 `merge-reviewer-workspace-result/v3` 草稿仍可使用。start 初始產生 v3 草稿；選用精簡格式時將 `schema` 改為 `merge-reviewer-authoring/v1`，保留其必要陣列，依實際審查填寫。
+使用 `merge-reviewer-authoring/v1` 可減少重複欄位；既有 `merge-reviewer-workspace-result/v3` 草稿仍可使用。先用 `review_session.py capabilities` 確認安裝版支援 compact，再於 start 明確指定 `--draft-format compact`；較舊安裝或舊 session 保留 v3。精簡格式保留必要陣列，依實際審查填寫。
 
 每筆 `coverage` 可用 start 回傳的 `boundary_changes[].id` 作 `change_id`，helper 展開為原有變更鍵。`evidence` 可使用 `{"read_id":"<step 操作 ID>","line_start":1,"line_end":3}`；行號以 1 起算且包含兩端，必須已包含在該次 `read` 結果內。若舊 checkpoint 沒有 read 操作種類，先以新 ID 重新讀取。helper 從已保存的操作補入固定 Repo、source、ref 和 path；finish 仍重讀固定物件、校驗來源及行號。
 
-多 Repo 填 `boundary_reviews`、`repository_coverage`，影響跨 Repo 才依[契約邊界](contract-boundaries.md)建立所需 impact 節點。精簡格式的 impact 節點若省略 `repo/source/path`，從首筆 evidence 補入；必要 parent 的 `final_ref` 可省略，使用本 context 的固定最終來源。待確認的 `related_changes` 可使用 change ID。所有 status、理由、判斷、測試與必要缺口都由 agent 明確提供。
+多 Repo 填 `boundary_reviews`、`repository_coverage`，影響跨 Repo 才依[契約邊界](contract-boundaries.md)建立所需 impact 節點。精簡格式的 impact 節點若省略 `repo/source/path`，從首筆 evidence 補入；parent 模板會帶入固定最終來源的 `final_ref`。reviewed parent 必須同時引用對應 parent 與最終來源的必要路徑；`check` 和 `finish` 使用相同規則。待確認的 `related_changes` 可使用 change ID。所有 status、理由、判斷、測試與必要缺口都由 agent 明確提供。
+
+純刪除變更可用比較左側實際包含該符號的固定來源作初始錨點；helper 會核對 anchor 路徑、ref、行號及本次 diff 的刪除行。若來源不是 UTF-8，helper 會標出 `encoding`；只有 `lossy=false` 的內容可作契約錨點。二進位讀取僅提供位元組大小與 SHA-256，應保留為 coverage 缺口並說明無法檢視內容。
 
 每個 finding 寫一次情境、觸發、證據說明、預期與實際、影響及修法。範例的文字、操作 ID 及行號必須換成實際內容：
 

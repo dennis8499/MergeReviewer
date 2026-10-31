@@ -777,18 +777,22 @@ def commit_subject(repo: Path, commit: str) -> str:
 
 
 def merge_commit_records(repo: Path, left: str, right: str) -> list[dict[str, Any]]:
-    merge_shas = [
-        line.strip()
-        for line in str(
-            run_git(repo, ["rev-list", "--merges", "--reverse", f"{left}..{right}"])
-        ).splitlines()
-        if line.strip()
-    ]
+    # One history walk returns the ordered merge SHA, complete parent list and
+    # subject. The former rev-list + per-merge parent + per-merge show sequence
+    # launched three Git processes before collecting any parent diffs.
+    history = str(run_git(repo, ["log", "--merges", "--reverse",
+                                 "--format=%H%x00%P%x00%s", f"{left}..{right}"]))
     records: list[dict[str, Any]] = []
-    for merge_sha in merge_shas:
-        parents_line = str(run_git(repo, ["rev-list", "--parents", "-n", "1", merge_sha])).strip()
-        tokens = parents_line.split()
-        parents = tokens[1:]
+    for line in history.splitlines():
+        if not line:
+            continue
+        tokens = line.split("\0", 2)
+        if len(tokens) != 3:
+            raise ReviewContextError("Git merge history returned an incomplete parent record.")
+        merge_sha, parent_text, subject = tokens
+        parents = parent_text.split()
+        if not re.fullmatch(r"[0-9a-fA-F]{40,64}", merge_sha) or len(parents) < 2:
+            raise ReviewContextError("Git merge history returned an invalid merge commit.")
         parent_views = []
         for position, parent in enumerate(parents, start=1):
             parent_views.append(
@@ -802,7 +806,7 @@ def merge_commit_records(repo: Path, left: str, right: str) -> list[dict[str, An
         records.append(
             {
                 "sha": merge_sha,
-                "subject": commit_subject(repo, merge_sha),
+                "subject": subject,
                 "parents": parents,
                 "parent_views": parent_views,
             }
@@ -1005,14 +1009,21 @@ def write_context_bundle(
     context_dir.mkdir(parents=True, exist_ok=True)
     try:
         (context_dir / "diff.patch").write_bytes(patch)
+        active_paths = {value for change in manifest.get("changed_files", [])
+                        for value in (change.get("path"), change.get("old_path")) if value}
+        if integration:
+            active_paths.update(value for change in integration.get("changed_files", [])
+                                for value in (change.get("path"), change.get("old_path")) if value)
         for merge in manifest["merge_commits"]:
             for parent_view in merge["parent_views"]:
                 parent = parent_view["sha"]
-                parent_patch = run_git(
-                    repo,
-                    ["diff", *DIFF_FLAGS, "--binary", "--find-renames", parent, merge["sha"], "--"],
-                    binary=True,
-                )
+                paths = sorted({value for change in parent_view.get("changes", [])
+                                for value in (change.get("path"), change.get("old_path"))
+                                if value and value in active_paths})
+                if not paths:
+                    continue
+                parent_patch = run_git(repo, ["diff", *DIFF_FLAGS, "--binary", "--find-renames",
+                                              parent, merge["sha"], "--", *paths], binary=True)
                 filename = f"merge-{merge['sha'][:12]}-parent-{parent_view['position']}.patch"
                 (context_dir / filename).write_bytes(
                     parent_patch if isinstance(parent_patch, bytes) else parent_patch.encode()
@@ -1465,9 +1476,13 @@ def context_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
                 for parent in merge["parent_views"]:
                     patch = (f"repos/{repo['id']}/native/merge-{merge['sha'][:12]}"
                              f"-parent-{parent['position']}.patch")
+                    patch_file = Path(manifest["context_dir"]) / patch
+                    patch_available = patch_file.is_file() and patch_file.stat().st_size > 0
                     parents.append({"position": parent["position"], "sha": parent["sha"],
-                                    "changed_file_count": len(parent["changes"]), "patch": patch})
-                    if patch not in item["patches"]:
+                                    "changed_file_count": len(parent["changes"]),
+                                    "patch": patch if patch_available else None,
+                                    "patch_content_available": patch_available})
+                    if patch_available and patch not in item["patches"]:
                         item["patches"].append(patch)
                 merges.append({"sha": merge["sha"], "subject": merge["subject"],
                                "parents": merge["parents"], "parent_views": parents})

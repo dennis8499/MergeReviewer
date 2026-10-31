@@ -685,7 +685,12 @@ def instructions(context, manifest, repo_id, path, api, *, cache=None):
         if Path(repo["path"]).is_relative_to(Path(item["scope"])):
             raw = safe_path(context, item["stored_path"]).read_bytes()
             require(hashlib.sha256(raw).hexdigest() == item["sha256"], "workspace instruction identity mismatch")
-            entries.append({**item, "content": raw.decode("utf-8", errors="replace")})
+            import review_content
+            lines, encoding, lossy = review_content.decode_source(raw, item["path"])
+            require(lines is not None, "workspace instruction is binary and cannot guide review")
+            visible, redacted = review_content.redact_lines(lines, item["path"])
+            entries.append({**item, "content": "\n".join(visible), "encoding": encoding,
+                            "lossy": lossy, "sensitive_values_redacted": redacted})
     repo_entries = repo.get("instructions", [])
     require(isinstance(repo_entries, list), "Repo instructions must be an array")
     if repo.get("snapshot") is not None:
@@ -704,7 +709,12 @@ def instructions(context, manifest, repo_id, path, api, *, cache=None):
             raw = (cache.read(repo, item["source"], item["path"]) if cache is not None else
                    fixed_bytes(context, repo, item["source"], item["path"], api))
             require(hashlib.sha256(raw).hexdigest() == item["sha256"], "Repo instruction identity mismatch")
-            entries.append({**item, "content": raw.decode("utf-8", errors="replace")})
+            import review_content
+            lines, encoding, lossy = review_content.decode_source(raw, item["path"])
+            require(lines is not None, "Repo instruction is binary and cannot guide review")
+            visible, redacted = review_content.redact_lines(lines, item["path"])
+            entries.append({**item, "content": "\n".join(visible), "encoding": encoding,
+                            "lossy": lossy, "sensitive_values_redacted": redacted})
     return {"instructions": entries}
 
 
@@ -725,11 +735,6 @@ def branch_snapshot(context: Path, repo: dict, args, api, *, tree_cache=None, fr
         add_source(context, repo, name, reference, api, tree_cache=tree_cache)
     if native["merge_base"]:
         add_source(context, repo, "merge-base", native["merge_base"], api, tree_cache=tree_cache)
-    for merge in native["merge_commits"]:
-        for parent in merge["parents"]:
-            name = "parent-" + parent
-            if name not in repo["sources"]:
-                add_source(context, repo, name, parent, api, tree_cache=tree_cache)
     repo["changed_files"] = [{**c, "source": "head"} for c in native["changed_files"]]
     repo["patches"] = [f"repos/{repo['id']}/native/diff.patch"]
     preview = native.get("merge_preview")
@@ -740,6 +745,18 @@ def branch_snapshot(context: Path, repo: dict, args, api, *, tree_cache=None, fr
         add_source(context, repo, "merge-preview", preview["tree_sha"], api, env=env, tree_cache=tree_cache)
         repo["changed_files"].extend({**c, "source": "merge-preview"} for c in preview["changed_files"])
         repo["patches"].append(f"repos/{repo['id']}/native/merge-preview.patch")
+    final = repo["sources"].get("merge-preview", repo["sources"]["head"])
+    effective = [] if final["tree_sha"] == repo["sources"]["base"]["tree_sha"] else repo["changed_files"]
+    needed = merge_parent_coverage.required(
+        effective, native["merge_commits"],
+        {entry["path"] for entry in final["files"] if entry["kind"] == "blob"})
+    for view in needed:
+        if not view.get("parent_content_available"):
+            continue
+        parent = view["parent"]
+        name = "parent-" + parent
+        if name not in repo["sources"]:
+            add_source(context, repo, name, parent, api, tree_cache=tree_cache)
     repo["limitations"].extend(native["context_gaps"])
     repo["diff_base"] = native["diff_base"]
 
@@ -1055,7 +1072,10 @@ def validate_contract(context, manifest, item, api, *, cache=None):
     source, path = evidence.get("source"), evidence.get("path")
     require(source in repo["sources"] and evidence.get("ref") == repo["sources"][source]["ref"], "contract source identity differs")
     raw = cache.read(repo, source, path) if cache is not None else fixed_bytes(context, repo, source, path, api)
-    lines = [line.decode("utf-8", errors="strict") for line in raw.splitlines()]
+    import review_content
+    lines, encoding, lossy = review_content.decode_source(raw, path)
+    require(lines is not None, "contract anchor must be readable text; binary content cannot anchor a contract")
+    require(not lossy, "contract anchor cannot use lossy decoding; record the source as a review gap")
     start, end = evidence.get("line_start"), evidence.get("line_end")
     require(type(start) is int and type(end) is int and 1 <= start <= end <= len(lines), "invalid contract line interval")
     text = "\n".join(lines[start-1:end])
@@ -1094,7 +1114,9 @@ def validate_contract(context, manifest, item, api, *, cache=None):
                 "alias source identity differs")
         alias_raw = (cache.read(alias_repo, alias_source, alias.get("path")) if cache is not None else
                      fixed_bytes(context, alias_repo, alias_source, alias.get("path"), api))
-        alias_lines = [line.decode("utf-8", errors="strict") for line in alias_raw.splitlines()]
+        alias_lines, alias_encoding, alias_lossy = review_content.decode_source(alias_raw, alias.get("path", ""))
+        require(alias_lines is not None, "alias anchor must be readable text")
+        require(not alias_lossy, "alias anchor cannot use lossy decoding")
         first, last = alias.get("line_start"), alias.get("line_end")
         require(type(first) is int and type(last) is int and 1 <= first <= last <= len(alias_lines) and
                 term["query"] in "\n".join(alias_lines[first-1:last]), "alternate query must occur in frozen alias evidence")
@@ -1168,7 +1190,16 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
         except (KeyError, ValueError, api.ReviewContextError) as exc:
             record.update(status="unresolved", reason=str(exc))
         manifest["searches"].append(record)
-        results.append(record)
+        import review_content
+        visible = {**record}
+        if isinstance(record.get("output"), str):
+            ending = "\n" if record["output"].endswith("\n") else ""
+            lines, redacted = review_content.redact_lines(record["output"].splitlines(), "")
+            visible["output"] = "\n".join(lines) + ending
+            visible["matches"] = visible["output"].splitlines()
+            visible["sensitive_values_redacted"] = redacted
+            visible["lossy"] = "\ufffd" in record["output"]
+        results.append(visible)
     save(context, manifest)
     return {"searches": results}
 
@@ -1189,12 +1220,17 @@ def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_nam
     repo = repository(manifest, repo_id)
     name = source_name or repo["review_source"]
     content = cache.read(repo, name, path) if cache is not None else fixed_bytes(context, repo, name, path, api)
-    require(b"\0" not in content, "binary blob; record a coverage limitation")
-    # Evidence intervals and report excerpts count byte lines. Decode each
-    # line separately so Unicode separators cannot create phantom line numbers.
-    lines = [line.decode("utf-8", errors="replace") for line in content.splitlines()]
+    import review_content
+    lines, encoding, lossy = review_content.decode_source(content, path)
     result = {"repo": repo["id"], "source": name, "ref": repo["sources"][name]["ref"], "path": path,
-              "sha256": hashlib.sha256(content).hexdigest()}
+              "sha256": hashlib.sha256(content).hexdigest(), "byte_size": len(content),
+              "encoding": encoding, "lossy": lossy, "content_available": lines is not None}
+    if lines is None:
+        result.update(binary=True, lines=[], total_lines=None)
+        return result
+    visible, redacted = review_content.redact_lines(lines, path)
+    result["sensitive_values_redacted"] = redacted
+    result["binary"] = False
     if around_line is not None:
         require(line_start is None and line_end is None, "around_line cannot accompany exact bounds")
         require(type(around_line) is int and around_line >= 1 and type(context_lines) is int
@@ -1206,9 +1242,9 @@ def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_nam
     if line_start is not None:
         require(line_end <= len(lines), f"line_end exceeds fixed file line count ({len(lines)})")
         result.update(line_start=line_start, line_end=line_end, total_lines=len(lines))
-        result["lines"] = [{"line": i, "text": lines[i - 1]} for i in range(line_start, line_end + 1)]
+        result["lines"] = [{"line": i, "text": visible[i - 1]} for i in range(line_start, line_end + 1)]
     else:
-        result["lines"] = [{"line": i, "text": text} for i, text in enumerate(lines, 1)]
+        result["lines"] = [{"line": i, "text": text} for i, text in enumerate(visible, 1)]
     return result
 
 
@@ -1283,7 +1319,7 @@ def batch_search(context: Path, manifest: dict, requests: list[dict], api) -> di
     return {"searches": results}
 
 
-def ordered_step(context, manifest, operations, api):
+def ordered_step(context, manifest, operations, api, *, on_progress=None):
     """Allowlisted composition of existing handlers, with idempotent checkpoints."""
     if not isinstance(operations, list) or not operations:
         return {"operations": [], "complete": False, "next_index": 0,
@@ -1309,7 +1345,11 @@ def ordered_step(context, manifest, operations, api):
                                         "query": operation.get("query")})
             except (ValueError, KeyError, TypeError):
                 pass
+    if on_progress:
+        on_progress("prefetch-searches", 0, len(operations), None)
     searches.prefetch(manifest, search_requests)
+    if on_progress:
+        on_progress("prefetch-searches-complete", 0, len(operations), None)
     # Speculatively batch known fixed reads. Errors are evaluated again at their
     # ordered position, so a later malformed read cannot discard a valid prefix.
     requests = []
@@ -1325,7 +1365,11 @@ def ordered_step(context, manifest, operations, api):
             except (ValueError, KeyError, TypeError, OSError):
                 pass
     try:
+        if on_progress:
+            on_progress("prefetch-reads", 0, len(operations), None)
         content.prefetch(manifest, requests)
+        if on_progress:
+            on_progress("prefetch-reads-complete", 0, len(operations), None)
     except (ValueError, KeyError, TypeError, OSError, api.ReviewContextError):
         content = FixedSourceCache(context, api)
     with review_runtime.batch_manifest(context, manifest):
@@ -1333,6 +1377,8 @@ def ordered_step(context, manifest, operations, api):
             contracts_before, searches_before = len(manifest["changed_contracts"]), len(manifest["searches"])
             new_operation, identifier = False, None
             try:
+                if on_progress:
+                    on_progress("operation", index, len(operations), operation)
                 import review_coordinator
                 active = review_coordinator.ACTIVE.get()
                 if active:
@@ -1383,11 +1429,16 @@ def ordered_step(context, manifest, operations, api):
                     prefix = f"repos/{item['id']}/native"
                     paths.update(f"{prefix}/{path.name}" for path in safe_path(context, prefix).glob("*.patch"))
                     require(args.get("path") in paths, "patch must be in the captured patch index")
-                    lines = safe_path(context, args["path"]).read_text(encoding="utf-8").splitlines()
+                    import review_content
+                    raw = safe_path(context, args["path"]).read_bytes()
+                    lines, encoding, lossy = review_content.decode_source(raw, args["path"])
+                    require(lines is not None, "patch is binary; inspect the captured blob metadata")
+                    lines, redacted = review_content.redact_lines(lines, args["path"])
                     first, last = args.get("line_start", 1), args.get("line_end", len(lines))
                     require(type(first) is int and type(last) is int and 1 <= first <= last <= len(lines)
                             or not lines and first == 1 and last == 0, "invalid patch bounds")
-                    result = {"path": args["path"], "total_lines": len(lines),
+                    result = {"path": args["path"], "total_lines": len(lines), "encoding": encoding,
+                              "lossy": lossy, "sensitive_values_redacted": redacted,
                               "lines": [{"line": i, "text": lines[i-1]} for i in range(first, last+1)]}
                 elif kind == "view":
                     from review_flow import artifact_view
@@ -1398,12 +1449,23 @@ def ordered_step(context, manifest, operations, api):
                 manifest["operations"][identifier] = {"fingerprint": fingerprint, "artifact": artifact, "op": kind}
                 save(context, manifest)
                 results.append({"id": identifier, "artifact": artifact, "result": result})
+                if on_progress:
+                    on_progress("operation-complete", index + 1, len(operations), operation)
             except (ValueError, KeyError, TypeError, OSError, api.ReviewContextError) as exc:
                 if new_operation:
                     del manifest["changed_contracts"][contracts_before:]
                     del manifest["searches"][searches_before:]
                     manifest["operations"].pop(identifier, None)
-                return {"operations": results, "complete": False, "next_index": index, "error": str(exc)}
+                message = str(exc)
+                line_overflow = re.search(r"line_end exceeds fixed file line count \((\d+)\)", message)
+                pointer = f"/operations/{index}/line_end" if line_overflow else f"/operations/{index}"
+                return {"operations": results, "complete": False, "next_index": index, "error": message,
+                        "hint": (f"line_end must be at most {line_overflow.group(1)}; use around_line for a bounded excerpt."
+                                 if line_overflow else "Correct this operation and retry from next_index."),
+                        "operation_id": identifier, "pointer": pointer,
+                        "code": "evidence.line-range-out-of-bounds" if line_overflow else "evidence.operation-failed",
+                        "terminal": False,
+                        "recoverable": True, "context_retained": True}
     return {"operations": results, "complete": True, "next_index": len(operations)}
 
 

@@ -1,5 +1,14 @@
 # Change log
 
+## 0.20.4 — 2026-11-01
+
+- Preflight review operations before evidence reads; cache verified line counts against fixed blob identities and avoid expensive snapshot rechecks for deterministic authoring errors. Full publication validation remains mandatory.
+- Add scoped, read-only artifact continuation, compact draft negotiation, consistent parent final-source diagnostics, and comparison-left anchors for deleted symbols.
+- Decode CP950/UTF-16 text, report binary metadata, mask sensitive values in displayed evidence, and continue reading around binary files.
+- Reduce local Git subprocesses for merge history and capture only necessary, change-overlapping parent views; add per-phase Git, retry, paging, lock-wait, and finish-attempt metrics.
+- Keep Git Server fetch and reuse policy unchanged; current logs do not justify increasing network concurrency or sync TTL.
+- Paired performance thresholds, complete model-review timing, and Git transport request counts remain unverified; see [release notes](docs/releases/v0.20.4.md).
+
 ## 0.20.3 — 2026-10-30
 
 - Synchronize current installation guidance, release ZIP and version examples, report-layout compatibility notes, and snapshot preflight documentation with the implementation. Preserve dated release and acceptance records as historical snapshots.

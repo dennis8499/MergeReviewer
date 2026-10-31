@@ -36,20 +36,30 @@ def redact(value):
 
 def safe_excerpt(raw, path, start, end):
     """Classify the full frozen file before displaying its cited line range."""
-    decoded = raw.decode("utf-8", errors="replace")
+    import review_content
+    source_lines, encoding, lossy = review_content.decode_source(raw, path)
+    if source_lines is None:
+        return None, "二進位內容不顯示；保留固定來源、行號及內容 SHA-256。"
+    if lossy:
+        return None, "來源編碼無法可靠判定；為避免錯讀而省略文字，保留固定來源及內容 SHA-256。"
+    decoded = "\n".join(source_lines)
     suffix = Path(path).suffix.lower()
     if suffix in {".pem", ".key", ".pfx", ".p12"} or re.search(r"(?i)BEGIN.*PRIVATE.*KEY", decoded):
         return None, "認證／私鑰內容已省略；保留固定來源、行號與內容 SHA-256。"
     if suffix in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".config", ".env"} or Path(path).name.startswith(".env"):
         return None, "設定值已省略；保留固定來源、行號與內容 SHA-256。"
-    selected = b"\n".join(raw.splitlines()[start - 1:end]).decode("utf-8", errors="replace") if raw.splitlines() else None
-    if selected is None:
+    if not source_lines:
         return None, None
+    selected_lines = source_lines[start - 1:end]
+    visible, redacted = review_content.redact_lines(selected_lines, path)
     sensitive = re.compile(r"(?i)password|passwd|pwd|token|secret|api.?key|access.?key|private.?key|"
                            r"credential|authorization|connection.?string|data\s*source|initial\s*catalog|server\s*=|host\s*=")
     cleaned = "\n".join("[含認證或連線設定的行已省略]" if sensitive.search(line) else redact(line)
-                        for line in selected.split("\n"))
-    return cleaned, "敏感內容已遮蔽或省略；行號仍對應固定原始內容。" if cleaned != selected else None
+                        for line in visible)
+    note = "敏感內容已遮蔽或省略；行號仍對應固定原始內容。" if redacted or cleaned != "\n".join(selected_lines) else None
+    if encoding != "utf-8":
+        note = (note + "；" if note else "") + f"來源以 {encoding} 無失真解碼。"
+    return cleaned, note
 
 
 class DraftValidationError(ValueError):
@@ -70,11 +80,13 @@ def allowed_sources(repo, key):
     current = repo["sources"].get(source, {})
     if any(f["path"] == path and f["kind"] == "blob" for f in current.get("files", [])):
         return {source}
-    if source == "merge-preview":
-        return {"head"}
-    # Deleted/renamed old paths must come from this comparison's actual left side.
-    return {name for name in ("base", "merge-base")
-            if name in repo["sources"] and repo["sources"][name]["ref"] == repo["diff_base"]}
+    # Deletions must be anchored in the actual left side of the comparison:
+    # diff_base for a branch change, or head for a merge-preview change.
+    baseline = (repo["sources"]["head"]["ref"] if source == "merge-preview"
+                else repo["diff_base"])
+    return {name for name, version in repo["sources"].items()
+            if version.get("ref") == baseline and any(
+                entry["path"] == path and entry["kind"] == "blob" for entry in version.get("files", []))}
 
 
 def validate(draft: dict, manifest: dict, context: Path, *, timeout=180.0) -> dict:
@@ -901,5 +913,15 @@ def publish(context, draft, manifest, report_dir, *, timeout=180.0, on_stage=Non
                 os.link(stage, output)
             except FileExistsError:
                 continue
+            except OSError as exc:
+                # Managed Windows runtimes may deny hard links. os.rename on
+                # Windows is still atomic and refuses to replace an existing
+                # destination, preserving the report's no-overwrite contract.
+                if os.name != "nt" or not (getattr(exc, "winerror", None) == 5 or exc.errno in (1, 13, 17, 95)):
+                    raise
+                try:
+                    os.rename(stage, output)
+                except FileExistsError:
+                    continue
             return output
     raise ValueError("report filename collisions exceeded limit")

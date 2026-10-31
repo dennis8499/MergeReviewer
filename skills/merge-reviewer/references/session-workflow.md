@@ -54,26 +54,29 @@ Repo 內搜尋可用 `change_id` 指向必要變更；單 Repo 搜尋也可省�
 
 ## artifact 續讀
 
-~~~json
-[
-  {"id":"page-1","op":"view","artifact":"<SHA-256>","pointer":"/operations","offset":0,"page_size":20},
-  {"id":"matches-1","op":"view","artifact":"<operation artifact>","pointer":"/searches/0/matches","offset":0,"page_size":100}
-]
+使用專用 `view` 子命令分頁。每次續讀不建立 step operation、不更動 manifest，也不啟動 Git：
+
+~~~powershell
+python "<skill-dir>/scripts/review_session.py" view --runtime-root "<runtime>" --request-id "<id>" --artifact-scope context --artifact "<SHA-256>" --pointer "/operations" --offset 0 --page-size 20
 ~~~
+
+回應會標明 `scope`，並在未完成時提供完整 `continue` 參數。續讀 terminal response 時將 scope 設為 `runtime`。`status --artifact` 仍相容，可加 `--artifact-scope context|runtime`。JSON pointer 的 `/`、`~` 以 `~1`、`~0` 轉義；陣列回傳 items／total／next_offset，長字串用 string_offset。字典的 `fields` 是輸出欄位，不能當成輸入參數。若單一欄位超出頁面上限，回應提供更深一層 pointer 的續讀連結。操作 artifact 保存原始 result；外層摘要 artifact 保存完整回傳，兩者 pointer 不同。artifact 位於 `<context>/views/<SHA-256>.json`，helper 讀取核對 hash。
 
 JSON pointer 的 `/`、`~` 以 `~1`、`~0` 轉義。陣列回傳 items／total／next_offset／view_complete；長字串用 string_offset，依 next_string_offset 續讀。字典由 fields 選 pointer。操作 artifact 保存原始 result；外層精簡摘要 artifact 保存完整回傳，兩者 pointer 不同。artifact 位於 `<context>/views/<SHA-256>.json`，helper 讀取核對 hash。
 
-終止後 context 已清理、且 status 或 finish 結果仍超過上限時，摘要標示 `response_scope=runtime`，完整回應保存於該 request 的 runtime；用 `status --artifact <SHA-256> --pointer <JSON-pointer> --offset <n> --page-size <n>` 續讀，長字串用 `--string-offset`。此續讀只讀本機回應，不重新驗證或連線；終止紀錄到期後隨之清理。
+終止後 context 已清理、且 status 或 finish 結果仍超過上限時，摘要標示 `response_scope=runtime`，完整回應保存於該 request 的 runtime；用 `review_session.py view --artifact-scope runtime` 續讀，長字串依 `string_offset` 接續。此續讀只讀本機回應，不重新驗證或連線；終止紀錄到期後隨之清理。
 
 24 KiB 限制傳輸，不取代語意覆蓋。必要命中及指示讀完才能判斷；用 artifact 翻頁。
 
 ## 完成、取消與錯誤
 
-草稿初始 summary 空、必要覆蓋與 parent 為 not-reviewed，其他 Repo 為 unresolved。agent 依實際工作補齊，不能直接批次改為 reviewed。先用 check 取得 `errors[].code/pointer/message` 與 `gaps`；pointer 指向草稿欄位，manifest 問題以 `/manifest/...` 指出。check 只讀已保存 JSON 與固定索引，不執行 Git，`evidence_verified=false`。無欄位錯誤且無未完成項時 exit 0，否則 exit 3；finish 仍須完整驗證來源、引用及搜尋。finish 的可修錯誤 exit 3 保留 context，快照損毀 exit 2 終止。
+草稿初始 summary 空、必要覆蓋與 parent 為 not-reviewed，其他 Repo 為 unresolved。parent 模板已填固定最終來源 ref；每筆 reviewed parent 仍須引用與路徑相符的 parent 及最終證據。agent 依實際工作補齊，不能直接批次改為 reviewed。先用 check 取得 `errors[].code/pointer/message` 與 `gaps`；pointer 指向草稿欄位，manifest 問題以 `/manifest/...` 指出。check 使用固定索引提前核對 parent 與最終 ref，不執行 Git，`evidence_verified=false`。無欄位錯誤且無未完成項時 exit 0，否則 exit 3；finish 仍須完整驗證來源、引用及搜尋。finish 的可修錯誤 exit 3 保留 context，快照損毀 exit 2 終止。
 
 每個 reviewed impact 至少有一份合法 evidence 與節點自身 `repo/source/path` 相同，其他版本的輔助證據可一併保留。刪檔的 coverage 沿用 `required_coverage` 的比較來源，impact 的 source 則採實際引用得到的固定版本，例如 `merge-base`；將 coverage 的 `head` 直接複製到已刪檔節點會在 `/impact_coverage/<index>/evidence` 回報錯誤。
 
-`--requests-file` 遺失、不可讀、編碼或 JSON 錯誤回傳 exit 3、`terminal=false/recoverable=true`；status 保持 `state=reviewing/phase=input-repair`。寫好 UTF-8 操作陣列後沿同一 request ID 重送，已完成的操作前綴保留。草稿遺失或不可讀也沿同一 ID 修復；helper 仍檢查已保存證據，損毀的 manifest、pack 或收據維持終止錯誤。
+`--requests-file` 遺失、不可讀、編碼或 JSON 錯誤回傳 exit 3、`terminal=false/recoverable=true`；status 保持 `state=reviewing/phase=input-repair`。欄位、型別、操作 ID 與已知參數錯誤會先在本機預檢，回傳 `code/pointer/operation_id/next_index` 及修正提示，再沿同一 request ID 重送。已完成的操作前綴保留。草稿遺失或不可讀也沿同一 ID 修復；恢復路徑以 manifest 及 pack 內容雜湊確認證據未變，若收據不符才執行完整證據檢查。每次 finish 保留獨立耗時與 Git 計數；最終發布前仍完整驗證所有證據。損毀的 manifest、pack 或收據維持終止錯誤。
+
+`metrics` 按 start、每次 step、check 與每次 finish 保留 Git 程序數及耗時；step 另列 read/search 秒數與次數、各操作類型耗時、錯誤後證據重驗及略過次數、owner lock 等待，artifact 分頁另計。已知的請求格式／欄位錯誤不執行失敗操作；此前有效操作仍保留。行數越界會記住以固定 Repo、來源、ref、path 與 blob SHA 綁定的行數，重送時先預檢。此類修稿不重掃 pack；損毀快照、manifest、搜尋紀錄仍由再次讀取或發布前完整驗證攔截。不可讀請求檔仍沿恢復路徑檢查 pack。finish 保存每次嘗試、owner lock 等待、草稿準備與重驗耗時。`progress`／stderr 階段事件回報目前操作與完成數；Git fetch 的傳輸層連線數、模型時間及 token 未觀測時分別標成 `not-observed`、`null`、`null`，不可推算成零。
 
 ~~~powershell
 python "<skill-dir>/scripts/review_session.py" check --runtime-root "<runtime>" --request-id "<id>"

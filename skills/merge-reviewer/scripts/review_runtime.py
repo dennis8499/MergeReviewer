@@ -132,19 +132,20 @@ def shared_reads(value):
     return {"schema": "MergeReviewEvidenceBatch/v1", "reads": reads, "contents": contents}
 
 
-def _views(context):
+def _views(context, *, create=False):
     root = Path(context).resolve()
     directory = root / "views"
     if directory.is_symlink() or (directory.exists() and directory.resolve() != directory):
         raise ValueError("Evidence view directory cannot be a link")
-    directory.mkdir(exist_ok=True)
+    if create:
+        directory.mkdir(exist_ok=True)
     return directory
 
 
 def store_view(context, value):
     raw = canonical(value)
     identifier = hashlib.sha256(raw).hexdigest()
-    target = _views(context) / (identifier + ".json")
+    target = _views(context, create=True) / (identifier + ".json")
     if target.is_symlink():
         raise ValueError("Evidence view cannot be a link")
     temporary = target.with_name(".view-" + uuid.uuid4().hex)
@@ -155,6 +156,21 @@ def store_view(context, value):
         except FileExistsError:
             if target.read_bytes() != raw:
                 raise ValueError("Evidence view identity mismatch")
+        except OSError as exc:
+            # Some Windows managed runtimes deny hard-link creation. The view
+            # name is content-addressed, so an atomic no-replace rename retains
+            # the same identity and still lets readers verify the SHA-256.
+            if os.name != "nt" or not (getattr(exc, "winerror", None) == 5 or exc.errno in (1, 13, 17, 95)):
+                raise
+            if target.exists():
+                if target.read_bytes() != raw:
+                    raise ValueError("Evidence view identity mismatch")
+            else:
+                try:
+                    os.rename(temporary, target)
+                except FileExistsError:
+                    if target.read_bytes() != raw:
+                        raise ValueError("Evidence view identity mismatch")
     finally:
         temporary.unlink(missing_ok=True)
     return identifier

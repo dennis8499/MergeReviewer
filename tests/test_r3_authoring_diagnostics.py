@@ -96,6 +96,27 @@ class ImpactOwnEvidenceDiagnosticsTests(unittest.TestCase):
                     self.assertFalse(result["ready_for_finish"])
                     self.assertEqual(1, len(self.own_errors(result)))
 
+    def test_parent_review_requires_both_its_fixed_source_and_final_source_during_check(self):
+        draft, manifest = self.fixture()
+        manifest["selected_repo"] = "repo-000"
+        parent_ref = "c" * 40
+        manifest["repositories"][0]["sources"]["parent-" + parent_ref] = {
+            "ref": parent_ref, "files": [{"path": "app.py", "kind": "blob"}]}
+        manifest["required_merge_views"] = [{"id": "M-001", "parent": parent_ref,
+            "paths": ["app.py"], "final_content_available": True, "parent_content_available": True}]
+        final = draft["coverage"][0]["evidence"][0]
+        parent = {**final, "source": "parent-" + parent_ref, "ref": parent_ref}
+        draft["merge_parent_review"] = [{"id": "M-001", "status": "reviewed", "reason": "Compared both versions.",
+                                          "evidence": [final, parent]}]
+        result = self.inspect(draft, manifest)
+        self.assertTrue(result["ready_for_finish"])
+
+        draft["merge_parent_review"][0]["evidence"] = [parent]
+        result = self.inspect(draft, manifest)
+        errors = [row for row in result["errors"]
+                  if row["code"] == "authoring.merge-parent-review-needs-final-version-evidence"]
+        self.assertEqual(["/merge_parent_review/0/evidence"], [row["pointer"] for row in errors])
+
 
 if __name__ == "__main__":
     unittest.main()

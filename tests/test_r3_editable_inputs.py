@@ -11,6 +11,7 @@ from unittest import mock
 from tests.fixtures import ReviewFixture, api, review_session, workspace, workspace_report
 import review_coordinator as coordination
 import review_flow as flow
+import review_runtime
 
 
 class EditableInputRecoveryTests(ReviewFixture):
@@ -113,6 +114,55 @@ class EditableInputRecoveryTests(ReviewFixture):
         self.damage_pack()
         self.assert_terminal(lambda: flow.step_file(self.runtime, self.identifier, self.context / "missing.json"))
 
+    def test_invalid_view_fields_are_preflighted_without_git_or_manifest_writes(self):
+        before = (self.context / "manifest.json").read_bytes()
+        operation = {"id": "bad-view", "op": "view", "artifact": "a" * 64, "fields": ["/reads"]}
+        with mock.patch.object(api, "run_git", side_effect=AssertionError("preflight ran Git")), \
+             mock.patch.object(api, "run_git_capture", side_effect=AssertionError("preflight ran Git")), \
+             mock.patch.object(workspace, "ordered_step", side_effect=AssertionError("preflight ran operation")):
+            result = flow.step(self.runtime, self.identifier, [operation])
+        self.assertFalse(result["complete"])
+        self.assertEqual("authoring.invalid-operation-argument", result["code"])
+        self.assertEqual("/operations/0/fields", result["pointer"])
+        self.assertEqual("bad-view", result["operation_id"])
+        self.assertEqual(0, result["metrics"]["git_command_count"])
+        self.assertTrue(result["metrics"]["error_revalidation_skipped"])
+        self.assertEqual(before, (self.context / "manifest.json").read_bytes())
+
+    def test_known_line_overflow_is_cached_and_rejected_without_revalidation_or_git(self):
+        operation = {"id": "overflow", "op": "read", "repo": self.started["selected_repo"],
+                     "path": "app.py", "line_start": 1, "line_end": 100}
+        first = flow.step(self.runtime, self.identifier, [operation])
+        self.assertFalse(first["complete"])
+        self.assertEqual("evidence.line-range-out-of-bounds", first["code"])
+        self.assertTrue(first["metrics"]["error_revalidation_skipped"])
+        self.assertEqual(0, first["metrics"]["error_revalidation_seconds"])
+        self.assertTrue(coordination.read_json(flow.job_path(self.runtime, self.identifier))["line_counts"])
+        with mock.patch.object(api, "run_git", side_effect=AssertionError("cached range preflight ran Git")), \
+             mock.patch.object(api, "run_git_capture", side_effect=AssertionError("cached range preflight ran Git")), \
+             mock.patch.object(workspace, "ordered_step", side_effect=AssertionError("cached range ran operation")):
+            second = flow.step(self.runtime, self.identifier, [operation])
+        self.assertEqual("evidence.line-range-out-of-bounds", second["code"])
+        self.assertEqual("/operations/0/line_end", second["pointer"])
+        self.assertTrue(second["metrics"]["error_revalidation_skipped"])
+
+    def test_context_and_runtime_artifact_paging_are_read_only(self):
+        manifest_bytes = (self.context / "manifest.json").read_bytes()
+        context_artifact = review_runtime.store_view(self.context, {"items": ["first", "second"]})
+        response = flow.response_context(self.runtime, self.identifier, create=True)
+        runtime_artifact = review_runtime.store_view(response, {"items": ["terminal"]})
+        with mock.patch.object(api, "run_git", side_effect=AssertionError("view ran Git")), \
+             mock.patch.object(api, "run_git_capture", side_effect=AssertionError("view ran Git")):
+            context_page, context_scope = flow.read_artifact(self.runtime, self.identifier,
+                context_artifact, scope="context", pointer="/items", page_size=1)
+            runtime_page, runtime_scope = flow.read_artifact(self.runtime, self.identifier,
+                runtime_artifact, scope="runtime", pointer="/items", page_size=1)
+        self.assertEqual(("context", "runtime"), (context_scope, runtime_scope))
+        self.assertEqual(["first"], context_page["items"])
+        self.assertEqual(["terminal"], runtime_page["items"])
+        self.assertEqual(manifest_bytes, (self.context / "manifest.json").read_bytes())
+        self.assertEqual({}, workspace.load(self.context).get("operations", {}))
+
     def test_malformed_owned_manifest_is_not_an_editable_input_error(self):
         (self.context / "manifest.json").write_text('{"broken":', encoding="utf-8")
         self.assert_terminal(lambda: flow.step_file(self.runtime, self.identifier, self.context / "missing.json"))
@@ -137,6 +187,10 @@ class EditableInputRecoveryTests(ReviewFixture):
             result, code = flow.finish(self.runtime, self.identifier)
             self.assertEqual(0, code)
             self.assertEqual(1, validate.call_count)
+        saved = coordination.read_json(flow.job_path(self.runtime, self.identifier))
+        self.assertGreaterEqual(saved["metrics"]["finish_lock_wait_seconds"], 0)
+        self.assertEqual("published", saved["metrics"]["finish_attempts"][-1]["outcome"])
+        self.assertEqual("cleanup", saved["progress"]["stage"])
         self.assertTrue(Path(result["report_path"]).is_file())
         self.assertFalse(self.context.exists())
 
@@ -181,6 +235,9 @@ class OwnImpactFacadeTests(ReviewFixture):
             result, code = flow.check(root, identifier)
         self.assertEqual(3, code)
         self.assertFalse(result["evidence_verified"])
+        self.assertGreaterEqual(result["metrics"]["check_diagnostic_seconds"], 0)
+        self.assertEqual("check", result["metrics"]["git_command_phases"][-1]["phase"])
+        self.assertEqual(0, result["metrics"]["git_command_phases"][-1]["command_count"])
         self.assertEqual(["/impact_coverage/0/evidence"], [row["pointer"] for row in result["errors"]
                          if row["code"] == "authoring.impact-evidence-must-cover-its-own-fixed-path-source"])
         with mock.patch.object(workspace_report, "validate", wraps=workspace_report.validate) as validate:

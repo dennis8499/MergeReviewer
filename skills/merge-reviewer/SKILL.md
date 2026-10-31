@@ -23,7 +23,10 @@ metadata:
 
 ## 1. start：固定證據與草稿
 
+先查詢安裝版本支援的協定能力；只有 `capabilities` 成功回報並明確列出 `compact` 才使用精簡草稿。舊版不支援能力查詢時，直接使用 v3：
+
 ~~~powershell
+python "<skill-dir>/scripts/review_session.py" capabilities
 python "<skill-dir>/scripts/review_session.py" start --workspace "<declared-root>" --project "<Repo-name-or-path>" --base "<base>" --head "<head>" --draft-format compact
 ~~~
 
@@ -41,13 +44,13 @@ python "<skill-dir>/scripts/review_session.py" start --workspace "<declared-root
 python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" --request-id "<id>" --requests-file "<initial_reads_file>"
 ~~~
 
-首輪將 start 產生的 `initial_reads_file` 原樣交給 step，先讀取已擷取 diff、適用的 `AGENTS.md`、改動檔及必要 base／head／merge-preview／parent 內容；逐項讀完再決定動態呼叫鏈追查。後續每輪合併固定讀取、契約註冊及搜尋；各操作給唯一 ID，先登錄父契約，再登錄子契約及搜尋。
+首輪將 start 產生的 `initial_reads_file` 原樣交給 step，先讀取已擷取 diff、適用的 `AGENTS.md`、改動檔及必要 base／head／merge-preview／parent 內容；逐項讀完再決定動態呼叫鏈追查。必要 parent 只需核對與有效變更路徑相交的差異及最終內容，不要逐頁重讀無關 parent patch。後續每輪合併固定讀取、契約註冊及搜尋；各操作給唯一 ID，先登錄父契約，再登錄子契約及搜尋。
 
-逐一判斷 `required_coverage`、`required_merge_views`，讀取基礎版本、最終內容及必要 parent。二進位、刪除、改名及 submodule 也需明確判定；`ancestor-noop/v1` 的空集合依 helper 推導。
+逐一判斷 `required_coverage`、`required_merge_views`，讀取基礎版本、最終內容及必要 parent。每完成一條功能／契約鏈，就把判斷、固定證據引用與未完成項寫入草稿；恢復時由 `status` 的 `remaining` 接續未完成項。二進位讀取會回傳大小與 hash、但不提供文字；無法可靠解碼的文字會標示 `lossy=true`，兩者都不能當成已讀懂。刪除欄位可用本次比較左側的固定證據錨定；改名及 submodule 也需明確判定。`ancestor-noop/v1` 的空集合依 helper 推導。
 
 多 Repo 逐筆完成 `boundary_changes`：`contained` 引用變更及必要使用／輸出證據；`propagates` 建立實際 workspace 契約與連通影響圖，追查直接及間接消費端；不確定則 `unresolved`。Repo 內搜尋可綁定 `change_id`，跨 Repo 搜尋須綁定已註冊契約。副檔名、private 名稱或零命中不足以排除外部影響；每個其他 Repo 仍保留判定。
 
-回應上限 24 KiB，全文與命中落盤；逐操作查看是否完整回傳，必要時依 artifact、JSON pointer 及 offset 續讀。`evidence_complete` 表示保存，語意「已審查」由 agent 判斷；必要內容未讀完不能標已審查。定位命中可用 `around_line`。
+回應上限 24 KiB，全文與命中落盤；逐操作查看是否完整回傳，必要時使用純讀取 `view` 命令按 artifact、JSON pointer 及 offset 續讀，不要把翻頁包成 step 操作。敏感值在展示內容中遮罩，行號與原始內容 hash 仍保留。`evidence_complete` 表示保存，語意「已審查」由 agent 判斷；必要內容未讀完不能標已審查。定位命中可用 `around_line`。
 
 草稿由 agent 填寫逐檔與 parent 判定、影響鏈、Repo 判定及實際測試；靜態推導用 `code-derived`。待確認須有實際必要關係的固定證據；必要內容查不清時保持未完成。
 

@@ -169,6 +169,22 @@ def inspect(draft, manifest):
         need(isinstance(boundary.scope(manifest, contract), str) and boundary.scope(manifest, contract) in boundary.SCOPES,
              contract_place + ".search_scope", "invalid search_scope")
         evidence([contract.get("evidence", {})], contract_place + ".evidence", indexed=False)
+        if not contract.get("parent_ids"):
+            root = contract.get("root")
+            need(isinstance(root, dict) and root in manifest.get("required_coverage", []),
+                 contract_place + ".root", "initial contract root must identify a required change")
+            if isinstance(root, dict):
+                repo = repos.get(root.get("repo"), {})
+                anchor = contract.get("evidence", {})
+                try:
+                    from workspace_report import allowed_sources, location
+                    valid_sources = allowed_sources(repo, location(root))
+                except (KeyError, TypeError):
+                    valid_sources = set()
+                need(isinstance(anchor, dict) and anchor.get("repo") == root.get("repo")
+                     and anchor.get("path") == root.get("path")
+                     and anchor.get("source") in valid_sources,
+                     contract_place + ".evidence", "initial contract anchor must cite its changed path or comparison-left deletion")
         need(any(identifier in node.get("contract_ids", []) for node in nodes.values()),
              "draft.impact_coverage", "contract has no impact anchor: " + identifier)
     # Run the same policy validator once per local contract to collect independent
@@ -240,13 +256,38 @@ def inspect(draft, manifest):
             if row.get("status") == "not-related":
                 need(len({item["query"] for item in bound}) >= 2, place + ".search_ids", "exclusion needs alternate terms: " + identifier)
     required_parents = {item["id"] for item in manifest.get("required_merge_views", [])}
+    parent_views = {item["id"]: item for item in manifest.get("required_merge_views", [])}
     parents = rows(draft, "merge_parent_review")
     need({row.get("id") for row in parents} == required_parents, "draft.merge_parent_review", "required parent views differ")
+    selected = repos.get(manifest.get("selected_repo"), {})
+    final = selected.get("sources", {}).get("merge-preview", selected.get("sources", {}).get("head", {}))
+    final_ref = final.get("ref")
     for row in parents:
-        need(row.get("status") in ("reviewed", "not-reviewed"), row_path("merge_parent_review", row) + ".status", "invalid parent status")
+        place = row_path("merge_parent_review", row)
+        need(row.get("status") in ("reviewed", "not-reviewed"), place + ".status", "invalid parent status")
         if row.get("status") != "reviewed":
             gaps.append({"kind": "parent", "id": row.get("id"), "reason": row.get("reason", "not reviewed")})
-        evidence(row.get("evidence", []), row_path("merge_parent_review", row) + ".evidence")
+        evidence_rows = row.get("evidence", [])
+        evidence(evidence_rows, place + ".evidence")
+        if row.get("status") != "reviewed":
+            continue
+        view = parent_views.get(row.get("id"), {})
+        citations = [item for item in evidence_rows if isinstance(item, dict)] if isinstance(evidence_rows, list) else []
+        parent_evidence = lambda item: (item.get("repo") == manifest.get("selected_repo")
+                                        and item.get("ref") == view.get("parent")
+                                        and item.get("path") in view.get("paths", []))
+        final_evidence = lambda item: (item.get("repo") == manifest.get("selected_repo")
+                                       and item.get("ref") == final_ref
+                                       and item.get("path") in view.get("paths", []))
+        if view.get("final_content_available", True):
+            need(any(final_evidence(item) for item in citations), place + ".evidence",
+                 "merge-parent review needs final-version evidence")
+        else:
+            need(row.get("final_ref") == final_ref, place + ".final_ref",
+                 "merge-parent absence judgment needs its fixed final_ref")
+        if view.get("parent_content_available"):
+            need(any(parent_evidence(item) for item in citations), place + ".evidence",
+                 "merge-parent review needs its fixed parent evidence")
     previous_priority = -1
     for index, finding in enumerate(rows(draft, "findings")):
         place = row_path("findings", finding)
