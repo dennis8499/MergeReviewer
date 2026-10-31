@@ -319,8 +319,10 @@ def operation_preflight(operations, manifest=None, line_counts=None):
                                    else list(repositories))
             elif kind == "inventory":
                 requested_repos = [args["repo"]] if args.get("repo") else list(repositories)
-            else:
+            elif kind in ("read", "patch", "instructions"):
                 requested_repos = [args.get("repo")]
+            else:
+                requested_repos = []
             for repo_id in requested_repos:
                 if repo_id not in repositories:
                     return {"next_index": index, "code": "authoring.unknown-repository",
@@ -880,7 +882,7 @@ def artifact_view(context, artifact, pointer="", offset=0, page_size=100, string
 
 
 def view_continuation(context, artifact, pointer, offset, page_size=100, *, string_offset=None, scope="context"):
-    value = {"command": "review_session.py view", "artifact_scope": scope,
+    value = {"command": "status" if scope == "runtime" else "review_session.py view", "artifact_scope": scope,
              "artifact": artifact, "pointer": pointer, "offset": offset, "page_size": page_size}
     if string_offset is not None:
         value["string_offset"] = string_offset

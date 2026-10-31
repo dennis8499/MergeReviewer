@@ -157,7 +157,7 @@ class BatchReviewTests(ReviewFixture):
             self.assertEqual(2, result.returncode, result.stderr)
         self.assertEqual(manifest, workspace.load(context))
 
-    def test_binary_read_fails_identically_and_does_not_run_later_reads(self):
+    def test_binary_read_returns_metadata_and_later_reads_continue(self):
         (self.repo / "blob.bin").write_bytes(b"\0binary")
         git(self.repo, "add", ".")
         git(self.repo, "commit", "-m", "binary")
@@ -165,10 +165,17 @@ class BatchReviewTests(ReviewFixture):
         request = {"repo": manifest["selected_repo"], "path": "blob.bin"}
         single = run_python(SCRIPTS / "review_workspace.py", "read", "--context-dir", str(context),
                             "--repo", request["repo"], "--path", request["path"])
-        batch = self.command(context, "batch-read", [request, {"repo": request["repo"], "path": "missing"}])
-        self.assertEqual(2, single.returncode)
-        self.assertEqual(single.returncode, batch.returncode)
-        self.assertEqual(single.stderr, batch.stderr)
+        batch = self.command(context, "batch-read", [request, {"repo": request["repo"], "path": "app.py"}])
+        self.assertEqual(0, single.returncode, single.stderr)
+        single_result = json.loads(single.stdout)
+        self.assertTrue(single_result["binary"])
+        self.assertFalse(single_result["content_available"])
+        self.assertEqual(7, single_result["byte_size"])
+        self.assertEqual(64, len(single_result["sha256"]))
+        self.assertEqual(0, batch.returncode, batch.stderr)
+        batch_results = json.loads(batch.stdout)["reads"]
+        self.assertTrue(batch_results[0]["binary"])
+        self.assertTrue(batch_results[1]["content_available"])
 
     def test_read_error_stops_before_later_reads(self):
         context, manifest = self.capture()

@@ -689,7 +689,8 @@ def instructions(context, manifest, repo_id, path, api, *, cache=None):
             lines, encoding, lossy = review_content.decode_source(raw, item["path"])
             require(lines is not None, "workspace instruction is binary and cannot guide review")
             visible, redacted = review_content.redact_lines(lines, item["path"])
-            entries.append({**item, "content": "\n".join(visible), "encoding": encoding,
+            ending = "\n" if review_content.has_trailing_newline(raw, encoding) else ""
+            entries.append({**item, "content": "\n".join(visible) + ending, "encoding": encoding,
                             "lossy": lossy, "sensitive_values_redacted": redacted})
     repo_entries = repo.get("instructions", [])
     require(isinstance(repo_entries, list), "Repo instructions must be an array")
@@ -713,7 +714,8 @@ def instructions(context, manifest, repo_id, path, api, *, cache=None):
             lines, encoding, lossy = review_content.decode_source(raw, item["path"])
             require(lines is not None, "Repo instruction is binary and cannot guide review")
             visible, redacted = review_content.redact_lines(lines, item["path"])
-            entries.append({**item, "content": "\n".join(visible), "encoding": encoding,
+            ending = "\n" if review_content.has_trailing_newline(raw, encoding) else ""
+            entries.append({**item, "content": "\n".join(visible) + ending, "encoding": encoding,
                             "lossy": lossy, "sensitive_values_redacted": redacted})
     return {"instructions": entries}
 
@@ -1171,7 +1173,8 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
         repo = repository(manifest, repo_id)
         name = source_name or repo.get("review_source")
         record = {"id": f"S-{len(manifest['searches']) + 1:04}", "repo": repo_id, "source": name,
-                  "query": query, "contract_id": contract_id, "matches": [], "status": "complete"}
+                  "query": query, "contract_id": contract_id, "matches": [], "status": "complete",
+                  "sensitive_values_redacted": False, "lossy": False}
         if change_id is not None:
             record["change_id"] = change_id
         try:
@@ -1189,7 +1192,6 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
             record["matches"] = output.splitlines()
         except (KeyError, ValueError, api.ReviewContextError) as exc:
             record.update(status="unresolved", reason=str(exc))
-        manifest["searches"].append(record)
         import review_content
         visible = {**record}
         if isinstance(record.get("output"), str):
@@ -1199,6 +1201,9 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
             visible["matches"] = visible["output"].splitlines()
             visible["sensitive_values_redacted"] = redacted
             visible["lossy"] = "\ufffd" in record["output"]
+            record["sensitive_values_redacted"] = redacted
+            record["lossy"] = visible["lossy"]
+        manifest["searches"].append(record)
         results.append(visible)
     save(context, manifest)
     return {"searches": results}

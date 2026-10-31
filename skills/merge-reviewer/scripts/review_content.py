@@ -77,6 +77,12 @@ def decode_source(raw: bytes, path: str = "") -> tuple[list[str] | None, str | N
     return lines, encoding, False
 
 
+def has_trailing_newline(raw: bytes, encoding: str) -> bool:
+    """Tell display callers whether the decoded source ended with a line break."""
+    errors = "replace" if encoding == "unknown" else "strict"
+    return raw.decode(encoding, errors=errors).endswith(("\n", "\r"))
+
+
 def redact_lines(lines: list[str], path: str = "") -> tuple[list[str], bool]:
     """Mask common secret values while preserving one output row per source row."""
     suffix = PurePosixPath(path.replace("\\", "/")).suffix.lower()
