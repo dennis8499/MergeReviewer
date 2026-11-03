@@ -6,10 +6,14 @@
 
 ~~~powershell
 python "<skill-dir>/scripts/review_session.py" start --workspace "C:/team" --project Orders --base origin/main --head origin/feature/payment
-python "<skill-dir>/scripts/review_session.py" status --runtime-root "C:/team/.review-runtime" --request-id "<id>"
+python "<skill-dir>/scripts/review_session.py" status --runtime-root "C:/team/.review-runtime" --request-id "<id>" --summary
 ~~~
 
 start 回傳 `MergeReviewStart/v1`，含固定 Repo／source ref、必要覆蓋及 parent、指示、patch、草稿與操作範例。`<context>/start.json` 保存完整索引；status 補上已執行操作、契約及草稿尚未完成項。stdout 超過 24 KiB 時回傳 `MergeReviewEvidenceSummary/v1`，保留完整 artifact；stderr 為階段事件。
+
+先查 capabilities：`skill_version`、`helper_sha256`、`python_version` 識別目前安裝；start 與持久 job 的 `tool_identity` 識別擷取時的工具。helper 摘要依 scripts 內所有 Python 檔名及內容 SHA-256 計算；同版本的不同 helper 內容可區分，不會因工具更新而自動重新擷取。
+
+能力列出 `summary_status` 時，`status --summary` 回傳 `MergeReviewStatusSummary/v1`：狀態、錯誤與缺口預覽／總數、未完成項計數、報告路徑及 `next_action`。大型收據與完整操作索引透過 `details` 的原 status 命令取得；預覽不代表全部內容已讀完。原 status 介面保留，發布狀態仍核對報告正文收據。
 
 可自行產生 32 位小寫十六進位 request ID，透過 `start --request-id` 在輸出遺失後重送。相同 ID／輸入回傳既有狀態，不重新擷取；改變輸入須新 ID。`--refresh` 忽略已完成快取及失敗冷卻，仍可加入開始等待後完成的同需求同步。
 
@@ -62,7 +66,22 @@ python "<skill-dir>/scripts/review_session.py" view --runtime-root "<runtime>" -
 
 回應會標明 `scope`，並在未完成時提供完整 `continue` 參數。續讀 terminal response 時將 scope 設為 `runtime`。`status --artifact` 仍相容，可加 `--artifact-scope context|runtime`。JSON pointer 的 `/`、`~` 以 `~1`、`~0` 轉義；陣列回傳 items／total／next_offset，長字串用 string_offset。字典的 `fields` 是輸出欄位，不能當成輸入參數。若單一欄位超出頁面上限，回應提供更深一層 pointer 的續讀連結。操作 artifact 保存原始 result；外層摘要 artifact 保存完整回傳，兩者 pointer 不同。artifact 位於 `<context>/views/<SHA-256>.json`，helper 讀取核對 hash。
 
-JSON pointer 的 `/`、`~` 以 `~1`、`~0` 轉義。陣列回傳 items／total／next_offset／view_complete；長字串用 string_offset，依 next_string_offset 續讀。字典由 fields 選 pointer。操作 artifact 保存原始 result；外層精簡摘要 artifact 保存完整回傳，兩者 pointer 不同。artifact 位於 `<context>/views/<SHA-256>.json`，helper 讀取核對 hash。
+`view_complete=false` 表示仍有未回傳內容。長字串陣列的 preview 後沿 continue 讀取剩餘字元；大型字典的 `value.continue` 按 offset 接續未列出的欄位，`drilldowns` 讀取尚未展開的值。保留每個分支的續讀入口，不能以外層陣列已到末端推定內容完整。
+
+能力列出 `batch_artifact_view` 時，可將多筆續讀寫成 JSON 陣列後使用同一 `view` 入口：
+
+~~~json
+[
+  {"id":"source-lines","artifact":"<artifact SHA-256>","artifact_scope":"context","pointer":"/lines","offset":0,"page_size":40},
+  {"id":"search-matches","artifact":"<artifact SHA-256>","artifact_scope":"context","pointer":"/searches/0/matches","offset":0,"page_size":20}
+]
+~~~
+
+~~~powershell
+python "<skill-dir>/scripts/review_session.py" view --runtime-root "<runtime>" --request-id "<id>" --requests-file "<pages.json>"
+~~~
+
+批次回傳 `MergeReviewArtifactBatch/v1`，`results[].result` 與單筆頁面相同；同一 artifact 在該批只讀取及驗 hash 一次。整批仍受 24 KiB 限制；若 `complete=false`，用同一檔案及 `--offset <next_index>` 接續未回傳的請求。此 offset 是批次索引，各筆 JSON 的 offset 是該頁資料位置。單頁太大時減少該筆 page_size。獨立錯誤留在對應 result，其他頁仍可返回；有錯誤或尚有未回傳請求時 exit 3。`complete=true` 只表示所有請求已有回應，各頁仍須沿 continue／drilldowns 讀完。批次不新增 step operation、不改 manifest、不產生新 artifact、不啟動 Git。單筆 view 與 status --artifact 介面保留。
 
 終止後 context 已清理、且 status 或 finish 結果仍超過上限時，摘要標示 `response_scope=runtime`，完整回應保存於該 request 的 runtime；用 `review_session.py view --artifact-scope runtime` 續讀，長字串依 `string_offset` 接續。此續讀只讀本機回應，不重新驗證或連線；終止紀錄到期後隨之清理。
 
@@ -71,6 +90,10 @@ JSON pointer 的 `/`、`~` 以 `~1`、`~0` 轉義。陣列回傳 items／total�
 ## 完成、取消與錯誤
 
 草稿初始 summary 空、必要覆蓋與 parent 為 not-reviewed，其他 Repo 為 unresolved。parent 模板已填固定最終來源 ref；每筆 reviewed parent 仍須引用與路徑相符的 parent 及最終證據。agent 依實際工作補齊，不能直接批次改為 reviewed。先用 check 取得 `errors[].code/pointer/message` 與 `gaps`；pointer 指向草稿欄位，manifest 問題以 `/manifest/...` 指出。check 使用固定索引提前核對 parent 與最終 ref，不執行 Git，`evidence_verified=false`。無欄位錯誤且無未完成項時 exit 0，否則 exit 3；finish 仍須完整驗證來源、引用及搜尋。finish 的可修錯誤 exit 3 保留 context，快照損毀 exit 2 終止。
+
+check 與 finish 共用 Repo 關聯及 finding 引用範圍判定；沒有 impact 證據的 peer 不得標為 related，finding／待確認的證據也不能擴張已排除 Repo。已知且綁定固定 blob 的行數也用於提前檢查引用上界；未知上界仍由 finish 從固定物件核對。compact 診斷一次列出獨立錯誤，pointer 指向確切 finding／evidence／欄位；`available_read_ids`、`available_line_ranges` 及總數協助修正引用。這些提示只引用已完成操作，不代填語意判斷。
+
+發布預檢與正式發布共用 sibling 暫存檔、完整寫入／讀回及原子提交；Windows 檔案繼承輸出目錄 ACL，既有報告不覆寫。完整驗證後若輸出遇到可恢復的權限、占用或容量錯誤，finish 回傳 exit 3、`phase=publication-repair`、`recoverable=true`、`context_retained=true`，保留原 request、草稿與固定 SHA。修復輸出後重試同一 ID 的 finish，仍完整驗證證據；需要放棄時 cancel。損毀來源與非輸出錯誤仍是終止錯誤。舊 review_report.py 的預設失敗清理行為保留。
 
 每個 reviewed impact 至少有一份合法 evidence 與節點自身 `repo/source/path` 相同，其他版本的輔助證據可一併保留。刪檔的 coverage 沿用 `required_coverage` 的比較來源，impact 的 source 則採實際引用得到的固定版本，例如 `merge-base`；將 coverage 的 `head` 直接複製到已刪檔節點會在 `/impact_coverage/<index>/evidence` 回報錯誤。
 

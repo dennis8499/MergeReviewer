@@ -8,9 +8,11 @@ import math
 import os
 from pathlib import Path
 import re
-import tempfile
 import merge_parent_coverage
 import contract_boundary
+import report_publication
+from review_validation import (evidence_within_involved_repos, finding_evidence_errors,
+                               line_interval_valid, repo_disposition_error)
 
 from review_workspace import (CONTEXT, RESULT, FixedSourceCache, FixedSearchCache, ancestor_noop,
                               SNAPSHOT_POLICY, evidence_repository, instructions,
@@ -391,7 +393,7 @@ def _validate(draft, manifest, context, api):
         raw = source_cache.read(repo, name, path)
         start, end = e.get("line_start"), e.get("line_end")
         draft_require((start is None and end is None) or
-                (type(start) is int and type(end) is int and 1 <= start <= end <= len(raw.splitlines())),
+                line_interval_valid(start, end, len(raw.splitlines())),
                 "evidence line interval is outside the frozen file")
         return key
 
@@ -547,12 +549,8 @@ def _validate(draft, manifest, context, api):
         draft_require(isinstance(ids, list) and all(s in searches and searches[s]["repo"] == repo_id for s in ids),
                 "search IDs must come from that captured Repo")
         repo = repos[repo_id]
-        if repo_id in manifest["seed_repos"]:
-            draft_require(state in ("seed", "unresolved"), "seed cannot be excluded")
-        elif repo_id in involved:
-            draft_require(state in ("related", "unresolved"), "reachable Repo cannot be excluded")
-        else:
-            draft_require(state in ("not-related", "unresolved"), "unrelated Repo cannot be expanded without evidence")
+        disposition_error = repo_disposition_error(repo_id, state, manifest["seed_repos"], involved)
+        draft_require(disposition_error is None, disposition_error)
         if repo["state"] == "error":
             draft_require(state == "unresolved", "failed Repo capture cannot be claimed reviewed/excluded")
         required_contracts = contract_boundary.obligations(manifest, contracts, repo_id)
@@ -612,7 +610,7 @@ def _validate(draft, manifest, context, api):
                 "pending confirmation must identify captured selected changes")
         draft_require(len({location(row) for row in related}) == len(related), "duplicate pending related change")
         keys = evidence_list(item, required=False)
-        draft_require(all(key[0] in involved for key in keys), "pending evidence cannot expand excluded Repos")
+        draft_require(evidence_within_involved_repos(keys, involved), "pending evidence cannot expand excluded Repos")
         fingerprint = tuple(item[field].strip() for field in ("title", "reason", "missing_evidence"))
         draft_require(fingerprint not in pending_fingerprints, "duplicate pending confirmation")
         pending_fingerprints.add(fingerprint)
@@ -638,8 +636,8 @@ def _validate(draft, manifest, context, api):
         draft_require(finding.get("owner") in OWNERS and finding.get("scenario_source") in ("code-derived", "reproduced"),
                 "finding needs a valid owner and scenario_source")
         keys = evidence_list(finding)
-        draft_require(any(k in reviewed_anchors for k in keys), "finding must cite a reviewed seed change in its correct version")
-        draft_require(all(k[0] in involved for k in keys), "finding evidence cannot silently expand excluded Repos")
+        for message in finding_evidence_errors(keys, reviewed_anchors, involved):
+            draft_require(False, message)
         fingerprint = tuple(finding[f].strip() for f in ("title", "trigger", "expected", "actual"))
         draft_require(fingerprint not in fingerprints, "duplicate finding")
         fingerprints.add(fingerprint)
@@ -894,11 +892,10 @@ def publish(context, draft, manifest, report_dir, *, timeout=180.0, on_stage=Non
             and isinstance(head, str) and SHA.fullmatch(head), "report name requires full branch commit SHAs")
     report_dir = Path(report_dir or Path(seed["path"]) / "review-reports").expanduser().resolve()
     require(not report_dir.is_relative_to(context.resolve()), "report directory cannot be inside owned temporary context")
-    report_dir.mkdir(parents=True, exist_ok=True)
     published_at = datetime.now(timezone.utc)
-    with tempfile.TemporaryDirectory(prefix=".merge-review-", dir=report_dir) as temporary:
-        stage = Path(temporary) / "report.md"
-        stage.write_text(render(result, manifest), encoding="utf-8", newline="\n")
+    # Rendering reads fixed evidence; keep those failures outside output recovery.
+    content = render(result, manifest).encode("utf-8")
+    with report_publication.staged_report(report_dir, content) as stage:
         for offset in range(1000):
             timestamp = (published_at + timedelta(microseconds=offset)).strftime("%Y%m%dT%H%M%S%fZ")
             output = report_dir / f"merge-review-{timestamp}-{base[:8]}-{head[:8]}.md"
@@ -909,19 +906,8 @@ def publish(context, draft, manifest, report_dir, *, timeout=180.0, on_stage=Non
                 on_stage_receipt(output, report_receipt.create(stage.read_text(encoding="utf-8"),
                                  review_outcome=report_receipt.summarize_review(result)))
             try:
-                # Link the complete file atomically; an existing destination is never replaced.
-                os.link(stage, output)
+                report_publication.commit_report(stage, output)
             except FileExistsError:
                 continue
-            except OSError as exc:
-                # Managed Windows runtimes may deny hard links. os.rename on
-                # Windows is still atomic and refuses to replace an existing
-                # destination, preserving the report's no-overwrite contract.
-                if os.name != "nt" or not (getattr(exc, "winerror", None) == 5 or exc.errno in (1, 13, 17, 95)):
-                    raise
-                try:
-                    os.rename(stage, output)
-                except FileExistsError:
-                    continue
             return output
     raise ValueError("report filename collisions exceeded limit")

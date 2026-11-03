@@ -4,11 +4,13 @@ from __future__ import annotations
 import re
 import copy
 import contract_boundary as boundary
+from review_validation import (evidence_within_involved_repos, finding_evidence_errors,
+                               fixed_line_count_key, line_interval_valid, repo_disposition_error)
 
 FIELDS = ("operation_scenario", "technical_trigger", "technical_explanation", "impact_scope", "engineering_fix")
 
 
-def inspect(draft, manifest):
+def inspect(draft, manifest, *, line_counts=None):
     errors, gaps = [], []
 
     def add(path, message):
@@ -109,12 +111,17 @@ def inspect(draft, manifest):
                             for entry in source.get("files", [])), place,
                         "evidence path is not a captured blob")
             start, end = item.get("line_start"), item.get("line_end")
-            interval = need(start is None and end is None or type(start) is int and type(end) is int and 1 <= start <= end,
+            interval = need(start is None and end is None or line_interval_valid(start, end),
                             place, "invalid line interval; upper bound is checked at finish")
+            count = (line_counts or {}).get(fixed_line_count_key(manifest, item)) if fixed and blob else None
+            if interval and start is not None and type(count) is int:
+                interval = need(line_interval_valid(start, end, count), place,
+                                "evidence line interval is outside the frozen file")
             if fixed and blob and interval:
                 keys.append((item.get("repo"), item.get("source"), item.get("path")))
         return keys
 
+    reviewed_anchors = set()
     for row in rows(draft, "coverage"):
         place = row_path("coverage", row)
         key = (row.get("repo"), row.get("source"), row.get("path"))
@@ -126,7 +133,15 @@ def inspect(draft, manifest):
             gaps.append({"kind": "change", "id": list(key), "reason": row.get("reason", "not reviewed")})
         else:
             need(bool(row.get("evidence")), place + ".evidence", "reviewed change needs fixed evidence")
-            evidence(row.get("evidence", []), place + ".evidence")
+            keys = evidence(row.get("evidence", []), place + ".evidence")
+            try:
+                from workspace_report import allowed_sources
+                sources = allowed_sources(repos.get(key[0], {}), key)
+            except (KeyError, TypeError):
+                sources = set()
+            matches = [item for item in keys if item[0] == key[0] and item[2] == key[2] and item[1] in sources]
+            need(bool(matches), place + ".evidence", "change coverage cites the wrong version/source")
+            reviewed_anchors.update(matches)
             if (manifest.get("extension_enabled") and
                     (manifest.get("contract_scope_policy") != boundary.V2_POLICY or
                      outcomes.get(change_ids.get(key)) == "propagates")):
@@ -232,6 +247,7 @@ def inspect(draft, manifest):
     else:
         need(not reviews, "draft.boundary_reviews", "boundary reviews require boundary-contracts/v1")
     dispositions = rows(draft, "repository_coverage")
+    involved = {node.get("repo") for node in nodes.values()} | set(manifest.get("seed_repos", []))
     need(len(dispositions) == len(repos) and {row.get("repo") for row in dispositions} == set(repos),
          "draft.repository_coverage", "every captured Repo needs one disposition")
     for row in dispositions:
@@ -240,8 +256,9 @@ def inspect(draft, manifest):
         ids = row.get("search_ids", [])
         need(row.get("status") in ("seed", "related", "not-related", "unresolved"), place + ".status", "invalid Repo status")
         text(row.get("reason"), place + ".reason")
-        need(repo_id not in manifest.get("seed_repos", []) or row.get("status") in ("seed", "unresolved"),
-             place + ".status", "seed cannot be excluded")
+        disposition_error = repo_disposition_error(repo_id, row.get("status"),
+                                                   manifest.get("seed_repos", []), involved)
+        need(disposition_error is None, place + ".status", disposition_error)
         need(repos.get(repo_id, {}).get("state") != "error" or row.get("status") == "unresolved",
              place + ".status", "failed Repo capture must remain unresolved")
         if row.get("status") == "unresolved":
@@ -303,7 +320,14 @@ def inspect(draft, manifest):
         need(finding.get("owner") in ("開發", "維運設定", "QA"), place + ".owner", "invalid owner")
         need(finding.get("scenario_source") in ("code-derived", "reproduced"), place + ".scenario_source", "invalid scenario source")
         need(bool(finding.get("evidence")), place + ".evidence", "finding needs fixed evidence")
-        evidence(finding.get("evidence", []), place + ".evidence")
+        keys = evidence(finding.get("evidence", []), place + ".evidence")
+        for message in finding_evidence_errors(keys, reviewed_anchors, involved):
+            add(place + ".evidence", message)
+    for row in rows(draft, "pending_confirmations"):
+        place = row_path("pending_confirmations", row)
+        keys = evidence(row.get("evidence", []), place + ".evidence")
+        need(evidence_within_involved_repos(keys, involved), place + ".evidence",
+             "pending evidence cannot expand excluded Repos")
     for row in rows(draft, "next_steps"):
         place = row_path("next_steps", row)
         need(row.get("owner") in ("開發", "維運設定", "QA"), place + ".owner", "invalid owner")

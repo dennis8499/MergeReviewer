@@ -1,5 +1,13 @@
 # Change log
 
+## 0.20.5 — 2026-11-03
+
+- Use output-directory sibling files for report staging, and exercise the same atomic publication path during preflight. Retain frozen session evidence for recoverable output failures so finish can retry without recapture; preserve low-level CLI cleanup defaults.
+- Share Repo disposition and line-interval rules between cheap diagnostics and publication. Report independent compact authoring errors with exact pointers and completed-read guidance.
+- Keep omitted strings, nested collections and dictionary fields incomplete with reachable continuations. Add bounded, read-only batched artifact views and actionable summary status.
+- Identify installed helper content, skill version and Python version in capabilities and captured session records. Add sanitized workflow regressions derived from actual execution failures.
+- Paired helper interaction replay reduces 24 tool round trips to 7 while preserving fixed evidence, findings, gaps and one full validation. This limited replay does not establish model-review performance or semantic quality; see [release notes](docs/releases/v0.20.5.md).
+
 ## 0.20.4 — 2026-11-01
 
 - Preflight review operations before evidence reads; cache verified line counts against fixed blob identities and avoid expensive snapshot rechecks for deterministic authoring errors. Full publication validation remains mandatory.
