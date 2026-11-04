@@ -5,6 +5,58 @@ import hashlib
 import review_runtime
 
 
+def comparison_left_sources(repo, key):
+    """Captured names for the actual left side, including divergent branches."""
+    source, path = key[1:]
+    baseline = (repo["sources"].get("head", {}).get("ref") if source == "merge-preview"
+                else repo.get("diff_base"))
+    if not isinstance(baseline, str) or not baseline:
+        return set()
+    return {name for name, version in repo["sources"].items()
+            if version.get("ref") == baseline and any(
+                entry["path"] == path and entry["kind"] == "blob" for entry in version.get("files", []))}
+
+
+def contract_anchor_sources(repo, key):
+    """Contract anchors can describe removed symbols in a surviving file.
+
+    Registration still verifies the symbol against removed lines. This broader
+    source set must never replace the final-content coverage requirement.
+    """
+    source, path = key[1:]
+    current = repo["sources"].get(source, {})
+    right = {source} if any(entry["path"] == path and entry["kind"] == "blob"
+                            for entry in current.get("files", [])) else set()
+    return right | comparison_left_sources(repo, key)
+
+
+def contract_has_impact_anchor(contract, nodes):
+    anchor = contract.get("evidence", {})
+    if not isinstance(anchor, dict):
+        return False
+    key = tuple(anchor.get(name) for name in ("repo", "source", "path"))
+    return all(isinstance(value, str) and value for value in key) and any(
+        tuple(node.get(name) for name in ("repo", "source", "path")) == key
+        and contract["id"] in node.get("contract_ids", []) for node in nodes)
+
+
+def coverage_impact_errors(key, matches, identifiers, nodes, contracts, *, needs_contracts):
+    roots = [nodes[identifier] for identifier in identifiers if identifier in nodes]
+    errors = []
+    if any(tuple(node.get(name) for name in ("repo", "source", "path")) not in matches for node in roots):
+        errors.append("change's impact roots must cover its own frozen evidence")
+    if needs_contracts:
+        applicable = {contract["id"] for contract in contracts
+                      if isinstance(contract.get("root"), dict)
+                      and tuple(contract["root"].get(name) for name in ("repo", "source", "path")) == key
+                      and not contract.get("parent_ids")}
+        if not applicable:
+            errors.append("each reviewed Group change needs an anchored changed contract")
+        if not applicable <= {identifier for node in roots for identifier in node.get("contract_ids", [])}:
+            errors.append("change impact roots must cover their registered contracts")
+    return errors
+
+
 def fixed_line_count_key(manifest, request):
     repo = next((item for item in manifest.get("repositories", [])
                  if item.get("id") == request.get("repo")), None)

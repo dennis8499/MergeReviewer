@@ -257,9 +257,11 @@ class FixedSourceCache:
                 self._content[key] = fixed_bytes(self.context, repo, source_name, path, self.api)
         return self._content[key]
 
-    def prefetch(self, manifest, requests):
+    def prefetch(self, manifest, requests, *, on_progress=None):
         groups = {}
         for request in requests:
+            if on_progress:
+                on_progress()
             repo = repository(manifest, request.get("repo"))
             name = request.get("source") or repo["review_source"]
             path = request.get("path")
@@ -278,12 +280,16 @@ class FixedSourceCache:
             group["items"].append((expression, entry["blob_sha"]))
             group["keys"].append((key, expression))
         for group in groups.values():
+            if on_progress:
+                on_progress()
             repo = group["repo"]
             bodies = review_runtime.batch_blobs(lambda data: self.api.run_git(evidence_repository(self.context, repo),
                 ["cat-file", "--batch"], binary=True, input_bytes=data, env=group["env"]),
                 group["items"], repo["snapshot"]["object_format"])
             for key, expression in group["keys"]:
                 self._content[key] = bodies[expression]
+            if on_progress:
+                on_progress()
 
     def changed_patch(self, repo: dict, comparison_source_name: str, baseline: str, path: str) -> str:
         key, source = self._source_key(repo, comparison_source_name, path)
@@ -379,12 +385,14 @@ class FixedSearchCache:
         frozen = isinstance(snapshot, dict) and snapshot.get("policy") == SNAPSHOT_POLICY
         return key, source, environment, git_repo, frozen, quote_path
 
-    def prefetch(self, manifest, requests):
+    def prefetch(self, manifest, requests, *, on_progress=None):
         """Batch safe literal patterns; preserve the original Git output per query."""
         if type(self).run is not FixedSearchCache.run:
             return  # An overridden runner need not consume this cache.
         groups = {}
         for request in requests:
+            if on_progress:
+                on_progress()
             try:
                 repo = repository(manifest, request["repo"])
                 name, query = request["source"], request["query"]
@@ -410,6 +418,8 @@ class FixedSearchCache:
             pending = [(query, key) for query, key in group["queries"].items() if key not in self._results]
             # Keep Windows command lines comfortably below the platform limit.
             while pending:
+                if on_progress:
+                    on_progress()
                 chunk, length = [], 0
                 while pending and len(chunk) < 32 and length + len(pending[0][0]) < 8000:
                     entry = pending.pop(0)
@@ -423,6 +433,8 @@ class FixedSearchCache:
                 code, output, error = self.api.run_git_capture(group["repo"],
                     ["grep", "-n", "-z", "-I", "--no-textconv", "-F", *patterns,
                      group["source"]["ref"], "--"], env=group["env"])
+                if on_progress:
+                    on_progress()
                 if code not in (0, 1) or error or "\x1b" in output:
                     continue
                 matches = {query: [] for query, _ in chunk}
@@ -1083,10 +1095,11 @@ def validate_contract(context, manifest, item, api, *, cache=None):
     text = "\n".join(lines[start-1:end])
     require(item["symbol"] in text, "contract symbol must occur in its frozen anchor")
     if not parents:
-        from workspace_report import allowed_sources, location
+        from workspace_report import location
+        from review_validation import contract_anchor_sources
         key = location(root)
         require(evidence["repo"] == root["repo"] and path == root["path"] and
-                source in allowed_sources(repo, key), "initial contract anchor must cover its changed root")
+                source in contract_anchor_sources(repo, key), "initial contract anchor must cover its changed root")
         comparison = repo["sources"][root["source"]]
         baseline = repo["sources"]["head"]["ref"] if root["source"] == "merge-preview" else repo["diff_base"]
         patch = (cache.changed_patch(repo, root["source"], baseline, path) if cache is not None else
@@ -1094,6 +1107,12 @@ def validate_contract(context, manifest, item, api, *, cache=None):
                              baseline, comparison["ref"], "--", path],
                              env=source_environment(context, repo, comparison, api))))
         hunks = re.findall(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", patch, re.MULTILINE)
+        if source != root["source"]:
+            removed = [(int(h[0]), int(h[1] or "1")) for h in hunks]
+            require(any(count > 0 and item["symbol"] in "\n".join(
+                        lines[max(start, first) - 1:min(end, first + count - 1)])
+                        for first, count in removed if first <= end and start <= first + count - 1),
+                    "comparison-left contract symbol must occur in removed lines")
         if hunks:
             side = 2 if source == root["source"] else 0
             intervals = [(int(h[side]), int(h[side + 1] or "1")) for h in hunks]

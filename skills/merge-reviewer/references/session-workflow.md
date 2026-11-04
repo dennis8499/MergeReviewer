@@ -21,6 +21,8 @@ start 回傳 `MergeReviewStart/v1`，含固定 Repo／source ref、必要覆蓋�
 
 單 Repo 根目錄加 `--runtime-root "C:/review-runtime/team"`；也可設定 `MERGE_REVIEW_RUNTIME_DIR`。必須可寫且位於所有宣告 Repo 外，拒絕 symlink／junction 或未標記的非空目錄。Git 共用網路 runtime 沿用 `GITLAB_WORKSPACE_RUNTIME_DIR`，兩個 runtime 用途不同，start 都會預檢。
 
+Repo 掃描會略過 `.review-runtime`、`.gitlab-workspace/runtime` 與上述設定指定的 runtime 子目錄，保留其他 kit 子目錄中的 Repo。明確宣告的 workspace folder 仍作為掃描根；真正受審範圍的讀取錯誤維持失敗，不以略過權限錯誤縮小範圍。
+
 工作台自動傳入帳號範圍；直接 CLI 也可用 `--auth-scope "<account-identity>"`。預設以 OS 使用者及可見認證設定／環境區隔；外部 credential manager 的不可觀察帳號切換，須改 scope 或明確 refresh。
 
 每份 start 都重新固定 peer Repo 的本機 HEAD。peer 只讀該 SHA 的已提交物件，省下整份工作目錄與 index 的前後掃描；擷取後 HEAD 移動或未提交編輯不改變當次證據，下一份 start 才取得新的 HEAD。封裝、固定 refs、完整物件及發布證據驗證仍須通過。
@@ -95,11 +97,13 @@ check 與 finish 共用 Repo 關聯及 finding 引用範圍判定；沒有 impac
 
 發布預檢與正式發布共用 sibling 暫存檔、完整寫入／讀回及原子提交；Windows 檔案繼承輸出目錄 ACL，既有報告不覆寫。完整驗證後若輸出遇到可恢復的權限、占用或容量錯誤，finish 回傳 exit 3、`phase=publication-repair`、`recoverable=true`、`context_retained=true`，保留原 request、草稿與固定 SHA。修復輸出後重試同一 ID 的 finish，仍完整驗證證據；需要放棄時 cancel。損毀來源與非輸出錯誤仍是終止錯誤。舊 review_report.py 的預設失敗清理行為保留。
 
-每個 reviewed impact 至少有一份合法 evidence 與節點自身 `repo/source/path` 相同，其他版本的輔助證據可一併保留。刪檔的 coverage 沿用 `required_coverage` 的比較來源，impact 的 source 則採實際引用得到的固定版本，例如 `merge-base`；將 coverage 的 `head` 直接複製到已刪檔節點會在 `/impact_coverage/<index>/evidence` 回報錯誤。
+每個 reviewed impact 至少有一份合法 evidence 與節點自身 `repo/source/path` 相同，其他版本的輔助證據可一併保留。check 與 finish 共用契約錨點及 coverage 起點的同位置規則：僅把契約 ID 放在另一個檔案或版本的節點上仍不完整。
 
 `--requests-file` 遺失、不可讀、編碼或 JSON 錯誤回傳 exit 3、`terminal=false/recoverable=true`；status 保持 `state=reviewing/phase=input-repair`。欄位、型別、操作 ID 與已知參數錯誤會先在本機預檢，回傳 `code/pointer/operation_id/next_index` 及修正提示，再沿同一 request ID 重送。已完成的操作前綴保留。草稿遺失或不可讀也沿同一 ID 修復；恢復路徑以 manifest 及 pack 內容雜湊確認證據未變，若收據不符才執行完整證據檢查。每次 finish 保留獨立耗時與 Git 計數；最終發布前仍完整驗證所有證據。損毀的 manifest、pack 或收據維持終止錯誤。
 
 `metrics` 按 start、每次 step、check 與每次 finish 保留 Git 程序數及耗時；step 另列 read/search 秒數與次數、各操作類型耗時、錯誤後證據重驗及略過次數、owner lock 等待，artifact 分頁另計。已知的請求格式／欄位錯誤不執行失敗操作；此前有效操作仍保留。行數越界會記住以固定 Repo、來源、ref、path 與 blob SHA 綁定的行數，重送時先預檢。此類修稿不重掃 pack；損毀快照、manifest、搜尋紀錄仍由再次讀取或發布前完整驗證攔截。不可讀請求檔仍沿恢復路徑檢查 pack。finish 保存每次嘗試、owner lock 等待、草稿準備與重驗耗時。`progress`／stderr 階段事件回報目前操作與完成數；Git fetch 的傳輸層連線數、模型時間及 token 未觀測時分別標成 `not-observed`、`null`、`null`，不可推算成零。
+
+capabilities 列出 `validation_progress` 時，完整 status 與 `status --summary` 的 `progress.validation` 分別提供 `repositories`、`contracts`、`searches` 的 `completed/total`，`activity` 區分來源預讀、搜尋預讀及逐項核對，`validation_updated_at` 是最後驗證更新時間。預讀不增加已驗證搜尋數；只有重播內容與 ledger 比對成功才計入。證據修復重驗使用 `stage=evidence-recheck`，正式發布核對使用 `stage=validation`，兩次計數各自從零開始。階段切換及完成立即更新，同一活動最多每秒寫一次；單一 Git 命令尚未返回時，時間與計數保持最近的實際進度。發布與清理後保留最後驗證計數；狀態查詢只讀本機狀態，不啟動 Git 或改動 manifest。
 
 ~~~powershell
 python "<skill-dir>/scripts/review_session.py" check --runtime-root "<runtime>" --request-id "<id>"
@@ -114,3 +118,14 @@ status 與重試 finish 確認報告存在且正文符合收據；發布後 stat
 人工核對標記區內的編輯可保留，但不改寫首次語意摘要；區外修改或遺失不回報成功。清理失敗仍回傳已發布路徑及 `cleanup_pending=true`；沿同一 ID 重試只清理，保留相同審查摘要，不重做 Git 驗證或建立另一份報告。取消等待者不影響其他請求；仍有等待者時先完成共用同步再取消自己的擷取。已發布不可取消。終止摘要保留 24 小時，之後新 start 清除；報告歷史保留。
 
 相同需求失敗 30 秒內回報既有錯誤；明確 start --refresh 可重試。缺 refs 或同步失敗不採舊 tracking refs。固定證據交付後不回讀原 Repo 補救；capture 階段壞 peer 快取可從同一固定 SHA 本機重建。
+
+## 刪除契約與影響圖
+
+整檔刪除的 coverage 沿用 `required_coverage` 的比較來源，impact 的 source 採實際引用的左側版本。檔案仍存在但 API／欄位被刪除或替換時，coverage 仍引用最終內容，另外註冊舊符號契約並建立連通的左側 impact 節點：
+
+| 本次變更 | 契約 evidence | coverage evidence |
+| --- | --- | --- |
+| 分支 `head` 中移除符號 | ref 等於 `diff_base` 的固定來源，通常是 `merge-base` | `head` |
+| `merge-preview` 中移除符號 | 固定 `head` | `merge-preview` |
+
+舊符號須出現在 evidence 行段內的實際刪除／替換行。分支分歧時不能用基礎分支頂端取代共同祖先；未修改行及錯誤 SHA 會被拒絕。最終內容的 coverage 起點節點須列出該初始契約，另以相同契約 ID 連到 `repo/source/path` 與舊符號 evidence 相同的節點，再追查固定 peer HEAD 的消費端。只有左側 evidence 不能代替存續檔案的最終內容覆蓋。

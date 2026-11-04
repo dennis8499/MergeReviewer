@@ -413,6 +413,12 @@ def has_git_marker(path: Path) -> bool:
 
 def discover_repositories(workspace: Path, workspace_file: Path | None, *, roots=None) -> list[Path]:
     roots = roots if roots is not None else workspace_roots(workspace, workspace_file)
+    # Prune only runtime locations, not the surrounding kit/configuration tree.
+    # Lexical paths avoid opening the very directories that may deny access.
+    runtime_paths = {os.path.normcase(os.path.abspath(git_network_lease.runtime_root()))}
+    for variable in ("GITLAB_WORKSPACE_RUNTIME_DIR", "MERGE_REVIEW_RUNTIME_DIR"):
+        if os.environ.get(variable):
+            runtime_paths.add(os.path.normcase(os.path.abspath(Path(os.environ[variable]).expanduser())))
     repositories: set[Path] = set()
     def discovery_error(error):
         raise ReviewContextError(f"無法讀取宣告的工作區目錄：{error}")
@@ -424,7 +430,9 @@ def discover_repositories(workspace: Path, workspace_file: Path | None, *, roots
             continue
         for current, directories, _files in os.walk(root, topdown=True, followlinks=False, onerror=discovery_error):
             current_path = Path(current)
-            directories[:] = [name for name in directories if name not in SKIP_DIRECTORIES]
+            directories[:] = [name for name in directories if name not in SKIP_DIRECTORIES
+                              and not (current_path.name == ".gitlab-workspace" and name == "runtime")
+                              and os.path.normcase(os.path.abspath(current_path / name)) not in runtime_paths]
             if has_git_marker(current_path):
                 repositories.add(normalize_path(current_path))
                 directories[:] = []

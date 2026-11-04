@@ -52,6 +52,8 @@ DIMENSIONS = {
     "outflow": ("required_findings", "general_defects", "actionability"),
     "cross-branch": ("required_findings", "general_defects", "actionability"),
     "security-safe": ("safety_false_positives",),
+    "deleted-api": ("required_findings", "general_defects", "actionability"),
+    "deleted-api-safe": ("safety_false_positives",),
     "agents-scope": ("required_findings", "actionability", "review_rules"),
     "agents-safe": ("safety_false_positives", "review_rules"),
     "local": ("safety_false_positives",),

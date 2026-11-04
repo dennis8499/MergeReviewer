@@ -1,5 +1,13 @@
 # Change log
 
+## 0.20.6 — 2026-11-04
+
+- Prune managed reviewer/network runtime directories during Repo discovery while preserving declared roots, sibling Repos and actionable scope errors.
+- Anchor deleted/replaced symbols in surviving files to actual comparison-left removed lines without weakening final-content coverage.
+- Share contract and coverage impact-root location rules between zero-Git diagnostics and final validation.
+- Expose throttled Repo/contract/search validation counters, prefetch activity and update times through existing status responses, including integrity rechecks and published retries.
+- Add breaking-deletion and compatible-deletion controls to the existing three-model acceptance matrix; model/provider runs and independent semantic audits remain separate from helper tests.
+
 ## 0.20.5 — 2026-11-03
 
 - Use output-directory sibling files for report staging, and exercise the same atomic publication path during preflight. Retain frozen session evidence for recoverable output failures so finish can retry without recapture; preserve low-level CLI cleanup defaults.

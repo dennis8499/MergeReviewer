@@ -4,7 +4,7 @@
 
 # MergeReviewer 詳細使用指南
 
-適用版本：**0.20.5**。主要讀者是使用 Codex 執行合併前審查的開發者；進階流程供工具維護者使用。
+適用版本：**0.20.6**。主要讀者是使用 Codex 執行合併前審查的開發者；進階流程供工具維護者使用。
 
 內容：安裝 → 第一次審查 → 參數 → 常見情境 → 多儲存庫判定 → 報告 → 疑難排解 → 升級 → 手動輔助程式。
 
@@ -24,7 +24,7 @@ python --version
 
 ### 安裝 ZIP 或原始碼
 
-使用 `merge-reviewer-0.20.5.zip`，解壓後得到 `merge-reviewer` 資料夾。發布套件見 [GitHub Releases](https://github.com/dennis8499/MergeReviewer/releases)；尚未發布時，可在原始碼根目錄執行 `python scripts/package_release.py --tag v0.20.5`，取得 `dist/merge-reviewer-0.20.5.zip`。
+使用 `merge-reviewer-0.20.6.zip`，解壓後得到 `merge-reviewer` 資料夾。發布套件見 [GitHub Releases](https://github.com/dennis8499/MergeReviewer/releases)；尚未發布時，可在原始碼根目錄執行 `python scripts/package_release.py --tag v0.20.6`，取得 `dist/merge-reviewer-0.20.6.zip`。
 
 以下假設目前目錄已解壓：
 
@@ -45,7 +45,7 @@ Test-Path -LiteralPath (Join-Path $skillTarget "references\usage.md")
 Get-Content -LiteralPath (Join-Path $skillTarget "VERSION")
 ~~~
 
-兩個 `Test-Path` 應為 `True`，`VERSION` 應為 0.20.5。原始碼安裝把來源換成 `.\skills\merge-reviewer`；macOS／Linux 使用相同技能目錄規則與對應檔案複製工具。
+兩個 `Test-Path` 應為 `True`，`VERSION` 應為 0.20.6。原始碼安裝把來源換成 `.\skills\merge-reviewer`；macOS／Linux 使用相同技能目錄規則與對應檔案複製工具。
 
 在 Codex 技能清單確認 **Merge Reviewer（合併審查）**。若仍未載入，重新開始工作階段，確認清單及安裝路徑。
 

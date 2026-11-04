@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import contextmanager
+import contextvars
 from datetime import datetime, timedelta, timezone
 import hashlib
 import math
 import os
 from pathlib import Path
 import re
+import time
 import merge_parent_coverage
 import contract_boundary
 import report_publication
-from review_validation import (evidence_within_involved_repos, finding_evidence_errors,
+from review_validation import (comparison_left_sources, contract_has_impact_anchor,
+                               coverage_impact_errors,
+                               evidence_within_involved_repos, finding_evidence_errors,
                                line_interval_valid, repo_disposition_error)
 
 from review_workspace import (CONTEXT, RESULT, FixedSourceCache, FixedSearchCache, ancestor_noop,
@@ -24,6 +29,43 @@ ENGINEERING_FIELDS = ("operation_scenario", "technical_trigger", "technical_expl
 REPORT_LAYOUT = "engineering-review/v1"
 OWNERS = {"開發", "維運設定", "QA"}
 SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+VALIDATION_PROGRESS = contextvars.ContextVar("merge_review_validation_progress", default=None)
+
+
+@contextmanager
+def validation_progress(callback):
+    """Observe this validation without changing legacy helper call signatures."""
+    token = VALIDATION_PROGRESS.set(callback)
+    try:
+        yield
+    finally:
+        VALIDATION_PROGRESS.reset(token)
+
+
+class ValidationProgress:
+    def __init__(self, manifest, *, stage="validation"):
+        self.callback = VALIDATION_PROGRESS.get()
+        self.stage, self.activity, self.last_emit = stage, None, None
+        self.counts = {name: {"completed": 0, "total": total} for name, total in (
+            ("repositories", sum(repo.get("state") != "error" for repo in manifest.get("repositories", []))),
+            ("contracts", len(manifest.get("changed_contracts", []))),
+            ("searches", sum(row.get("status") == "complete" for row in manifest.get("searches", []))))}
+
+    def emit(self, activity, *, force=False):
+        if self.callback is None:
+            return
+        moment = time.monotonic()
+        if force or activity != self.activity or self.last_emit is None or moment - self.last_emit >= 1.0:
+            self.activity, self.last_emit = activity, moment
+            self.callback(stage=self.stage, activity=activity,
+                          completed=sum(row["completed"] for row in self.counts.values()),
+                          total=sum(row["total"] for row in self.counts.values()),
+                          validation={name: dict(row) for name, row in self.counts.items()})
+
+    def advance(self, category):
+        row = self.counts[category]
+        row["completed"] += 1
+        self.emit(category, force=row["completed"] == row["total"])
 
 
 def redact(value):
@@ -84,11 +126,7 @@ def allowed_sources(repo, key):
         return {source}
     # Deletions must be anchored in the actual left side of the comparison:
     # diff_base for a branch change, or head for a merge-preview change.
-    baseline = (repo["sources"]["head"]["ref"] if source == "merge-preview"
-                else repo["diff_base"])
-    return {name for name, version in repo["sources"].items()
-            if version.get("ref") == baseline and any(
-                entry["path"] == path and entry["kind"] == "blob" for entry in version.get("files", []))}
+    return comparison_left_sources(repo, key)
 
 
 def validate(draft: dict, manifest: dict, context: Path, *, timeout=180.0) -> dict:
@@ -127,7 +165,7 @@ def validate_coverage_policy(manifest, context, api):
     return True
 
 
-def prefetch_validation_sources(cache, manifest, draft=None):
+def prefetch_validation_sources(cache, manifest, draft=None, *, on_progress=None):
     """Speculate only; the normal validators still check every citation in order."""
     requests = {}
     index = cache.index
@@ -154,7 +192,8 @@ def prefetch_validation_sources(cache, manifest, draft=None):
         collect(draft)
     if len(requests) > 1:
         try:
-            cache.prefetch(manifest, list(requests.values()))
+            options = {"on_progress": on_progress} if on_progress else {}
+            cache.prefetch(manifest, list(requests.values()), **options)
         except (ValueError, KeyError, TypeError, OSError, RuntimeError):
             # Malformed/unavailable citations must fail at their original
             # validation position; no partial speculative content is trusted.
@@ -241,7 +280,10 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
         if frozen:
             require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
             require(isinstance(manifest.get("capture_completed_at"), str), "snapshot completion time is required")
-        source_cache = prefetch_validation_sources(FixedSourceCache(context, api), manifest)
+        progress = ValidationProgress(manifest, stage="evidence-recheck")
+        progress.emit("source-prefetch")
+        source_cache = prefetch_validation_sources(FixedSourceCache(context, api), manifest,
+                         on_progress=lambda: progress.emit("source-prefetch"))
         for repo in repos.values():
             require(repo.get("state") in ("captured", "error"), "invalid captured Repo state")
             if repo["state"] == "error":
@@ -283,6 +325,7 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
                 for index in sorted((git_repo / "objects/pack").glob("*.idx")):
                     api.run_git(git_repo, ["verify-pack", str(index)], env=environment)
                 instructions(context, manifest, repo["id"], None, api, cache=source_cache)
+            progress.advance("repositories")
         prefix = {**manifest, "changed_contracts": []}
         contracts = {}
         for contract in manifest.get("changed_contracts", []):
@@ -290,10 +333,13 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
             require(checked == contract, "registered contract anchor bytes changed")
             prefix["changed_contracts"].append(contract)
             contracts[contract["id"]] = contract
+            progress.advance("contracts")
         searches = {row["id"]: row for row in manifest["searches"]}
         require(len(searches) == len(manifest["searches"]), "duplicate search IDs")
         replay = FixedSearchCache(context, api)
-        replay.prefetch(manifest, [row for row in searches.values() if row.get("status") == "complete"])
+        progress.emit("search-prefetch")
+        replay.prefetch(manifest, [row for row in searches.values() if row.get("status") == "complete"],
+                        on_progress=lambda: progress.emit("search-prefetch"))
         for row in searches.values():
             require(row.get("repo") in repos and row.get("status") in ("complete", "unresolved"), "invalid search record")
             if row["status"] != "complete":
@@ -304,6 +350,8 @@ def validate_captured_evidence(manifest: dict, context: Path, *, timeout=180.0):
             code, output, error = replay.run(repos[row["repo"]], row["source"], row["query"])
             require(code in (0, 1) and output == row.get("output") and output.splitlines() == row.get("matches"),
                     "fixed search ledger differs from captured objects: " + error)
+            progress.advance("searches")
+        progress.emit("complete", force=True)
     except (api.ReviewContextError, KeyError, TypeError, AttributeError) as exc:
         # This guard is only the new retry path; retain legacy CLI failures in
         # the normal validation path while reporting a fatal retry as exit 2.
@@ -353,15 +401,20 @@ def _validate(draft, manifest, context, api):
     require(set(manifest["seed_repos"]) <= set(repos), "unknown seed Repo")
     validate_sync_records(manifest, repos)
     frozen = manifest.get("snapshot_policy") is not None
-    source_cache = prefetch_validation_sources(FixedSourceCache(context, api), manifest, draft)
+    progress = ValidationProgress(manifest)
+    progress.emit("source-prefetch")
+    source_cache = prefetch_validation_sources(FixedSourceCache(context, api), manifest, draft,
+                     on_progress=lambda: progress.emit("source-prefetch"))
     if frozen:
         require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
         require(isinstance(manifest.get("capture_completed_at"), str), "snapshot completion time is required")
-        for repo in repos.values():
-            if repo["state"] != "error":
+    for repo in repos.values():
+        if repo["state"] != "error":
+            if frozen:
                 require(repo.get("snapshot") is not None, "frozen context needs an owned snapshot for every captured Repo")
                 evidence_repository(context, repo)
                 instructions(context, manifest, repo["id"], None, api, cache=source_cache)
+            progress.advance("repositories")
     validate_coverage_policy(manifest, context, api)
     require(manifest.get("required_coverage") == required_coverage(manifest), "changed-path contract differs from captured changes")
     expected = {location(c) for c in manifest["required_coverage"]}
@@ -372,6 +425,7 @@ def _validate(draft, manifest, context, api):
         require(contract == validated, "registered contract anchor bytes changed")
         contracts[contract["id"]] = contract
         contract_manifest["changed_contracts"].append(contract)
+        progress.advance("contracts")
     verified = set()
 
     def evidence(e):
@@ -490,15 +544,10 @@ def _validate(draft, manifest, context, api):
                 needs_graph = not v2 or boundary_outcomes.get(change_ids.get(key)) == "propagates"
                 draft_require(isinstance(ids, list) and (ids or not needs_graph) and all(i in nodes for i in ids),
                               "each propagating change needs impact nodes")
-                draft_require(all(location(nodes[i]) in matches for i in ids), "change's impact roots must cover its own frozen evidence")
+                for message in coverage_impact_errors(key, matches, ids, nodes, contracts.values(), needs_contracts=needs_graph):
+                    draft_require(False, message)
                 root_nodes.update(ids)
             reviewed_anchors.update(matches)
-            if enabled and needs_graph:
-                applicable = {c["id"] for c in contracts.values()
-                              if location(c["root"]) == key and not c["parent_ids"]}
-                draft_require(applicable, "each reviewed Group change needs an anchored changed contract")
-                draft_require(applicable <= {c for i in ids for c in nodes[i].get("contract_ids", [])},
-                        "change impact roots must cover their registered contracts")
         else:
             draft_require(isinstance(row.get("reason"), str) and row["reason"].strip(), "unreviewed change needs a reason")
             incomplete = True
@@ -514,14 +563,15 @@ def _validate(draft, manifest, context, api):
     draft_require(set(nodes) == visited, "impact graph includes nodes disconnected from the selected changes")
     if enabled:
         for contract in contracts.values():
-            anchor = location(contract["evidence"])
-            draft_require(any(location(n) == anchor and contract["id"] in n.get("contract_ids", []) for n in nodes.values()),
+            draft_require(contract_has_impact_anchor(contract, nodes.values()),
                     "every changed/propagated contract needs its own connected impact anchor")
 
     searches = {s["id"]: s for s in manifest["searches"]}
     require(len(searches) == len(manifest["searches"]), "duplicate search IDs")
     search_cache = FixedSearchCache(context, api)
-    search_cache.prefetch(manifest, [row for row in searches.values() if row.get("status") == "complete"])
+    progress.emit("search-prefetch")
+    search_cache.prefetch(manifest, [row for row in searches.values() if row.get("status") == "complete"],
+                          on_progress=lambda: progress.emit("search-prefetch"))
     for record in searches.values():
         require(record.get("repo") in repos and record.get("status") in ("complete", "unresolved"), "invalid search record")
         if record["status"] == "complete":
@@ -532,6 +582,7 @@ def _validate(draft, manifest, context, api):
             code, output, error = search_cache.run(repo, record["source"], record["query"])
             require(code in (0, 1) and output == record.get("output") and output.splitlines() == record.get("matches"),
                     "fixed search ledger differs from captured objects: " + error)
+            progress.advance("searches")
     boundary_reviews, boundary_gaps = contract_boundary.validate(
         draft, manifest, contracts, nodes, graph, searches, evidence_list, draft_require)
     if boundary_gaps:
@@ -661,6 +712,7 @@ def _validate(draft, manifest, context, api):
             ("發現具體問題" if draft["findings"] else "未發現具體問題")))
     recommendation = "需補做審查" if incomplete else ("暫緩合併" if counts["P0"] else
                      ("修正後再合併" if counts["P1"] else ("需人工確認" if pending else "可以合併")))
+    progress.emit("complete", force=True)
     return {**draft, "findings": findings, "review_status": state, "review_complete": not (incomplete or pending),
             "pending_confirmation_count": len(draft["pending_confirmations"]),
             "recommendation": recommendation, "priority_counts": counts,

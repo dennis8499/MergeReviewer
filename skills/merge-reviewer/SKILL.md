@@ -46,7 +46,7 @@ python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" -
 
 首輪將 start 產生的 `initial_reads_file` 原樣交給 step，先讀取已擷取 diff、適用的 `AGENTS.md`、改動檔及必要 base／head／merge-preview／parent 內容；逐項讀完再決定動態呼叫鏈追查。必要 parent 只需核對與有效變更路徑相交的差異及最終內容，不要逐頁重讀無關 parent patch。後續每輪合併固定讀取、契約註冊及搜尋；各操作給唯一 ID，先登錄父契約，再登錄子契約及搜尋。
 
-逐一判斷 `required_coverage`、`required_merge_views`，讀取基礎版本、最終內容及必要 parent。每完成一條功能／契約鏈，就把判斷、固定證據引用與未完成項寫入草稿；恢復時由 `status` 的 `remaining` 接續未完成項。二進位讀取會回傳大小與 hash、但不提供文字；無法可靠解碼的文字會標示 `lossy=true`，兩者都不能當成已讀懂。刪除欄位可用本次比較左側的固定證據錨定；改名及 submodule 也需明確判定。`ancestor-noop/v1` 的空集合依 helper 推導。
+逐一判斷 `required_coverage`、`required_merge_views`，讀取基礎版本、最終內容及必要 parent。每完成一條功能／契約鏈，就把判斷、固定證據引用與未完成項寫入草稿；恢復時由 `status` 的 `remaining` 接續未完成項。二進位讀取會回傳大小與 hash、但不提供文字；無法可靠解碼的文字會標示 `lossy=true`，兩者都不能當成已讀懂。刪除 API／欄位但檔案保留時，舊符號錨定本次比較左側的實際刪除行，最終內容仍須覆蓋；來源與影響節點範例見[操作範例](references/session-workflow.md#刪除契約與影響圖)。改名及 submodule 也需明確判定。`ancestor-noop/v1` 的空集合依 helper 推導。
 
 多 Repo 逐筆完成 `boundary_changes`：`contained` 引用變更及必要使用／輸出證據；`propagates` 建立實際 workspace 契約與連通影響圖，追查直接及間接消費端；不確定則 `unresolved`。Repo 內搜尋可綁定 `change_id`，跨 Repo 搜尋須綁定已註冊契約。副檔名、private 名稱或零命中不足以排除外部影響；每個其他 Repo 仍保留判定。
 

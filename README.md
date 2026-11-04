@@ -1,14 +1,16 @@
 # Merge Reviewer
 
-`0.20.5` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
+`0.20.6` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
 目前 Skills root 已安裝 `output-style` 時優先使用其情境風格；沒有時沿用 [Concise 寫作規則](skills/merge-reviewer/references/report-style.md#共用-concise-規則)。必要報告欄位、證據、缺口及錯誤資訊完整保留；要求詳解時完整說明。
+
+本版補齊 Log 回歸修正：略過工具 runtime 掃描、支援存續檔案的刪除符號契約、統一契約圖提前檢查，以及 status 的驗證進度計數。變更與驗收見 [Log 流程驗收](docs/log-workflow-optimization.md#2026-11-04-後續改善)及 [0.20.6 發布說明](docs/releases/v0.20.6.md)。
 
 ## 安裝與第一次使用
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.20.5.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
+從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.20.6.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
 在 Codex 對話輸入：
 
@@ -60,7 +62,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 python -m pip install -r requirements-dev.txt
 python -X utf8 -B -m unittest discover -s tests -v
 python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
-python scripts/package_release.py --tag v0.20.5
+python scripts/package_release.py --tag v0.20.6
 ~~~
 
 CI 使用 Windows 的 Python 3.10 與 3.14 兩個矩陣格；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及必要 Python helpers，不包含測試及舊收據 runtime。

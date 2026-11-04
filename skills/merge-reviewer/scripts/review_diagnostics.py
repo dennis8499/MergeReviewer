@@ -4,7 +4,9 @@ from __future__ import annotations
 import re
 import copy
 import contract_boundary as boundary
-from review_validation import (evidence_within_involved_repos, finding_evidence_errors,
+from review_validation import (contract_anchor_sources, contract_has_impact_anchor,
+                               coverage_impact_errors,
+                               evidence_within_involved_repos, finding_evidence_errors,
                                fixed_line_count_key, line_interval_valid, repo_disposition_error)
 
 FIELDS = ("operation_scenario", "technical_trigger", "technical_explanation", "impact_scope", "engineering_fix")
@@ -147,9 +149,12 @@ def inspect(draft, manifest, *, line_counts=None):
                      outcomes.get(change_ids.get(key)) == "propagates")):
                 need(bool(row.get("impact_ids")) and all(i in nodes for i in row.get("impact_ids", [])),
                      place + ".impact_ids", "reviewed Group change needs impact anchors")
-                need(any(contract.get("root") == {"repo": key[0], "source": key[1], "path": key[2]}
-                         and not contract.get("parent_ids") for contract in contracts.values()),
-                     place, "reviewed Group change needs an initial anchored contract")
+            if manifest.get("extension_enabled"):
+                needs_contracts = (manifest.get("contract_scope_policy") != boundary.V2_POLICY
+                                   or outcomes.get(change_ids.get(key)) == "propagates")
+                for message in coverage_impact_errors(key, matches, row.get("impact_ids", []), nodes,
+                                                       contracts.values(), needs_contracts=needs_contracts):
+                    add(place + ".impact_ids", message)
     for key in expected - seen:
         add("draft.coverage", "missing required change: " + repr(key))
     for identifier, node in nodes.items():
@@ -192,16 +197,15 @@ def inspect(draft, manifest, *, line_counts=None):
                 repo = repos.get(root.get("repo"), {})
                 anchor = contract.get("evidence", {})
                 try:
-                    from workspace_report import allowed_sources, location
-                    valid_sources = allowed_sources(repo, location(root))
+                    valid_sources = contract_anchor_sources(repo, (root.get("repo"), root.get("source"), root.get("path")))
                 except (KeyError, TypeError):
                     valid_sources = set()
                 need(isinstance(anchor, dict) and anchor.get("repo") == root.get("repo")
                      and anchor.get("path") == root.get("path")
                      and anchor.get("source") in valid_sources,
                      contract_place + ".evidence", "initial contract anchor must cite its changed path or comparison-left deletion")
-        need(any(identifier in node.get("contract_ids", []) for node in nodes.values()),
-             "draft.impact_coverage", "contract has no impact anchor: " + identifier)
+        need(contract_has_impact_anchor(contract, nodes.values()),
+             "draft.impact_coverage", "every changed/propagated contract needs its own connected impact anchor: " + identifier)
     # Run the same policy validator once per local contract to collect independent
     # boundary errors together. Descendants remain available for propagation checks.
     reviews = rows(draft, "boundary_reviews")

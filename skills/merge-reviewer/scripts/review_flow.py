@@ -208,7 +208,8 @@ def capabilities():
                          "read_only_artifact_view": True,
                          "request_preflight": True,
                          "incremental_resume": True,
-                         "publication_retry": True, "batch_artifact_view": True, "summary_status": True,
+                          "publication_retry": True, "batch_artifact_view": True, "summary_status": True,
+                          "validation_progress": True,
                          "phase_metrics": True}}
 
 
@@ -1273,9 +1274,19 @@ def _finish_once(root, identifier):
         context = job_context(root, identifier, job)
         planned = job.get("planned_report")
 
-        def progress(stage, *, completed=0, total=0):
+        previous_progress = job.get("progress") or {}
+        validation_counts = previous_progress.get("validation")
+        validation_updated_at = previous_progress.get("validation_updated_at")
+
+        def progress(stage, *, completed=0, total=0, **details):
+            nonlocal validation_counts, validation_updated_at
+            timestamp = now()
+            if "validation" in details:
+                validation_counts, validation_updated_at = details["validation"], timestamp
             row = {"stage": stage, "completed": completed, "total": total,
-                   "at": now()}
+                   "at": timestamp, **details}
+            if validation_counts is not None:
+                row.update(validation=validation_counts, validation_updated_at=validation_updated_at)
             update(root, identifier, progress=row)
             print(json.dumps({"request_id": identifier, "phase": stage, **row}, ensure_ascii=False),
                   file=sys.stderr, flush=True)
@@ -1317,7 +1328,8 @@ def _finish_once(root, identifier):
                 raise coordination.Cancelled("Review cancelled before publication.")
             progress("draft-preparation", completed=0, total=1)
             manifest = workspace.load(context)
-            receipt = verify_step_manifest_receipt(context, manifest, job)
+            with workspace_report.validation_progress(progress):
+                receipt = verify_step_manifest_receipt(context, manifest, job)
             if receipt != job.get("evidence_receipt"):
                 job = update(root, identifier, evidence_receipt=receipt)
             draft_started = time.perf_counter()
@@ -1343,7 +1355,8 @@ def _finish_once(root, identifier):
             if errors:
                 progress("evidence-recheck", completed=0, total=1)
                 integrity_started = time.perf_counter()
-                verify_retry_integrity(context, manifest, job)
+                with workspace_report.validation_progress(progress):
+                    verify_retry_integrity(context, manifest, job)
                 timing["finish_error_revalidation_seconds"] = time.perf_counter() - integrity_started
                 progress("evidence-recheck", completed=1, total=1)
                 timing["draft_preparation_seconds"] = time.perf_counter() - draft_started
@@ -1361,7 +1374,7 @@ def _finish_once(root, identifier):
             def publication_stage(_output, _digest):
                 progress("report-publication", completed=1, total=2)
 
-            with review_runtime.writer(context):
+            with review_runtime.writer(context), workspace_report.validation_progress(progress):
                 review_report.publish_report(context, draft_path, retain_on_validation_error=True,
                                              on_stage=publication_stage, on_stage_receipt=staged,
                                              on_published=published, cleanup_context=False)

@@ -10,7 +10,7 @@ if __package__:
 else:
     import create_quality_fixture as common
 
-CASES = ("p2", "p3", "outflow", "cross-branch", "security-safe")
+CASES = ("p2", "p3", "outflow", "cross-branch", "security-safe", "deleted-api", "deleted-api-safe")
 P2_BASE = "def price(total, percent):\n    return total - (total * percent // 100)\n"
 P2_HEAD = "def price(total, percent):\n    return total - ((total * percent // 100) // 100)\n"
 P3_BASE = 'def label(count):\n    return f"{count} orders"\n'
@@ -23,6 +23,11 @@ CROSS_MAIN = CROSS_BASE.replace("    return raw.strip()\n", "    return raw.stri
 CROSS_HEAD = CROSS_BASE.replace("    return value is not None\n", "    return bool(value.strip())\n")
 SECURITY_BASE = 'import hmac\n\ndef verify(token: bytes, expected: bytes):\n    return token == expected\n'
 SECURITY_HEAD = SECURITY_BASE.replace("    return token == expected\n", "    return hmac.compare_digest(token, expected)\n")
+DELETED_BASE = ('def legacy_total(order):\n    return order["amount_cents"]\n\n'
+                'def total(order):\n    return order["amount_cents"]\n')
+DELETED_HEAD = 'def total(order):\n    return order["amount_cents"]\n'
+DELETED_CONSUMER = 'def consume(service, order):\n    return service.legacy_total(order)\n'
+DELETED_SAFE_CONSUMER = DELETED_CONSUMER.replace("service.legacy_total", "service.total")
 
 EXPECTED = {
     "p2": "Discount 10% on 1000 should return 900; the changed calculation returns 999 (P2).",
@@ -30,6 +35,8 @@ EXPECTED = {
     "outflow": "The private amount is divided by 100 before export; the fixed consumer reads cents (P1).",
     "cross-branch": "Both branches handle empty input, but their merge preview raises AttributeError (P2).",
     "security-safe": "The byte-token check is hardened with compare_digest; do not report the fixed timing weakness as newly introduced.",
+    "deleted-api": "app.py survives but legacy_total is removed; the fixed billing consumer still calls it and raises AttributeError (P1). Trace the deleted symbol from the actual comparison left to this consumer.",
+    "deleted-api-safe": "Only unused legacy_total is removed; the fixed consumer already calls total and still returns the same cents. Do not invent an API compatibility defect.",
 }
 
 
@@ -47,7 +54,9 @@ def create(destination, case):
         common.git(repo, "config", key, value)
     old, new = {"p2": (P2_BASE, P2_HEAD), "p3": (P3_BASE, P3_HEAD),
                 "outflow": (OUTFLOW_BASE, OUTFLOW_HEAD), "cross-branch": (CROSS_BASE, CROSS_HEAD),
-                "security-safe": (SECURITY_BASE, SECURITY_HEAD)}[case]
+                "security-safe": (SECURITY_BASE, SECURITY_HEAD),
+                "deleted-api": (DELETED_BASE, DELETED_HEAD),
+                "deleted-api-safe": (DELETED_BASE, DELETED_HEAD)}[case]
     common.write(repo, "app.py", old)
     common.write(repo, "README.md", "The public entry point is in app.py.\n")
     common.git(repo, "add", ".")
@@ -65,14 +74,16 @@ def create(destination, case):
     common.write(repo, "app.py", new)
     common.git(repo, "add", ".")
     common.git(repo, "commit", "-m", "comparison")
-    if case == "outflow":
+    if case in ("outflow", "deleted-api", "deleted-api-safe"):
         consumer = workspace / "billing-consumer"
         common.git(workspace, "init", "-b", "main", consumer)
         for key, value in {"user.name": "Quality Fixture", "user.email": "quality@example.invalid",
                            "core.autocrlf": "false", "commit.gpgsign": "false",
                            "core.hooksPath": str(destination / "no-hooks")}.items():
             common.git(consumer, "config", key, value)
-        common.write(consumer, "consumer.py", CONSUMER)
+        consumer_source = {"outflow": CONSUMER, "deleted-api": DELETED_CONSUMER,
+                           "deleted-api-safe": DELETED_SAFE_CONSUMER}[case]
+        common.write(consumer, "consumer.py", consumer_source)
         common.git(consumer, "add", ".")
         common.git(consumer, "commit", "-m", "fixed consumer")
     fixture = {"schema": "ReviewerQualitySource/v1", "source_only": True,

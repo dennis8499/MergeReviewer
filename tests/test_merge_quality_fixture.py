@@ -1,5 +1,6 @@
 """The added quality oracles describe reproducible source behavior."""
 from pathlib import Path
+from types import SimpleNamespace
 import os
 import sys
 import tempfile
@@ -65,13 +66,23 @@ class MergeQualityFixtureTests(unittest.TestCase):
                         self.assertTrue(new["verify"](b"match", b"match"))
                         self.assertFalse(new["verify"](b"wrong", b"match"))
                         self.assertIn("hmac.compare_digest", fixtures.SECURITY_HEAD)
-                    else:
+                    elif case == "cross-branch":
                         self.assertFalse(old["accept"]("  "))
                         self.assertFalse(new["accept"]("  "))
                         tree = fixtures.common.git(repo, "merge-tree", "--write-tree", "main", "feature/review").splitlines()[0]
                         preview = namespace(fixtures.common.git(repo, "show", f"{tree}:app.py"))
                         with self.assertRaises(AttributeError):
                             preview["accept"]("  ")
+                    else:
+                        consumer = namespace((Path(source["workspace"]) / "billing-consumer/consumer.py").read_text(encoding="utf-8"))
+                        self.assertEqual(500, consumer["consume"](SimpleNamespace(**old), {"amount_cents": 500}))
+                        self.assertNotIn("legacy_total", new)
+                        self.assertIn("total", new)
+                        if case == "deleted-api":
+                            with self.assertRaises(AttributeError):
+                                consumer["consume"](SimpleNamespace(**new), {"amount_cents": 500})
+                        else:
+                            self.assertEqual(500, consumer["consume"](SimpleNamespace(**new), {"amount_cents": 500}))
 
 
 if __name__ == "__main__":
