@@ -1,5 +1,7 @@
 # 0.14.0 基準基本功改善驗收 — 2026-10-16～17
 
+> 歷史證據保存（2026-11-06）：原始畫面、日誌與追蹤產物已清理；需求、結論、關鍵數據及限制保留於本文。
+
 本輪基準為 `2b4defe2eb2bee727ffe1218cb6cbe51814111ea`（0.14.0），比較同一工作樹的未發行修改；沒有更新版本、全域安裝或發布。環境為 Windows、Python 3.14.7、Git 2.55.0.windows.5。目標仍為每個 reviewer 各 600 秒的軟目標，完整度優先；下方歷史版本的數字不能與本輪混算。
 
 擷取共用樹狀清單及封裝物件閉包；批次讀取／搜尋只在單次操作內重用已驗證內容。發布使用新的快取且逐筆重驗搜尋 ledger。新增 `batch-register-contract --requests-file`，依原註冊函式、原順序逐筆 checkpoint，首錯停止且保留成功前綴。新增選用的 `--retain-on-validation-error`：僅證據完整的可修草稿錯誤保留 context 並回傳 3，預設錯誤清理及 exit 2 不變；來源／搜尋紀錄損毀、發布失敗及中止仍清理。成功發布仍只完整驗證一次。
@@ -116,15 +118,11 @@
 
 snapshot 另與原版逐欄比較，涵蓋特殊路徑、tracked／untracked 報告、缺少檔案、衝突索引及 clean／dirty／missing submodule。批次驗證涵蓋順序、逐查詢 checkpoint、部分失敗及二進位內容；快取驗證涵蓋跨 Repo／版本／物件儲存隔離、損壞 metadata、下一次驗證重新讀取及 tree identity 檢查。
 
-本機忽略於 Git 的可重播資料：[彙總](../test-artifacts/performance-20261016/summary.json)、[安全案例](../test-artifacts/performance-20261016/safe/summary.json)、[欄位移除案例](../test-artifacts/performance-20261016/regression/summary.json)、[merge／preview 驗收](../test-artifacts/performance-20261016/merge-acceptance.json)。同目錄保留每次完整 artifacts、原版來源、固定 Git fixtures 與實際審查 scenarios；本次 owned context 及原始一次性 fixture 已清理。
+本機忽略於 Git 的可重播資料：[彙總（歷史摘要）](#historical-evidence-retention)、[安全案例（歷史摘要）](#historical-evidence-retention)、[欄位移除案例（歷史摘要）](#historical-evidence-retention)、[merge／preview 驗收（歷史摘要）](#historical-evidence-retention)。當時的數據與語意驗收結論保留於上文；相關本機原始產物已清理。
 
 資料封存到工作樹後，另用封存的原版來源、Git fixtures 及 scenario 實際重跑一組舊新版，證據／報告仍相等；這組重播位於 OneDrive，僅驗證可重跑性，未納入上述五次中位數。
 
-重跑安全案例可執行以下命令，輸出目錄須尚未存在；將 `safe` 換成 `regression` 可重跑缺陷案例：
-
-~~~powershell
-python -X utf8 -B tests/benchmark_review.py --baseline test-artifacts/performance-20261016/baseline --fixture-root test-artifacts/performance-20261016/fixtures/safe --scenario test-artifacts/performance-20261016/safe-scenario.json --output-dir test-artifacts/performance-rerun-safe --repeats 5
-~~~
+舊版重播使用的基準來源與 fixture 已清理；保留結果及重新準備方式見[歷史原始證據清理](#historical-evidence-retention)。
 
 ---
 
@@ -172,17 +170,17 @@ python -X utf8 -B tests/benchmark_review.py --baseline test-artifacts/performanc
 
 這輪實際使用修正了「把下游延伸契約也強制綁回源根節點」的覆蓋錯誤：源根涵蓋直接變更契約，下游契約在自己的來源節點提供證據並連回變更。回歸已保護此行為。
 
-本機忽略於 Git 的證據：
+以下歷史案例的結論保留於本文件：
 
-- [欄位改名報告](../test-artifacts/0.12.0/regression/summary.md)及[驗證結果](../test-artifacts/0.12.0/regression/result.json)。
-- [安全別名報告](../test-artifacts/0.12.0/safe/summary.md)及[驗證結果](../test-artifacts/0.12.0/safe/result.json)。
-- [最終單元測試紀錄](../test-artifacts/0.12.0/unit-tests.log)及[BDD 紀錄](../test-artifacts/0.12.0/bdd.log)。
+- [欄位改名報告（歷史摘要）](#historical-evidence-retention)及[驗證結果（歷史摘要）](#historical-evidence-retention)。
+- [安全別名報告（歷史摘要）](#historical-evidence-retention)及[驗證結果（歷史摘要）](#historical-evidence-retention)。
+- [最終單元測試紀錄（歷史摘要）](#historical-evidence-retention)及[BDD 紀錄（歷史摘要）](#historical-evidence-retention)。
 
 可由 `python -X utf8 -B tests/skill_acceptance.py --case regression`／`--case safe` 重新準備隔離來源，再依新版 Skill 執行實際審查。此 helper 只準備來源，不模擬模型結論。
 
 ## 報告命名修正
 
-報告名稱已統一為 **Merge Report**，Markdown 標題及 JSON 的 `merge-report-concise/v1` 已由 6 項報告／文件測試、1 項發布 BDD 情境與 Skill validator 再次驗證。上述靜態技能案例的本機證據保留名稱修正前的原始輸出；命名修正另記於 [驗證紀錄](../test-artifacts/0.12.0/report-naming.log)。
+報告名稱已統一為 **Merge Report**，Markdown 標題及 JSON 的 `merge-report-concise/v1` 已由 6 項報告／文件測試、1 項發布 BDD 情境與 Skill validator 再次驗證。上述靜態技能案例的本機證據保留名稱修正前的原始輸出；命名修正另記於 [驗證紀錄（歷史摘要）](#historical-evidence-retention)。
 
 ## 單一 Markdown 檔名及移除 JSON — 2026-10-14
 
@@ -190,7 +188,7 @@ python -X utf8 -B tests/benchmark_review.py --baseline test-artifacts/performanc
 
 本次調整的報告測試 18 項、文件／安裝套件測試 2 項全部通過；包括固定分支 commit、共同祖先與目前 checkout 的區分、P0–P3 問題完整保留、移除 JSON 選項、碰撞／競態及失敗清理。自動 BDD 15 情境／56 步驟通過，1 項 GitHub 發布人工情境未執行。Skill validator 與 Python 3.10 語法相容檢查通過。
 
-上方 61 項完整回歸及實際靜態案例屬輸出調整前的執行紀錄，本次未重跑語意案例。最新檢查保留於 [Markdown 輸出驗證紀錄](../test-artifacts/0.12.0/markdown-output.log)；安裝 ZIP 12 個檔案已與目前 source 逐一比對。
+上方 61 項完整回歸及實際靜態案例屬輸出調整前的執行紀錄，本次未重跑語意案例。最新檢查保留於 [Markdown 輸出驗證紀錄（歷史摘要）](#historical-evidence-retention)；安裝 ZIP 12 個檔案已與目前 source 逐一比對。
 
 ## 套件
 
@@ -222,8 +220,8 @@ not change product files, refs or index, access the network, or execute applicat
 tests; all finding scenarios are code-derived. This demonstrates the workflow on
 these fixtures, not general model accuracy.
 
-Local ignored evidence: [field replacement](../test-artifacts/group-v2-acceptance/A/summary.md)
-and [compatible alias](../test-artifacts/group-v2-acceptance/B/summary.md), each with
+Historical case conclusions: [field replacement（歷史摘要）](#historical-evidence-retention)
+and [compatible alias（歷史摘要）](#historical-evidence-retention), each with
 its adjacent `result.json` and Repo detail reports. Subsequent independent code
 review added regressions for Repo-only search compatibility, partial receipt
 selection, dual-source consumer coverage, Group boundary drift, propagated
@@ -238,8 +236,8 @@ published `MergeReviewReport/v2` and passed the installed MR binding verifier.
 The field replacement still produced one P1; the compatible alias produced no
 findings. Both reports retained Group scope and complete coverage. Product files,
 HEAD, branches, refs, index and status stayed unchanged, and owned contexts were
-cleared. Local evidence: [installed MR field replacement](../test-artifacts/group-v2-acceptance/Workspace-MR-A/merge-review-20261013T065008Z-222829ed/summary.md)
-and [installed MR compatible alias](../test-artifacts/group-v2-acceptance/Workspace-MR-B/merge-review-20261013T065010Z-5795a4ff/summary.md).
+cleared. Historical conclusions: [installed MR field replacement（歷史摘要）](#historical-evidence-retention)
+and [installed MR compatible alias（歷史摘要）](#historical-evidence-retention).
 
 Current Windows validation for MergeReviewer 0.11.0 and GitlabWorkSpace 0.22.0:
 
@@ -262,10 +260,10 @@ The implementing Codex session executed the portable Group workflow against two 
 
 Both reports follow `orders-api → web` and `orders-api → invoice-worker → shared-contracts`; the four involved Repos are recorded with fixed source refs. `unrelated-admin` is explicitly excluded after source inspection and contract searches. The API is the only changed Repo. Changed-path coverage and connected impact coverage pass validation; no candidate is silently included or omitted. Original HEAD, branches, index and source files remain unchanged by review preparation and publication.
 
-Local generated artifacts (ignored by Git):
+Retained conclusions from the historical generated artifacts:
 
-- [Regression report](../test-artifacts/skill-acceptance/regression/summary.md) and [validated result](../test-artifacts/skill-acceptance/regression/result.json).
-- [Safe-change report](../test-artifacts/skill-acceptance/safe/summary.md) and [validated result](../test-artifacts/skill-acceptance/safe/result.json).
+- [Regression report（歷史摘要）](#historical-evidence-retention) and [validated result（歷史摘要）](#historical-evidence-retention).
+- [Safe-change report（歷史摘要）](#historical-evidence-retention) and [validated result（歷史摘要）](#historical-evidence-retention).
 
 Reproduce the inputs with `python -X utf8 -B tests/skill_acceptance.py --case regression` or `--case safe`, then ask Codex to execute the returned skill request. Follow `references/workspace-review.md` for the frozen-source commands and draft contract. Publish or clean the returned context, then clean the fixture root with `review_session.py cleanup --context-dir <fixture_root>`.
 
@@ -286,3 +284,29 @@ Final source/package checks ran locally on Windows with Python 3.14.7:
 | Skill creator validator and `git diff --check` in both repositories | Passed. |
 
 The final standalone `dist/merge-reviewer-0.10.0.zip` contains all 19 installable skill files and matches the fixed Workspace source archive byte-for-byte. SHA-256: `ed02ca66030420c776447c31725600be9a96d97ba70eb7844ff7017acabb3d2e`. The Workspace offline tar and release ZIP were rebuilt with this pin. These local checks do not claim execution of the Linux/Python 3.10 CI matrix or external release publication.
+
+<a id="historical-evidence-retention"></a>
+
+## 歷史原始證據清理 — 2026-11-06
+
+`test-artifacts/` 的原始日誌、Git fixtures、凍結來源副本及一次性報告已清理。上文保留各版本當時的驗證數據、已知限制與結論；舊連結所指的 0.12.x、Group v2 與 portable v1 本機檔案在本次清理前已不存在，沒有重新宣稱核對其原文。
+
+本次清理前仍存在的 11 份小型彙總，其關鍵數據列於下表。標示為 smoke／dry 的數字仍屬診斷資料；helper 重播不代表模型品質或完整 Agent 加速，未通過的 gate 保留為 false。
+
+| 原彙總所在工作項目 | 保留結果 |
+| --- | --- |
+| `acceptance-v0.20.3-v0.20.4-v2-ops5-20261101/summary.json` | cold: 59.882 → 59.132 秒; warm: 34.167 → 33.427 秒; staggered: 37.742 → 38.258 秒; evidence equality=true; gates: cold=false, warm=false, staggered=false |
+| `large-benchmark-after-path/summary.json` | warm: 36.325 → 24.914 秒; cold: 47.343 → 36.032 秒; staggered: 36.153 → 25.831 秒; evidence equality=true; gates: warm=true, cold=true, staggered=true |
+| `log-followup/package-20261104T131625Z-b1e6aa/summary.json` | 套件 canonical files 相等=true；Python 3.10 AST 檔數=75；release contracts exit=0；無安裝 bytecode=true |
+| `log-followup/replay-20261104T134415Z-aa3887/summary.json` | 5 次配對；candidate/baseline 中位比 1.021079；證據／問題／缺口相等=true |
+| `log-optimizations/replay-paired-final/summary.json` | 3 次配對；candidate/baseline 中位比 0.522926；證據／問題／缺口相等=true |
+| `log-optimizations/replay-smoke-2/summary.json` | 1 次配對；candidate/baseline 中位比 0.524068；證據／問題／缺口相等=true |
+| `release-v0.20.6-3d485a09/summary.json` | 8 tests；failures=0；errors=0；release contracts exit=0；package exit=0 |
+| `single-benchmark-after-batch/summary.json` | cold: 6.852 → 6.836 秒; warm: 7.590 → 7.162 秒; staggered: 8.068 → 7.410 秒; evidence equality=true; gates: cold=true, warm=true, staggered=true |
+| `single-benchmark-after-path/summary.json` | warm: 3.316 → 3.375 秒; cold: 3.395 → 3.440 秒; staggered: 3.557 → 3.436 秒; evidence equality=true; gates: warm=true, cold=true, staggered=true |
+| `single-benchmark-dry/summary.json` | cold: 14.309 → 14.671 秒; warm: 13.386 → 11.663 秒; staggered: 11.456 → 12.262 秒; evidence equality=true; gates: cold=true, warm=true, staggered=false |
+| `single-benchmark-paired/summary.json` | cold: 7.056 → 6.778 秒; warm: 6.417 → 6.206 秒; staggered: 5.766 → 5.809 秒; evidence equality=true; gates: cold=true, warm=true, staggered=false |
+
+完整的原始摘要 JSON 已隨本次清理報告保存；表中的相對路徑是歷史工作項目識別，並非仍存在的檔案連結。
+
+需要重做案例時，使用 `tests/skill_acceptance.py --case regression` 或 `--case safe` 建立新的隔離來源；helper 效能比較需另行備妥基準技能、fixture 與 scenario。過去依賴已清除目錄的重播命令不再作為現行操作入口。
