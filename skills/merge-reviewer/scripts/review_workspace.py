@@ -1418,6 +1418,8 @@ def ordered_step(context, manifest, operations, api, *, on_progress=None):
                     require(checkpoint["fingerprint"] in (fingerprint, legacy), "operation id already has different input")
                     result = review_runtime.load_view(context, checkpoint["artifact"])
                     results.append({"id": identifier, "reused": True, "result": result})
+                    if on_progress:
+                        on_progress("operation-complete", index + 1, len(operations), operation)
                     continue
                 new_operation = True
                 kind = operation.get("op")

@@ -5,7 +5,7 @@ import re
 import copy
 import contract_boundary as boundary
 from review_validation import (contract_anchor_sources, contract_has_impact_anchor,
-                               coverage_impact_errors,
+                               coverage_impact_errors, coverage_reason, completion_preview,
                                evidence_within_involved_repos, finding_evidence_errors,
                                fixed_line_count_key, line_interval_valid, repo_disposition_error)
 
@@ -130,6 +130,10 @@ def inspect(draft, manifest, *, line_counts=None):
         need(key in expected and key not in seen, place, "coverage is duplicated or outside required changes")
         seen.add(key)
         need(row.get("status") in ("reviewed", "metadata-only", "not-reviewed"), place + ".status", "invalid coverage status")
+        try:
+            coverage_reason(row)
+        except ValueError as exc:
+            add(place + ".reason", str(exc))
         if row.get("status") != "reviewed":
             text(row.get("reason"), place + ".reason")
             gaps.append({"kind": "change", "id": list(key), "reason": row.get("reason", "not reviewed")})
@@ -337,8 +341,10 @@ def inspect(draft, manifest, *, line_counts=None):
         need(row.get("owner") in ("開發", "維運設定", "QA"), place + ".owner", "invalid owner")
         text(row.get("action"), place + ".action")
     need(len(array(draft, "next_steps")) <= 3, "draft.next_steps", "at most three actions are allowed")
-    for field in ("tests_executed", "tests_not_executed", "limitations"):
+    for field in ("tests_executed", "tests_not_executed", "limitations", "scope_notes"):
         for index, value in enumerate(array(draft, field)):
             need(isinstance(value, str), f"draft.{field}[{index}]", "must be a string")
-    return {"errors": errors, "gaps": gaps, "ready_for_finish": not errors and not gaps,
+    preview = completion_preview(draft, manifest, gaps, errors=errors)
+    return {"errors": errors, "gaps": preview["blocking_gaps"], **preview,
+            "ready_for_finish": not errors and not preview["blocking_gaps"],
             "evidence_verified": False, "evidence_validation": "deferred-to-finish", "git_commands": 0}

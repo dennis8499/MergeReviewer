@@ -15,7 +15,7 @@ import merge_parent_coverage
 import contract_boundary
 import report_publication
 from review_validation import (comparison_left_sources, contract_has_impact_anchor,
-                               coverage_impact_errors,
+                               coverage_impact_errors, coverage_reason, completion_preview,
                                evidence_within_involved_repos, finding_evidence_errors,
                                line_interval_valid, repo_disposition_error)
 
@@ -30,6 +30,10 @@ REPORT_LAYOUT = "engineering-review/v1"
 OWNERS = {"開發", "維運設定", "QA"}
 SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 VALIDATION_PROGRESS = contextvars.ContextVar("merge_review_validation_progress", default=None)
+
+
+class ReportRenderError(RuntimeError):
+    """An internal formatter failure after evidence validation, before staging."""
 
 
 @contextmanager
@@ -389,7 +393,9 @@ def _validate(draft, manifest, context, api):
     for field in ("coverage", "impact_coverage", "repository_coverage", "findings", "limitations",
                   "next_steps", "tests_executed", "tests_not_executed", "pending_confirmations"):
         draft_require(isinstance(draft.get(field), list), f"{field} must be an array")
-    for field in ("limitations", "tests_executed", "tests_not_executed"):
+    draft = {**draft, "scope_notes": draft.get("scope_notes", [])}
+    for field in ("limitations", "tests_executed", "tests_not_executed", "scope_notes"):
+        draft_require(isinstance(draft[field], list), f"{field} must be an array")
         draft_require(all(isinstance(s, str) for s in draft[field]), f"{field} must contain text")
     draft_require(len(draft["next_steps"]) <= 3, "next_steps allows up to 3 actions")
     for step in draft["next_steps"]:
@@ -530,6 +536,14 @@ def _validate(draft, manifest, context, api):
         key = location(row)
         draft_require(key in expected and key not in coverage, "coverage is extra, duplicated, or outside seed changes")
         draft_require(row.get("status") in ("reviewed", "metadata-only", "not-reviewed"), "invalid coverage status")
+        try:
+            reason = coverage_reason(row)
+        except ValueError as exc:
+            raise DraftValidationError(str(exc)) from exc
+        # Preserve the legacy shape when an optional reviewed reason is absent.
+        # Explicit null normalizes in the validated copy without editing the draft.
+        if "reason" in row:
+            row = {**row, "reason": reason}
         keys = evidence_list(row, row["status"] == "reviewed")
         if row["status"] == "reviewed":
             changes = repos[key[0]]["changed_files"]
@@ -707,15 +721,11 @@ def _validate(draft, manifest, context, api):
                              selected_lines is not None and selected_lines.decode("utf-8", errors="replace").encode("utf-8") != selected_lines})
         findings.append({**finding, "evidence": excerpts})
     counts = {p: sum(f["priority"] == p for f in draft["findings"]) for p in PRIORITIES}
-    pending = bool(draft["pending_confirmations"])
-    state = "審查未完成" if incomplete else ("待人工確認" if pending else ("沒有差異" if not expected else
-            ("發現具體問題" if draft["findings"] else "未發現具體問題")))
-    recommendation = "需補做審查" if incomplete else ("暫緩合併" if counts["P0"] else
-                     ("修正後再合併" if counts["P1"] else ("需人工確認" if pending else "可以合併")))
+    preview = completion_preview(draft, manifest, gaps, complete_gaps=True)
+    outcome = preview["expected_outcome"]
     progress.emit("complete", force=True)
-    return {**draft, "findings": findings, "review_status": state, "review_complete": not (incomplete or pending),
-            "pending_confirmation_count": len(draft["pending_confirmations"]),
-            "recommendation": recommendation, "priority_counts": counts,
+    return {**draft, **outcome, "coverage": list(coverage.values()), "findings": findings,
+            "priority_counts": counts,
             "limitations": list(dict.fromkeys(gaps)), "scope": manifest["scope"], "target": manifest["target"],
             "involved_repos": sorted(involved), "versions": [{"repo": r["id"], "path": r["path"],
                  "sources": {k: v["ref"] for k, v in r["sources"].items()}} for r in repos.values()],
@@ -725,7 +735,7 @@ def _validate(draft, manifest, context, api):
              "coverage_schema": "branch-v3",
              "selected_repo": selected, "review_basis": "codex-native",
              "extension_enabled": enabled,
-             "extension_status": ("incomplete" if incomplete else "complete") if enabled else "disabled",
+             "extension_status": outcome["extension_status"],
              "report_style": "review-report-zh-TW/v1",
              "snapshot_policy": manifest.get("snapshot_policy"),
             "context_sha256": hashlib.sha256((context / "manifest.json").read_bytes()).hexdigest()}
@@ -832,6 +842,7 @@ def render(result, manifest):
                   "- 已執行檢查：" + ("；".join(result["tests_executed"]) or "無"),
                   "- 未執行檢查：" + ("；".join(result["tests_not_executed"]) or "未記錄其他檢查")])
     lines.extend(f"- 檢查缺口：{gap}" for gap in result["limitations"])
+    lines.extend(f"- 範圍說明：{note}" for note in result.get("scope_notes", []))
     lines.append("")
     if result.get("pending_confirmations"):
         lines.extend(["### 待人工確認", "",
@@ -886,7 +897,7 @@ def render(result, manifest):
                              for entry in row.get("evidence", []))
         lines.append("| " + " | ".join(cell(value) for value in
                      (repo["name"] + "/" + row["path"], row["source"], row["status"],
-                      (row.get("reason", "") + " " + evidence).strip() or "未提供")) + " |")
+                       (coverage_reason(row) + " " + evidence).strip() or "未提供")) + " |")
     if not result["coverage"]:
         lines.append("| 無必要變更路徑 | — | — | — |")
     lines.extend(["", "### 功能鏈與 Repo 判定", ""])
@@ -945,8 +956,12 @@ def publish(context, draft, manifest, report_dir, *, timeout=180.0, on_stage=Non
     report_dir = Path(report_dir or Path(seed["path"]) / "review-reports").expanduser().resolve()
     require(not report_dir.is_relative_to(context.resolve()), "report directory cannot be inside owned temporary context")
     published_at = datetime.now(timezone.utc)
-    # Rendering reads fixed evidence; keep those failures outside output recovery.
-    content = render(result, manifest).encode("utf-8")
+    # Validation already materialized excerpts. Only the pure formatter is
+    # classified here; source validation and publication retain their own errors.
+    try:
+        content = render(result, manifest).encode("utf-8")
+    except Exception as exc:
+        raise ReportRenderError(f"{type(exc).__name__}: {exc}") from exc
     with report_publication.staged_report(report_dir, content) as stage:
         for offset in range(1000):
             timestamp = (published_at + timedelta(microseconds=offset)).strftime("%Y%m%dT%H%M%S%fZ")

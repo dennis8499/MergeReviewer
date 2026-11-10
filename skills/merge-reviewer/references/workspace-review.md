@@ -204,7 +204,7 @@ v3 必填欄位、`engineering-review/v1` 完整性驗證與 CLI 維持相容。
 
 每條非空文字問題證據必填 `line_start`／`line_end`，以 1 起算且包含兩端；選取能證明問題的最小必要行段，不附無關上下文。發布器依 Repo、來源、完整 ref、路徑及行號驗證並擷取固定內容，草稿不必提供程式碼片段。固定版本為空檔案時，兩個行號可同時省略，報告標示「固定版本內容為空（0 行）」；必要時另引用基礎版本的相關行段。一般覆蓋紀錄仍沿用既有證據規則。
 
-`next_steps` 可空，最多三項 `owner`／`action`。`limitations` 記錄必要缺口；未執行測試放在 `tests_not_executed`。問題不因其他證據缺口而丟棄。
+`next_steps` 可空，最多三項 `owner`／`action`。`limitations` 記錄必要缺口；未執行測試放在 `tests_not_executed`。選填 `scope_notes: string[]` 記錄非阻擋範圍說明，省略等同 `[]`，不改變審查完整性。問題不因其他證據缺口而丟棄。reviewed coverage 的 `reason` 可省略或 null，渲染為空文字；其他非字串型別拒絕，未完成 coverage 仍須非空理由。
 
 ### 待人工確認
 

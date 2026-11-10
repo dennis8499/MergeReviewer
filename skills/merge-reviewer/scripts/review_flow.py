@@ -50,7 +50,7 @@ def _line_count_key(manifest, request):
     return fixed_line_count_key(manifest, request)
 
 
-def resolve_runtime(workspace=None, explicit=None, create=False):
+def runtime_path(workspace=None, explicit=None):
     if explicit:
         root = Path(explicit)
     elif os.environ.get("MERGE_REVIEW_RUNTIME_DIR"):
@@ -62,7 +62,103 @@ def resolve_runtime(workspace=None, explicit=None, create=False):
         root = workspace / ".review-runtime"
     else:
         raise ValueError("Use --workspace or --runtime-root to locate this request.")
-    return coordination.runtime(root, create=create)
+    return coordination.plain(Path(root).expanduser().absolute()).resolve()
+
+
+def resolve_runtime(workspace=None, explicit=None, create=False):
+    return coordination.runtime(runtime_path(workspace, explicit), create=create)
+
+
+class LaunchPreflightError(ValueError):
+    def __init__(self, result):
+        self.result = result
+        super().__init__("; ".join(row["message"] for row in result["errors"]))
+
+
+def launch_preflight(args):
+    """Inspect launch inputs without creating a runtime, job, lock or Git ref."""
+    import git_review_context as api
+    errors, canonical = [], {}
+
+    def error(field, exc):
+        errors.append({"code": "launch.invalid-" + field.replace("_", "-"),
+                       "pointer": "/" + field, "message": coordination.safe_error(exc)[:2000]})
+
+    for field in ("workspace", "project", "base", "head"):
+        if not isinstance(getattr(args, field, None), str) or not getattr(args, field).strip():
+            error(field, "A nonempty value is required.")
+    if args.request_id is not None and not coordination.IDENTIFIER.fullmatch(args.request_id):
+        error("request_id", "request_id must be 32 hexadecimal characters.")
+    if not isinstance(args.git_timeout, (int, float)) or not 0 < args.git_timeout < float("inf"):
+        error("git_timeout", "git-timeout must be positive and finite.")
+    if args.draft_format not in ("v3", "compact"):
+        error("draft_format", "draft format must be v3 or compact")
+    declared, workspace_file, repositories, selected, root = None, None, [], None, None
+    if args.workspace:
+        try:
+            declared = Path(args.workspace).expanduser().resolve(strict=True)
+            if not declared.is_dir():
+                raise ValueError("workspace must be an existing directory")
+            canonical["workspace"] = str(declared)
+        except (ValueError, OSError) as exc:
+            error("workspace", exc)
+            declared = None
+    if args.workspace_file:
+        try:
+            workspace_file = Path(args.workspace_file).expanduser().resolve(strict=True)
+            if not workspace_file.is_file():
+                raise ValueError("workspace-file must be an existing file")
+            canonical["workspace_file"] = str(workspace_file)
+        except (ValueError, OSError) as exc:
+            error("workspace_file", exc)
+    if declared and not any(row["pointer"] == "/workspace_file" for row in errors):
+        try:
+            roots = api.workspace_roots(declared, workspace_file)
+            if any(not path.is_dir() for path in roots):
+                raise ValueError("Every declared workspace folder must exist.")
+            repositories = api.discover_repositories(declared, workspace_file, roots=roots)
+            if args.project:
+                selected, repositories = api.choose_repository(declared, workspace_file, args.project,
+                                                                repositories=repositories)
+                canonical["project"] = str(selected)
+        except (ValueError, OSError, api.ReviewContextError) as exc:
+            error("project", exc)
+    try:
+        root = runtime_path(args.workspace, args.runtime_root)
+        if any((parent / ".git").exists() for parent in (root, *root.parents)) or any(
+                root.is_relative_to(repo.resolve()) for repo in repositories):
+            raise ValueError("Review runtime must be outside every declared Git Repo.")
+        if root.exists():
+            if not root.is_dir():
+                raise ValueError("Review runtime must be a directory.")
+            marker = root / ".merge-reviewer-runtime.json"
+            if marker.exists():
+                coordination.runtime(root)
+            elif any(item.name != ".ownership.lock" for item in root.iterdir()):
+                raise ValueError(f"Review runtime is not owned: {root}")
+        canonical["runtime_root"] = str(root)
+    except (ValueError, OSError) as exc:
+        error("runtime_root", exc)
+    if selected:
+        for field in ("base", "head"):
+            ref = getattr(args, field)
+            if not ref:
+                continue
+            try:
+                target = api.remote_target_for_ref(selected, ref)
+                if target:
+                    if args.no_fetch:
+                        raise ValueError("Explicit remote branches cannot use --no-fetch.")
+                    if not api.git_ok(selected, ["check-ref-format", "refs/heads/" + target.branch]):
+                        raise ValueError("A valid branch name is required.")
+                elif not api.resolve_commit_ref(selected, ref)[0]:
+                    raise ValueError("The local branch does not exist; tags, commits and HEAD are unsupported.")
+                canonical[field] = ref
+            except (ValueError, OSError, api.ReviewContextError) as exc:
+                error(field, exc)
+    return {"schema": "MergeReviewPreflight/v1", "valid": not errors, "errors": errors,
+            "canonical_inputs": canonical, "selected_repo": str(selected) if selected else None,
+            "network_calls": 0, "writes": 0}
 
 
 def job_path(root, identifier):
@@ -164,12 +260,17 @@ def status_summary(value):
               "remaining": brief(pending),
               "remaining_counts": {key: len(rows) if isinstance(rows, list) else rows for key, rows in pending.items()},
               "ready_for_finish": inspected.get("ready_for_finish", False), "evidence_verified": False,
+              "expected_outcome": inspected.get("expected_outcome", value.get("expected_outcome")),
+              "blocking_gaps": brief(inspected.get("blocking_gaps", value.get("blocking_gaps", []))),
+              "context_retained": value.get("context_retained", False),
+              "recoverable": value.get("recoverable", False),
+              "failure_kind": value.get("failure_kind"), "retained_until_epoch": value.get("retained_until_epoch"),
               "details": {"command": "status", "runtime_root": value.get("runtime_root"),
                           "request_id": value["request_id"]}}
     if value["state"] == "published":
         action = "finish" if value.get("cleanup_pending") else "open-report"
     elif value["state"] in TERMINAL:
-        action = "stop"
+        action = "inspect-render-error" if value.get("failure_kind") == "render" else "stop"
     elif value.get("phase") == "publication-repair":
         action = "repair-output-and-finish"
     elif errors:
@@ -210,6 +311,8 @@ def capabilities():
                          "incremental_resume": True,
                           "publication_retry": True, "batch_artifact_view": True, "summary_status": True,
                           "validation_progress": True,
+                         "launch_preflight": True, "read_only_inspection": True,
+                         "completion_preview": True, "scope_notes": True,
                          "phase_metrics": True}}
 
 
@@ -237,7 +340,8 @@ def draft_template(manifest):
                  "evidence": [], "search_ids": [], "boundary_contract_ids": []}
                 for item in manifest.get("boundary_changes", []) if manifest.get("extension_enabled")],
             "findings": [], "pending_confirmations": [], "next_steps": [],
-            "tests_executed": [], "tests_not_executed": ["本次尚未執行專案測試。"], "limitations": []}
+            "tests_executed": [], "tests_not_executed": ["本次尚未執行專案測試。"],
+            "limitations": [], "scope_notes": []}
     selected = next((repo for repo in manifest.get("repositories", [])
                      if repo.get("id") == manifest.get("selected_repo")), {})
     final = selected.get("sources", {}).get("merge-preview", selected.get("sources", {}).get("head", {}))
@@ -583,6 +687,7 @@ def remaining(draft):
     return {"changes": [row for row in rows("coverage") if row.get("status") != "reviewed"],
             "parents": [row for row in rows("merge_parent_review") if row.get("status") != "reviewed"],
             "repositories": [row for row in rows("repository_coverage") if row.get("status") == "unresolved"],
+            "impacts": [row for row in rows("impact_coverage") if row.get("status") != "reviewed"],
             "boundaries": [row for row in rows("boundary_reviews") if row.get("outcome") == "unresolved"],
             "pending_confirmation_count": len(rows("pending_confirmations"))}
 
@@ -619,7 +724,22 @@ def check(root, identifier):
             metrics = git_metrics_after(job.get("metrics", {}), "check", activity)
             metrics["check_diagnostic_seconds"] = (job.get("metrics", {}).get("check_diagnostic_seconds", 0.0)
                                                     + time.perf_counter() - started)
-            update(root, identifier, metrics=metrics)
+            fields = {"metrics": metrics}
+            if result is not None and not result[0].get("publication_complete"):
+                checked = result[0]
+                import workspace_report
+                def safe(value):
+                    if isinstance(value, str):
+                        return workspace_report.redact(value)
+                    if isinstance(value, dict):
+                        return {key: safe(child) for key, child in value.items()}
+                    if isinstance(value, list):
+                        return [safe(child) for child in value]
+                    return value
+                fields.update(last_check_at=now(), remaining_counts=checked.get("remaining_counts", {}),
+                              expected_outcome=checked.get("expected_outcome"),
+                              blocking_gaps=safe(checked.get("blocking_gaps", [])))
+            update(root, identifier, **fields)
         except (OSError, ValueError, KeyError):
             pass
     if result is not None and metrics is not None:
@@ -645,7 +765,9 @@ def _check_once(root, identifier):
         return {"request_id": identifier, "errors": [{"code": "authoring.invalid-json", "pointer": "", "path": "draft", "message": str(exc)}],
                 "ready_for_finish": False, "evidence_verified": False, "git_commands": 0}, 3
     value = diagnostics(draft, manifest, context, job.get("line_counts"))
-    return {"request_id": identifier, "context_retained": True, **value}, 0 if value["ready_for_finish"] else 3
+    counts = {key: len(rows) if isinstance(rows, list) else rows for key, rows in remaining(draft).items()}
+    return {"request_id": identifier, "context_retained": True, "remaining_counts": counts,
+            **value}, 0 if value["ready_for_finish"] else 3
 
 
 def preflight(path):
@@ -684,6 +806,13 @@ def prune_jobs(root):
                 continue
             if value.get("state") in TERMINAL and value.get("finished_at_epoch", time.time()) < cutoff:
                 # Evidence is cleaned only through its separate owner marker.
+                if value.get("failure_kind") == "render" and value.get("context_retained"):
+                    try:
+                        context = job_context(root, path.stem, value)
+                        review_session.cleanup_session(context)
+                    except (ValueError, OSError) as exc:
+                        update(root, path.stem, cleanup_error=coordination.safe_error(exc))
+                        continue
                 if not value.get("context_dir") or not Path(value["context_dir"]).exists():
                     response = response_context(root, path.stem)
                     if response.exists():
@@ -701,6 +830,22 @@ def start(args):
     import git_review_context as api
     import review_workspace as workspace
     request_started = time.perf_counter()
+    # Existing IDs are checked against their saved inputs below. They must not
+    # depend on live workspace availability after their snapshot was captured.
+    candidate = runtime_path(args.workspace, args.runtime_root)
+    existing_path = candidate / "jobs" / ((args.request_id or "") + ".json")
+    launch_activity = api.empty_git_process_activity()
+    if not (args.request_id and coordination.IDENTIFIER.fullmatch(args.request_id)
+            and coordination.plain(existing_path).is_file()):
+        launch_token = api.GIT_PROCESS_ACTIVITY.set(launch_activity)
+        timeout_token = api.GIT_TIMEOUT_SECONDS.set(args.git_timeout)
+        try:
+            inspected = launch_preflight(args)
+        finally:
+            api.GIT_TIMEOUT_SECONDS.reset(timeout_token)
+            api.GIT_PROCESS_ACTIVITY.reset(launch_token)
+        if not inspected["valid"]:
+            raise LaunchPreflightError(inspected)
     root = resolve_runtime(args.workspace, args.runtime_root, create=True)
     identifier = args.request_id or uuid.uuid4().hex
     args.request_id = identifier
@@ -715,7 +860,7 @@ def start(args):
     lock = coordination.FileLock(path.with_suffix(".owner.lock"))
     if not lock.acquire(blocking=False):
         return status(root, identifier)
-    git_activity_token = api.GIT_PROCESS_ACTIVITY.set(api.empty_git_process_activity())
+    git_activity_token = api.GIT_PROCESS_ACTIVITY.set(launch_activity)
     context = None
     active = None
     manifest = None
@@ -1051,19 +1196,24 @@ def step(root, identifier, operations, *, requests_file=None):
         def progress(stage, completed, total, operation):
             if stage in ("prefetch-searches", "prefetch-reads"):
                 prefetch_starts[stage] = time.perf_counter()
-            elif stage.endswith("-complete"):
+                update(root, job["request_id"], phase="review", progress={"phase": stage,
+                       "completed": completed, "total": total, "operation_id": None,
+                       "operation": None, "at": now()})
+            elif stage in ("prefetch-searches-complete", "prefetch-reads-complete"):
                 original = stage.removesuffix("-complete")
                 begun = prefetch_starts.pop(original, None)
                 if begun is not None:
                     key = original.replace("prefetch-", "")
                     operation_seconds[key] = operation_seconds.get(key, 0.0) + time.perf_counter() - begun
+                update(root, job["request_id"], progress={"phase": stage, "completed": completed,
+                       "total": total, "operation_id": None, "operation": None, "at": now()})
             elif stage == "operation" and isinstance(operation, dict):
                 identifier = operation.get("id")
                 kind = operation.get("op", "unknown")
                 operation_starts[identifier] = (kind, time.perf_counter())
                 operation_counts[kind] = operation_counts.get(kind, 0) + 1
                 row = {"phase": "operation", "completed": completed, "total": total,
-                       "operation_id": identifier, "operation": kind}
+                       "operation_id": identifier, "operation": kind, "at": now()}
                 update(root, job["request_id"], phase="review", progress=row)
                 print(json.dumps({"request_id": job["request_id"], **row}, ensure_ascii=False),
                       file=sys.stderr, flush=True)
@@ -1073,6 +1223,9 @@ def step(root, identifier, operations, *, requests_file=None):
                 if active_operation:
                     kind, began = active_operation
                     operation_seconds[kind] = operation_seconds.get(kind, 0.0) + time.perf_counter() - began
+                update(root, job["request_id"], progress={"phase": "operation-complete",
+                       "completed": completed, "total": total, "operation_id": None,
+                       "operation": None, "at": now()})
 
         try:
             active.check()
@@ -1188,6 +1341,9 @@ def step(root, identifier, operations, *, requests_file=None):
         metrics["lock_wait_seconds"] = job.get("metrics", {}).get("lock_wait_seconds", 0.0) + lock_wait
         update(root, identifier, state="reviewing", phase="input-repair" if input_error is not None or preflight_error else "review",
                last_step={"complete": result["complete"], "next_index": result["next_index"]},
+               progress={"phase": "operation-complete" if result["complete"] else "operation-failed",
+                         "completed": result["next_index"], "total": len(operations) if isinstance(operations, list) else 0,
+                         "operation_id": None, "operation": None, "at": now()},
                evidence_receipt=receipt, metrics=metrics)
         result["metrics"] = {"step_seconds": elapsed, "error_revalidation_seconds": error_revalidation,
                              "error_revalidation_skipped": bool(result.get("error_revalidation_skipped")),
@@ -1389,6 +1545,20 @@ def _finish_once(root, identifier):
             update(root, identifier, metrics={**saved.get("metrics", {}), **timing})
             update(root, identifier, state="reviewing", phase="draft-repair", errors=[str(exc)])
             return {"request_id": identifier, "context_retained": True, "errors": [str(exc)]}, 3
+        except workspace_report.ReportRenderError as exc:
+            # The formatter failed before staging. Preserve evidence for diagnosis,
+            # but never rerun a terminal request with the same or another helper.
+            failed_at = time.time()
+            diagnostic = {"code": "publication.render-failed", "pointer": "/report",
+                          "message": coordination.safe_error(exc),
+                          "hint": "Inspect retained evidence; cancel removes it. Publication cannot retry."}
+            update(root, identifier, state="failed", phase="terminal", failure_kind="render",
+                   errors=[diagnostic], error=None, recoverable=False, context_retained=True,
+                   next_action="inspect-render-error", finished_at_epoch=failed_at,
+                   retained_until_epoch=failed_at + 86400)
+            return {"request_id": identifier, "terminal": True, "recoverable": False,
+                    "context_retained": True, "errors": [diagnostic],
+                    "next_action": "inspect-render-error", "retained_until_epoch": failed_at + 86400}, 2
         except Exception as exc:
             # A published receipt survives cleanup failures and may be retried.
             saved = coordination.read_json(path)
@@ -1425,6 +1595,13 @@ def cancel(root, identifier):
     path = job_path(root, identifier)
     job = coordination.read_json(path)
     job_context(root, identifier, job)
+    if job["state"] in TERMINAL and job.get("failure_kind") == "render" and job.get("context_retained"):
+        with coordination.FileLock(path.with_suffix(".owner.lock")):
+            job = coordination.read_json(path)
+            if job.get("failure_kind") == "render" and job.get("context_retained"):
+                review_session.cleanup_session(job_context(root, identifier, job))
+                update(root, identifier, context_retained=False, cleanup_error=None)
+        return status(root, identifier)
     if job["state"] in TERMINAL:
         return status(root, identifier)
     coordination.atomic(root / "jobs" / (identifier + ".cancel"), {"requested_at": now()})
@@ -1445,7 +1622,7 @@ def cancel(root, identifier):
 
 def parser():
     value = argparse.ArgumentParser(description=__doc__)
-    value.add_argument("command", choices=("capabilities", "start", "step", "check", "finish", "status", "cancel", "view"))
+    value.add_argument("command", choices=("capabilities", "preflight", "start", "step", "check", "finish", "status", "cancel", "view"))
     value.add_argument("--workspace")
     value.add_argument("--workspace-file")
     value.add_argument("--runtime-root")
@@ -1456,6 +1633,7 @@ def parser():
     value.add_argument("--draft-format", choices=("compact", "v3"), default="v3")
     value.add_argument("--requests-file", type=Path)
     value.add_argument("--summary", action="store_true", help="Return actionable status without large receipts")
+    value.add_argument("--read-only", action="store_true", help="Read artifact pages without metrics or other writes")
     value.add_argument("--refresh", action="store_true")
     value.add_argument("--auth-scope", default=os.environ.get("GITLAB_WORKSPACE_AUTH_SCOPE", ""))
     value.add_argument("--no-fetch", action="store_true")
@@ -1475,6 +1653,8 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     args = parser().parse_args(argv)
+    read_only_command = (args.command in ("capabilities", "preflight") or
+                         args.command == "status" and args.summary or args.read_only)
     code = 0
     runtime_response = False
     context = None
@@ -1482,8 +1662,13 @@ def main(argv=None):
     try:
         if args.summary and (args.command != "status" or args.artifact):
             raise ValueError("--summary is only supported by status without --artifact")
+        if args.read_only and args.command != "view":
+            raise ValueError("--read-only is only supported by view")
         if args.command == "capabilities":
             result = capabilities()
+        elif args.command == "preflight":
+            result = launch_preflight(args)
+            code = 0 if result["valid"] else 3
         elif args.command == "start":
             if not all((args.workspace, args.project, args.base, args.head)):
                 raise ValueError("start requires workspace, project, base and head.")
@@ -1540,16 +1725,16 @@ def main(argv=None):
                 context = (artifact_location(root, args.request_id, args.artifact, args.artifact_scope)[0]
                            if args.artifact and args.command in ("view", "status") else
                            Path(job["context_dir"]) if job.get("context_dir") else None)
-                if paging_started is not None:
+                if paging_started is not None and not read_only_command:
                     metrics = dict(job.get("metrics", {}))
                     metrics["paging_seconds"] = metrics.get("paging_seconds", 0.0) + time.perf_counter() - paging_started
                     pages = len(result.get("results", [])) if args.command == "view" and args.requests_file else 1
                     metrics["paging_read_count"] = metrics.get("paging_read_count", 0) + pages
                     update(root, args.request_id, metrics=metrics)
         read_only_view = args.command == "view" or args.command == "status" and bool(args.artifact)
-        if context and context.exists() and not read_only_view:
+        if context and context.exists() and not read_only_view and not read_only_command:
             result = compact(result, context)
-        elif args.request_id and not read_only_view and len(review_runtime.canonical(result)) >= LIMIT:
+        elif args.request_id and not read_only_view and not read_only_command and len(review_runtime.canonical(result)) >= LIMIT:
             response = response_context(root, args.request_id, create=True)
             result = compact(result, response)
             runtime_response = True
@@ -1557,8 +1742,23 @@ def main(argv=None):
             result["response_scope"] = "runtime"
             if len(review_runtime.canonical(result)) >= LIMIT:
                 result["summary"] = {"fields": list(result.get("summary", {}))[:16]}
+        if args.read_only:
+            def preserve_read_only(value):
+                if isinstance(value, dict):
+                    if "command" in value and "artifact" in value:
+                        value.update(command="review_session.py view", read_only=True)
+                    for child in value.values():
+                        preserve_read_only(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        preserve_read_only(child)
+            preserve_read_only(result)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return code
+    except LaunchPreflightError as exc:
+        print(json.dumps({**exc.result, "request_id": args.request_id, "terminal": False,
+                          "job_created": False}, ensure_ascii=False), file=sys.stderr)
+        return 3
     except (ValueError, KeyError, IndexError, TypeError, OSError, RuntimeError) as exc:
         print(json.dumps({"error": coordination.safe_error(exc), "request_id": args.request_id,
                           "terminal": True}, ensure_ascii=False), file=sys.stderr)

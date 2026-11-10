@@ -8,6 +8,10 @@
 
 多 Repo 填 `boundary_reviews`、`repository_coverage`，影響跨 Repo 才依[契約邊界](contract-boundaries.md)建立所需 impact 節點。精簡格式的 impact 節點若省略 `repo/source/path`，從首筆 evidence 補入；parent 模板會帶入固定最終來源的 `final_ref`。reviewed parent 必須同時引用對應 parent 與最終來源的必要路徑；`check` 和 `finish` 使用相同規則。待確認的 `related_changes` 可使用 change ID。所有 status、理由、判斷、測試與必要缺口都由 agent 明確提供。
 
+完成一條鏈就保存並回讀草稿，再用 check 核對 `expected_outcome` 與 `blocking_gaps`。`limitations` 是必要證據缺口；未跑測試用 `tests_not_executed`，工作區外未宣告範圍等說明用選填 `scope_notes`。可讀的剩餘證據先補查，確實無法取得才發布未完成報告。JSON 請求始終序列化為陣列，單筆也保留外層 `[]`。
+
+reviewed coverage 的既有 `reason` 缺值或 null 視為未提供文字，仍須有合法固定證據；布林、數字、陣列及物件為草稿型別錯誤。未完成 coverage 必須有非空理由。helper 不自動補造判斷理由。
+
 純刪除變更可用比較左側實際包含該符號的固定來源作初始錨點；helper 會核對 anchor 路徑、ref、行號及本次 diff 的刪除行。若來源不是 UTF-8，helper 會標出 `encoding`；只有 `lossy=false` 的內容可作契約錨點。二進位讀取僅提供位元組大小與 SHA-256，應保留為 coverage 缺口並說明無法檢視內容。
 
 每個 finding 寫一次情境、觸發、證據說明、預期與實際、影響及修法。範例的文字、操作 ID 及行號必須換成實際內容：

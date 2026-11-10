@@ -4,6 +4,10 @@
 
 ## 開始與恢復
 
+0.21.0 capabilities 增加 `features.launch_preflight`、`read_only_inspection`、`completion_preview`、`scope_notes`，均為 true。既有 `request_preflight` 只代表 step 請求預檢，不能用來推定啟動預檢能力。
+
+首次啟動用 `preflight` 取代相同命令中的 `start`，保留其餘參數。回應 `MergeReviewPreflight/v1` 含 `valid`、`errors[].code/pointer/message`、`canonical_inputs` 與 `selected_repo`；exit 0 為有效、exit 3 為輸入需修正。它只讀工作區、分支設定及 runtime 身份，不 fetch、不建立 runtime／job／lock／報告，也不以預檢代替 start 的實際寫入測試。遠端分支可用性仍待 start 同步確認。fresh start 自行再預檢，失敗不消耗 request ID；既存 ID 依固定輸入及快照恢復，不重驗可變工作區。
+
 ~~~powershell
 python "<skill-dir>/scripts/review_session.py" start --workspace "C:/team" --project Orders --base origin/main --head origin/feature/payment
 python "<skill-dir>/scripts/review_session.py" status --runtime-root "C:/team/.review-runtime" --request-id "<id>" --summary
@@ -14,6 +18,8 @@ start 回傳 `MergeReviewStart/v1`，含固定 Repo／source ref、必要覆蓋�
 先查 capabilities：`skill_version`、`helper_sha256`、`python_version` 識別目前安裝；start 與持久 job 的 `tool_identity` 識別擷取時的工具。helper 摘要依 scripts 內所有 Python 檔名及內容 SHA-256 計算；同版本的不同 helper 內容可區分，不會因工具更新而自動重新擷取。
 
 能力列出 `summary_status` 時，`status --summary` 回傳 `MergeReviewStatusSummary/v1`：狀態、錯誤與缺口預覽／總數、未完成項計數、報告路徑及 `next_action`。大型收據與完整操作索引透過 `details` 的原 status 命令取得；預覽不代表全部內容已讀完。原 status 介面保留，發布狀態仍核對報告正文收據。
+
+能力列出 `read_only_inspection` 時，`status --summary` 與 capabilities 保證不寫檔，artifact 使用 `view --read-only`；單筆及批次均略過 metrics 寫入，continuation 保留 `read_only=true`。舊版 view 預設的分頁計量維持相容。唯讀檢視不建立額外 artifact 或快取。
 
 可自行產生 32 位小寫十六進位 request ID，透過 `start --request-id` 在輸出遺失後重送。相同 ID／輸入回傳既有狀態，不重新擷取；改變輸入須新 ID。`--refresh` 忽略已完成快取及失敗冷卻，仍可加入開始等待後完成的同需求同步。
 
@@ -51,6 +57,8 @@ Repo 掃描會略過 `.review-runtime`、`.gitlab-workspace/runtime` 與上述�
 操作為 read／register-contract／search／instructions／inventory／patch／view。inventory 可限 repo／source；patch 用 start 列出的 path，可選精確 line_start／line_end。read 預設 Repo 主來源；around_line 大於檔尾時縮到尾端，context_lines 為非負整數；精確範圍須成對且不得越界。
 
 結果 `operations[]` 按順序帶 id／artifact／result。成功一次保存 manifest；失敗保存成功前綴並回傳 `complete=false／next_index／error`。修正失敗項後可重送整份陣列；成功 ID 的內容須保持一致，重用 artifact 而不新增契約或搜尋。新操作給新 ID。
+
+job `progress` 使用 `completed/total`、`operation_id`、`operation` 與 `at`；每項完成及整批出口持久更新。完成後清除 active operation，整批成功為 N/N；部分失敗是已完成前綴／原批總數。重用 operation 也會結算完成；語意覆蓋仍只看草稿，不能以操作完成數代替。
 
 較大的 step 優先使用 `MergeReviewEvidenceStep/v1`：read 的 `content_id` 指向頂層 `contents[id].lines`，每筆保留來源與全文 hash；搜尋的共同欄位合併，所有 matches 保留。仍超過上限時使用 `MergeReviewEvidenceStep/v2`：按操作保留可容納的小結果，其餘以 `result_returned=false` 與 `continue` 指向完整 artifact；操作太多時，`operations_next_offset`／`continue_operations` 指向後續清單。`evidence_complete` 表示完整保存，`result_returned` 表示此次是否回傳該結果；語意是否審查由 agent 判斷。必要內容續讀後才標 reviewed。
 
@@ -91,11 +99,17 @@ python "<skill-dir>/scripts/review_session.py" view --runtime-root "<runtime>" -
 
 ## 完成、取消與錯誤
 
+check 增加 `expected_outcome`（`review_complete/review_status/recommendation/pending_confirmation_count/extension_status`）及結構化 `blocking_gaps`。必要 limitations、固定擷取缺口及待確認會在發布前呈現；`scope_notes` 與 `tests_not_executed` 不阻擋完成。有 authoring errors 時 outcome 為 unknown，修正後重查。check 仍零 Git、`evidence_verified=false`；其 `remaining_counts`、`expected_outcome`、`blocking_gaps` 與 `last_check_at` 保存至 job，供工作台顯示最近一次檢查。正式 finish 另做完整固定證據驗證。
+
+agent 先補查所有可取得的必要證據，再判斷是否真正受阻。helper 保留發布誠實未完成報告的能力；來源無法取得時，保留已確認問題、具體缺口及下一步，不能把未讀完當成資料不可取得。
+
 草稿初始 summary 空、必要覆蓋與 parent 為 not-reviewed，其他 Repo 為 unresolved。parent 模板已填固定最終來源 ref；每筆 reviewed parent 仍須引用與路徑相符的 parent 及最終證據。agent 依實際工作補齊，不能直接批次改為 reviewed。先用 check 取得 `errors[].code/pointer/message` 與 `gaps`；pointer 指向草稿欄位，manifest 問題以 `/manifest/...` 指出。check 使用固定索引提前核對 parent 與最終 ref，不執行 Git，`evidence_verified=false`。無欄位錯誤且無未完成項時 exit 0，否則 exit 3；finish 仍須完整驗證來源、引用及搜尋。finish 的可修錯誤 exit 3 保留 context，快照損毀 exit 2 終止。
 
 check 與 finish 共用 Repo 關聯及 finding 引用範圍判定；沒有 impact 證據的 peer 不得標為 related，finding／待確認的證據也不能擴張已排除 Repo。已知且綁定固定 blob 的行數也用於提前檢查引用上界；未知上界仍由 finish 從固定物件核對。compact 診斷一次列出獨立錯誤，pointer 指向確切 finding／evidence／欄位；`available_read_ids`、`available_line_ranges` 及總數協助修正引用。這些提示只引用已完成操作，不代填語意判斷。
 
 發布預檢與正式發布共用 sibling 暫存檔、完整寫入／讀回及原子提交；Windows 檔案繼承輸出目錄 ACL，既有報告不覆寫。完整驗證後若輸出遇到可恢復的權限、占用或容量錯誤，finish 回傳 exit 3、`phase=publication-repair`、`recoverable=true`、`context_retained=true`，保留原 request、草稿與固定 SHA。修復輸出後重試同一 ID 的 finish，仍完整驗證證據；需要放棄時 cancel。損毀來源與非輸出錯誤仍是終止錯誤。舊 review_report.py 的預設失敗清理行為保留。
+
+純 formatter 內部例外例外保存為 `failure_kind=render`、`state=failed/phase=terminal`、`context_retained=true`、`recoverable=false`，`next_action=inspect-render-error`；不建立 publication receipt，原工具身份及 SHA 保持不變。相同 request 的 finish 停止，不自動重試或換版本繼續發布。可用 status／唯讀 view 診斷，`cancel` 清理 retained owned context。保留期限從首次失敗起 24 小時，status 不延長；下一次 start 才惰性驗 ownership 並清理，清理失敗留診斷。已被舊版清除的 context 無法復原；已發布 receipt 與 outcome 不改寫。
 
 每個 reviewed impact 至少有一份合法 evidence 與節點自身 `repo/source/path` 相同，其他版本的輔助證據可一併保留。check 與 finish 共用契約錨點及 coverage 起點的同位置規則：僅把契約 ID 放在另一個檔案或版本的節點上仍不完整。
 
