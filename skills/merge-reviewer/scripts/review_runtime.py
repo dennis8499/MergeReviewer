@@ -127,6 +127,8 @@ def shared_reads(value):
             # Different excerpts of the same full blob must not share a body.
             identifier = hashlib.sha256(canonical({"sha256": item["sha256"],
                 "line_start": item["line_start"], "line_end": item["line_end"]})).hexdigest()
+        if item.get("sensitive_values_redacted"):
+            identifier = hashlib.sha256(canonical({"content_id": identifier, "visible_lines": item["lines"]})).hexdigest()
         contents.setdefault(identifier, {"lines": item["lines"]})
         reads.append({**{key: content for key, content in item.items() if key != "lines"}, "content_id": identifier})
     return {"schema": "MergeReviewEvidenceBatch/v1", "reads": reads, "contents": contents}

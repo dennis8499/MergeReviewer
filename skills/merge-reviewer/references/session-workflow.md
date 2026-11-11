@@ -44,6 +44,7 @@ Repo 掃描會略過 `.review-runtime`、`.gitlab-workspace/runtime` 與上述�
   {"id":"register-1","op":"register-contract","contract":{
     "id":"C-001","root":{"repo":"repo-000","source":"head","path":"src/publish.py"},
     "kind":"behavior","symbol":"amountCents","parent_ids":[],
+    "search_scope":"identified-repos","candidate_repos":["repo-001"],
     "evidence":{"repo":"repo-000","source":"head","ref":"<fixed SHA>","path":"src/publish.py","line_start":18,"line_end":19},
     "search_terms":[{"query":"amountCents","reason":"新欄位"},{"query":"totalCents","reason":"相同固定行段的舊欄位別名"}]
   }},
@@ -52,9 +53,9 @@ Repo 掃描會略過 `.review-runtime`、`.gitlab-workspace/runtime` 與上述�
 ]
 ~~~
 
-存到 `<context>/round-1.json` 後執行 step。初始 anchor 須覆蓋實際變更行；替代詞不在同一 anchor 時提供固定 alias evidence。契約與草稿定義在 [workspace-review.md](workspace-review.md#多儲存庫延伸)。
+存到 `<context>/round-1.json` 後執行 step。此例假設固定證據已識別 repo-001 是消費端；只有 Repo 名稱不足以擴大範圍。初始 anchor 須覆蓋實際變更行；替代詞不在同一 anchor 時提供固定 alias evidence。契約與草稿定義在 [workspace-review.md](workspace-review.md#多儲存庫延伸)。
 
-操作為 read／register-contract／search／instructions／inventory／patch／view。inventory 可限 repo／source；patch 用 start 列出的 path，可選精確 line_start／line_end。read 預設 Repo 主來源；around_line 大於檔尾時縮到尾端，context_lines 為非負整數；精確範圍須成對且不得越界。
+操作為 read／register-contract／search／instructions／inventory／patch／view，以及支援 `atomic_authoring` 時的 [author](authoring.md)。inventory 可限 repo／source；patch 用 start 列出的 path，可選精確 line_start／line_end。read 預設 Repo 主來源；around_line 大於檔尾時縮到尾端，context_lines 為非負整數；精確範圍須成對且不得越界。
 
 結果 `operations[]` 按順序帶 id／artifact／result。成功一次保存 manifest；失敗保存成功前綴並回傳 `complete=false／next_index／error`。修正失敗項後可重送整份陣列；成功 ID 的內容須保持一致，重用 artifact 而不新增契約或搜尋。新操作給新 ID。
 

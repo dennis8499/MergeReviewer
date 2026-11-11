@@ -1,5 +1,9 @@
 # Change log
 
+## 0.22.0
+
+修正跨 Repo 搜尋預抓範圍，新增原子 compact 保存與原生 checkpoint、便宜狀態摘要及相同 blob 回應共用。首次發布保留完整證據驗證。
+
 ## 0.20.6 — 2026-11-04
 
 - Prune managed reviewer/network runtime directories during Repo discovery while preserving declared roots, sibling Repos and actionable scope errors.

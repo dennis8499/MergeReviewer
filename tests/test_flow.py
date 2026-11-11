@@ -145,7 +145,7 @@ class FlowTests(ReviewFixture):
         manifest = workspace.load(context)
         seed = workspace.repository(manifest, result["selected_repo"])
         root = manifest["required_coverage"][0]
-        contract = {"id": "C-001", "root": root, "kind": "behavior", "symbol": "contract",
+        contract = {"id": "C-001", "root": root, "kind": "behavior", "symbol": "contract", "search_scope": "repo-local",
                     "evidence": {**root, "ref": seed["sources"]["head"]["ref"], "line_start": 1, "line_end": 1},
                     "search_terms": [{"query": "contract", "reason": "Changed symbol"},
                                      {"query": "new", "reason": "New fixed contract value"}]}

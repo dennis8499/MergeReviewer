@@ -1,5 +1,13 @@
 # 精簡草稿
 
+能力列出 `atomic_authoring` 時，優先用原生 `step` 保存草稿。每輪只寫已完成的語意判斷；`updates` 的 coverage／boundary／parent／Repo／impact／finding 列依 change_id／id／repo 合併，其餘陣列整體替換。`expected_draft_sha256` 取自 status 或前次 author 回應；衝突時先讀目前草稿，不覆蓋他人的更新。範例：
+
+~~~json
+[{"id":"save-chain-1","op":"author","expected_draft_sha256":"<目前草稿 SHA-256>","updates":{"summary":"本次固定變更的工程結論","coverage":[{"change_id":"<change ID>","status":"reviewed","reason":"已核對適用路徑與安全反例。","evidence":[{"read_id":"<已保存 read ID>","line_start":1,"line_end":3}]}]},"checkpoint":{"completed_operation_ids":["<已保存 operation ID>"],"unread_evidence":[],"open_questions":[],"next_action":"檢查下一條契約鏈。"}}]
+~~~
+
+回應 `saved=true` 才表示草稿已保存，並回傳新 hash、診斷及 checkpoint；同 ID／同內容可安全重送。checkpoint 只記續作導航，不改 coverage。`status --summary` 的 `checkpoint_current`／`check_current` 表示它們是否對應目前草稿；完整診斷用 check。報告的結論、問題數與必要缺口由最後驗證產生，summary 不填暫時進度或未讀計數。
+
 使用 `merge-reviewer-authoring/v1` 可減少重複欄位；既有 `merge-reviewer-workspace-result/v3` 草稿仍可使用。先用 `review_session.py capabilities` 確認安裝版支援 compact，再於 start 明確指定 `--draft-format compact`；較舊安裝或舊 session 保留 v3。精簡格式保留必要陣列，依實際審查填寫。
 
 每筆 `coverage` 可用 start 回傳的 `boundary_changes[].id` 作 `change_id`，helper 展開為原有變更鍵。`evidence` 可使用 `{"read_id":"<step 操作 ID>","line_start":1,"line_end":3}`；行號以 1 起算且包含兩端，必須已包含在該次 `read` 結果內。若舊 checkpoint 沒有 read 操作種類，先以新 ID 重新讀取。helper 從已保存的操作補入固定 Repo、source、ref 和 path；finish 仍重讀固定物件、校驗來源及行號。

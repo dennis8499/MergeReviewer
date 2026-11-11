@@ -2,10 +2,12 @@
 from __future__ import annotations
 import copy
 import json
+import os
 from pathlib import Path
 import re
 import sys
 import tempfile
+import time
 import unittest
 
 from tests.support import run_git as git, write_text
@@ -22,7 +24,17 @@ import review_session
 class ReviewFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="branch-review-tests-")
-        self.addCleanup(self.temp.cleanup)
+        def cleanup():
+            for attempt in range(20):
+                try:
+                    self.temp.cleanup()
+                    return
+                except PermissionError:
+                    if os.name != "nt" or attempt == 19:
+                        raise
+                    # Windows scanners can briefly retain an exited Git cwd.
+                    time.sleep(.1)
+        self.addCleanup(cleanup)
         self.root = Path(self.temp.name).resolve()
         self.repo = self.make_repo("api")
         git(self.repo, "switch", "-c", "feature")

@@ -1182,9 +1182,11 @@ def batch_register_contract(context, manifest, requests, api):
     return {"contracts": values}
 
 
-def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None, api, source_name=None,
-           contract_id=None, *, cache=None, change_id=None) -> dict:
-    require(bool(query), "search query must be nonempty")
+def search_repositories(manifest, query, repo_ids=None, source_name=None, contract_id=None, change_id=None):
+    """Resolve and validate scope before either speculative or actual Git work."""
+    require(isinstance(query, str) and bool(query), "search query must be nonempty")
+    require(repo_ids is None or isinstance(repo_ids, list) and all(isinstance(r, str) for r in repo_ids),
+            "search repo must be an array of Repo IDs")
     change = None
     if change_id is not None:
         require(manifest.get("contract_scope_policy") == contract_boundary.V2_POLICY and contract_id is None,
@@ -1213,6 +1215,14 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
         allowed = {identified_owner, *identified_repos}
         require(all(repo_id in allowed for repo_id in selected),
                 "identified-repos search is limited to its evidence Repo and candidate_repos")
+    for repo_id in selected:
+        repository(manifest, repo_id)
+    return selected
+
+
+def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None, api, source_name=None,
+           contract_id=None, *, cache=None, change_id=None) -> dict:
+    selected = search_repositories(manifest, query, repo_ids, source_name, contract_id, change_id)
     results = []
     for repo_id in selected:
         import review_coordinator
@@ -1346,17 +1356,18 @@ def batch_search(context: Path, manifest: dict, requests: list[dict], api) -> di
     cache = FixedSearchCache(context, api)
     candidates = []
     for request in requests:
-        if not isinstance(request, dict):
-            continue
-        selected = request.get("repo") or [r["id"] for r in manifest["repositories"]]
-        if isinstance(selected, list):
+        try:
+            require(isinstance(request, dict), "batch request must be an object")
+            require(set(request) <= {"repo", "source", "query", "contract", "change_id"}, "unknown batch-search request argument")
+            selected = search_repositories(manifest, request.get("query"), request.get("repo"),
+                                           request.get("source"), request.get("contract"), request.get("change_id"))
             for repo_id in selected:
-                try:
-                    repo = repository(manifest, repo_id)
-                    candidates.append({"repo": repo_id, "source": request.get("source") or repo["review_source"],
-                                       "query": request.get("query")})
-                except (ValueError, KeyError, TypeError):
-                    pass
+                repo = repository(manifest, repo_id)
+                require((request.get("source") or repo.get("review_source")) in repo["sources"], "unknown search source")
+                candidates.append({"repo": repo_id, "source": request.get("source") or repo["review_source"],
+                                   "query": request["query"]})
+        except (ValueError, KeyError, TypeError):
+            break  # Only prefetch the valid ordered prefix.
     cache.prefetch(manifest, candidates)
     for request in requests:
         require(isinstance(request, dict), "batch request must be an object")
@@ -1386,19 +1397,22 @@ def ordered_step(context, manifest, operations, api, *, on_progress=None):
         return (isinstance(operation, dict) and isinstance(operation.get("id"), str)
                 and operation["id"] in checkpoints)
     for operation in operations:
+        if isinstance(operation, dict) and operation.get("op") == "register-contract" and not already_checkpointed(operation):
+            break  # A later search must resolve against the newly registered contract.
         if (not isinstance(operation, dict) or operation.get("op") != "search"
                 or already_checkpointed(operation)):
             continue
-        selected = operation.get("repo") or [row["id"] for row in manifest["repositories"]]
-        if not isinstance(selected, list):
-            continue
-        for repo_id in selected:
-            try:
+        try:
+            require(set(operation) <= {"id", "op", "repo", "source", "query", "contract", "change_id"}, "unknown search argument")
+            selected = search_repositories(manifest, operation.get("query"), operation.get("repo"),
+                                           operation.get("source"), operation.get("contract"), operation.get("change_id"))
+            for repo_id in selected:
                 repo = repository(manifest, repo_id)
+                require((operation.get("source") or repo.get("review_source")) in repo["sources"], "unknown search source")
                 search_requests.append({"repo": repo_id, "source": operation.get("source") or repo["review_source"],
                                         "query": operation.get("query")})
-            except (ValueError, KeyError, TypeError):
-                pass
+        except (ValueError, KeyError, TypeError):
+            break
     if on_progress:
         on_progress("prefetch-searches", 0, len(operations), None)
     searches.prefetch(manifest, search_requests)
@@ -1499,6 +1513,9 @@ def ordered_step(context, manifest, operations, api, *, on_progress=None):
                 elif kind == "view":
                     from review_flow import artifact_view
                     result = artifact_view(context, **args)
+                elif kind == "author":
+                    from review_author_operation import apply
+                    result = apply(context, manifest, operation)
                 else:
                     raise ValueError(f"Unsupported step operation: {kind}")
                 artifact = review_runtime.store_view(context, result)

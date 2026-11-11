@@ -205,7 +205,22 @@ def status(root, identifier, *, summary=False):
         result["review_outcome"] = report_receipt.saved_review(job)
         result.update({key: result["review_outcome"][key]
                        for key in ("review_complete", "review_status", "gaps", "remaining")})
-    if job["state"] in ("ready", "reviewing") and (context / "manifest.json").is_file():
+    if summary:
+        cached = job.get("last_check", {})
+        draft = context / "draft.json"
+        current_hash = coordination.file_digest(draft) if draft.is_file() else None
+        manifest_hash = coordination.file_digest(context / "manifest.json") if (context / "manifest.json").is_file() else None
+        fresh = bool(current_hash and manifest_hash and cached.get("draft_sha256") == current_hash
+                     and cached.get("manifest_sha256") == manifest_hash)
+        result["resume"] = {"diagnostics": cached.get("diagnostics", {}) if fresh else {},
+                            "remaining": cached.get("remaining", {}) if fresh else {}}
+        result.update(check_current=fresh, draft_sha256=current_hash,
+                      status_revision=coordination.digest([job.get("updated_at"), current_hash, manifest_hash]), last_check_at=job.get("last_check_at"),
+                      execution_checkpoint=job.get("execution_checkpoint"))
+        if not fresh:
+            result["expected_outcome"] = None
+            result["blocking_gaps"] = []
+    elif job["state"] in ("ready", "reviewing") and (context / "manifest.json").is_file():
         import review_workspace as workspace
         manifest = workspace.load(context)
         draft_file = context / "draft.json"
@@ -267,6 +282,11 @@ def status_summary(value):
               "failure_kind": value.get("failure_kind"), "retained_until_epoch": value.get("retained_until_epoch"),
               "details": {"command": "status", "runtime_root": value.get("runtime_root"),
                           "request_id": value["request_id"]}}
+    result.update(check_current=value.get("check_current", False), draft_sha256=value.get("draft_sha256"), status_revision=value.get("status_revision"),
+                  last_check_at=value.get("last_check_at"), updated_at=value.get("updated_at"),
+                  execution_checkpoint=brief(value.get("execution_checkpoint")))
+    result["checkpoint_current"] = bool(value.get("execution_checkpoint") and value.get("draft_sha256") ==
+                                        value["execution_checkpoint"].get("draft_sha256"))
     if value["state"] == "published":
         action = "finish" if value.get("cleanup_pending") else "open-report"
     elif value["state"] in TERMINAL:
@@ -310,7 +330,8 @@ def capabilities():
                          "request_preflight": True,
                          "incremental_resume": True,
                           "publication_retry": True, "batch_artifact_view": True, "summary_status": True,
-                          "validation_progress": True,
+                          "validation_progress": True, "atomic_authoring": True, "native_checkpoint": True,
+                          "shared_read_contents": True,
                          "launch_preflight": True, "read_only_inspection": True,
                          "completion_preview": True, "scope_notes": True,
                          "phase_metrics": True}}
@@ -433,6 +454,7 @@ def operation_preflight(operations, manifest=None, line_counts=None):
         "patch": {"repo", "path", "line_start", "line_end"},
         "register-contract": {"contract"},
         "search": {"query", "repo", "source", "contract", "change_id"},
+        "author": {"expected_draft_sha256", "updates", "checkpoint"},
         "view": {"artifact", "pointer", "offset", "page_size", "string_offset"},
     }
     seen_ids = set()
@@ -739,6 +761,10 @@ def check(root, identifier):
                 fields.update(last_check_at=now(), remaining_counts=checked.get("remaining_counts", {}),
                               expected_outcome=checked.get("expected_outcome"),
                               blocking_gaps=safe(checked.get("blocking_gaps", [])))
+                context = job_context(root, identifier, job)
+                fields["last_check"] = {"draft_sha256": coordination.file_digest(context / "draft.json"),
+                                        "manifest_sha256": coordination.file_digest(context / "manifest.json"),
+                                        "diagnostics": safe(checked), "remaining": checked.get("remaining", {})}
             update(root, identifier, **fields)
         except (OSError, ValueError, KeyError):
             pass
@@ -947,7 +973,7 @@ def start(args):
                           "read": {"id": "read-1", "op": "read", "repo": selected["id"], "source": "head",
                                    "path": "<fixed relative path>", "around_line": 1, "context_lines": 20},
                           "contract": {"id": "<unique C-id>", "root": "<one required_coverage row>",
-                                       "kind": "behavior", "search_scope": "workspace", "symbol": "<exact frozen symbol>",
+                                       "kind": "behavior", "search_scope": "repo-local", "symbol": "<exact frozen symbol>",
                                        "evidence": {"repo": selected["id"], "source": "head", "ref": "<fixed SHA>",
                                                     "path": "<path>", "line_start": 1, "line_end": 1},
                                        "search_terms": [{"query": "<exact symbol>", "reason": "<contract meaning>"},
@@ -957,6 +983,14 @@ def start(args):
                            "local_search": {"id": "local-search-1", "op": "search",
                                             "change_id": "<boundary change ID>", "query": "<local use>"}},
                  "authoring_schema": "merge-reviewer-authoring/v1"}
+        if args.draft_format == "compact":
+            guide["draft_sha256"] = coordination.file_digest(context / "draft.json")
+            guide["step"]["operations"].append("author")
+            guide["step"]["author"] = {"id": "save-chain-1", "op": "author",
+                "expected_draft_sha256": guide["draft_sha256"],
+                "updates": {"summary": "<engineering conclusion; add judged compact rows here>"},
+                "checkpoint": {"completed_operation_ids": [], "unread_evidence": [],
+                               "open_questions": [], "next_action": "<next concrete review action>"}}
         coordination.atomic(context / "start.json", guide)
         active.finish_phase()
         evidence_receipt = capture_integrity_receipt(context, manifest)
@@ -1107,6 +1141,17 @@ def compact(value, context):
                     "operations": [{**item, "saved": True, "result_returned": True} for item in value["operations"]]}
     else:
         returned = value
+    source_requires_artifact = len(review_runtime.canonical(returned)) >= LIMIT
+    # Share equal blob bodies even when the entire response fits in one page.
+    projected = step_projection(value)
+    if projected and len(projected.get("contents", {})) < sum(
+            isinstance(row.get("result", {}).get("lines"), list) and "sha256" in row.get("result", {})
+            for row in value["operations"]):
+        returned = {**projected, "schema": "MergeReviewEvidenceStep/v1", "evidence_complete": True,
+                    "projection_complete": True, "review_status": "agent-determined",
+                    "operations": [{**item, "saved": True, "result_returned": True} for item in projected["operations"]]}
+        if source_requires_artifact:
+            returned["artifact"] = review_runtime.store_view(context, value)
     if len(review_runtime.canonical(returned)) < LIMIT:
         return returned
     artifact = review_runtime.store_view(context, value)
@@ -1260,6 +1305,10 @@ def step(root, identifier, operations, *, requests_file=None):
                 line_counts = dict(job.get("line_counts", {}))
                 for completed in result.get("operations", []):
                     read = completed.get("result", {})
+                    if (isinstance(read, dict) and read.get("saved") and isinstance(read.get("checkpoint"), dict)
+                            and coordination.file_digest(context / "draft.json") == read.get("draft_sha256")):
+                        job = update(root, identifier, execution_checkpoint=read["checkpoint"],
+                                     first_draft_at=job.get("first_draft_at") or now())
                     if not isinstance(read, dict) or not isinstance(read.get("lines"), list) or read.get("binary"):
                         continue
                     total = read.get("total_lines")

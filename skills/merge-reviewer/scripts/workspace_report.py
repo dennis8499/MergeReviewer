@@ -780,7 +780,8 @@ def render(result, manifest):
     seed = repository(manifest, manifest["selected_repo"])
     native = seed["native"]
     engineering = result.get("report_layout") == REPORT_LAYOUT
-    lines = [f"**{result['recommendation']}**｜{result['review_status']}。{result['summary']}", "",
+    lines = [f"**{result['recommendation']}**｜{result['review_status']}。"
+             f"確認 {len(result['findings'])} 項問題；必要證據缺口 {len(result['limitations'])} 項。", "",
              "問題數量：" + "／".join(f"{p} {result['priority_counts'][p]}" for p in PRIORITIES), ""]
     if engineering:
         lines[:0] = [f"# 合併審查: {seed['name']}", "", "## 審查結論", ""]
