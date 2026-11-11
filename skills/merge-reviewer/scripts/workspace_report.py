@@ -216,9 +216,15 @@ def validate_search_binding(record, manifest, contracts, enabled):
         require(identifier in contracts and record.get("query") in
                 {term["query"] for term in contracts[identifier]["search_terms"]},
                 "search is not bound to a relevant changed contract")
-        if contract_boundary.scope(manifest, contracts[identifier]) == "repo-local":
+        scope = contract_boundary.scope(manifest, contracts[identifier])
+        if scope == "repo-local":
             require(record.get("repo") == contracts[identifier]["evidence"]["repo"],
                     "repo-local search ledger cannot include another Repo")
+        elif scope == "identified-repos":
+            allowed = {contracts[identifier]["evidence"]["repo"],
+                       *contracts[identifier].get("candidate_repos", [])}
+            require(record.get("repo") in allowed,
+                    "identified-repos search ledger cannot include an unnamed Repo")
 
 
 def validate_sync_records(manifest, repos):
@@ -630,6 +636,10 @@ def _validate(draft, manifest, context, api):
                     bound = [searches[s] for s in ids if searches[s]["status"] == "complete" and
                              searches[s]["source"] == source_name and searches[s].get("contract_id") == contract_id]
                     draft_require(bound, "candidate must search every changed/propagated contract in each review source")
+                    if contract_boundary.scope(manifest, contract) == "identified-repos":
+                        required_terms = {term["query"] for term in contract["search_terms"]}
+                        draft_require(required_terms <= {row["query"] for row in bound},
+                                      "identified consumer needs every fixed contract search term")
                     if state == "not-related":
                         draft_require(len({s["query"] for s in bound}) >= 2,
                                 "exclusion needs alternate names or contract terms; one negative search is insufficient")

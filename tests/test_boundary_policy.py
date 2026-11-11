@@ -61,6 +61,77 @@ class BoundaryTests(ReviewFixture):
         self.assertFalse(result["review_complete"])
         self.assertEqual("incomplete", result["extension_status"])
 
+    def test_new_v2_contracts_must_choose_a_scope(self):
+        context, manifest = self.capture(policy="boundary-contracts/v2")
+        draft = self.draft(context, manifest)
+        parent = manifest["changed_contracts"][0]
+        child = copy.deepcopy(parent)
+        child.update(id="C-missing-scope", parent_ids=[parent["id"]])
+        child.pop("search_scope", None)
+        with self.assertRaisesRegex(ValueError, "declare search_scope explicitly"):
+            workspace.register_contract(context, manifest, child, api)
+
+    def test_legacy_v2_contract_without_scope_replays_as_workspace(self):
+        context, manifest = self.capture(policy="boundary-contracts/v2")
+        self.draft(context, manifest)
+        contract = copy.deepcopy(manifest["changed_contracts"][0])
+        contract.pop("search_scope")
+        prefix = {**manifest, "changed_contracts": []}
+        checked = workspace.validate_contract(context, prefix, contract, api)
+        self.assertNotIn("search_scope", checked)
+        self.assertEqual("workspace", contract_boundary.scope(manifest, checked))
+
+    def test_identified_repo_contract_searches_only_named_consumers(self):
+        unrelated = self.make_repo("unrelated")
+        self.commit("contract = 'new'\n", repository=self.consumer)
+        context, manifest = self.capture(policy="boundary-contracts/v2")
+        draft = self.draft(context, manifest)
+        consumer_id = next(row["id"] for row in manifest["repositories"]
+                           if row["path"] == str(self.consumer))
+        unrelated_id = next(row["id"] for row in manifest["repositories"]
+                            if row["path"] == str(unrelated))
+        contract = manifest["changed_contracts"][0]
+        contract.update(search_scope="identified-repos", candidate_repos=[consumer_id])
+        self.attach_consumer(draft, manifest, self.consumer)
+        consumer_searches = [row for row in manifest["searches"] if row["repo"] == consumer_id]
+        self.assertGreaterEqual(len({row["query"] for row in consumer_searches}), 2)
+        manifest["searches"] = consumer_searches
+        for row in draft["repository_coverage"]:
+            if row["repo"] == consumer_id:
+                row["search_ids"] = [search["id"] for search in consumer_searches]
+            elif row["repo"] == unrelated_id:
+                row["search_ids"] = []
+        workspace.save(context, manifest)
+        with self.assertRaisesRegex(ValueError, "identified-repos search is limited"):
+            workspace.search(context, manifest, contract["symbol"], [unrelated_id], api,
+                             contract_id=contract["id"])
+        result = workspace_report.validate(draft, manifest, context)
+        self.assertTrue(result["review_complete"])
+        self.assertEqual("complete", result["extension_status"])
+        self.assertFalse(any(row["repo"] == unrelated_id for row in manifest["searches"]))
+
+    def test_missing_identified_consumer_remains_an_explicit_gap(self):
+        unrelated = self.make_repo("unrelated")
+        context, manifest = self.capture(policy="boundary-contracts/v2")
+        draft = self.draft(context, manifest)
+        unrelated_id = next(row["id"] for row in manifest["repositories"]
+                            if row["path"] == str(unrelated))
+        contract = manifest["changed_contracts"][0]
+        contract.update(search_scope="identified-repos", candidate_repos=[])
+        manifest["searches"] = []
+        for row in draft["repository_coverage"]:
+            row["search_ids"] = []
+        review = draft["boundary_reviews"][0]
+        review.update(outcome="unresolved",
+                      reason="A required consumer is identified, but its implementation was not supplied.",
+                      evidence=[], search_ids=[], boundary_contract_ids=[contract["id"]])
+        workspace.save(context, manifest)
+        result = workspace_report.validate(draft, manifest, context)
+        self.assertFalse(result["review_complete"])
+        self.assertEqual("incomplete", result["extension_status"])
+        self.assertIn("required consumer", " ".join(result["limitations"]))
+        self.assertFalse(any(row["repo"] == unrelated_id for row in manifest["searches"]))
+
     def export(self, context, manifest, draft):
         parent = manifest["changed_contracts"][0]
         child = workspace.register_contract(context, manifest, {

@@ -190,8 +190,28 @@ def inspect(draft, manifest, *, line_counts=None):
     need(set(nodes) == reached, "draft.impact_coverage", "impact graph has disconnected nodes")
     for identifier, contract in contracts.items():
         contract_place = "manifest.changed_contracts[" + str(next(i for i, item in enumerate(manifest["changed_contracts"]) if item is contract)) + "]"
-        need(isinstance(boundary.scope(manifest, contract), str) and boundary.scope(manifest, contract) in boundary.SCOPES,
+        contract_scope = boundary.scope(manifest, contract)
+        need(isinstance(contract_scope, str) and contract_scope in boundary.SCOPES,
              contract_place + ".search_scope", "invalid search_scope")
+        if contract_scope == "identified-repos":
+            need(manifest.get("contract_scope_policy") == boundary.V2_POLICY,
+                 contract_place + ".search_scope", "identified-repos scope requires boundary-contracts/v2")
+            candidates = contract.get("candidate_repos")
+            valid_candidates = (isinstance(candidates, list)
+                                and all(isinstance(candidate, str) for candidate in candidates)
+                                and len(candidates) == len(set(candidates))
+                                and all(candidate in repos for candidate in candidates))
+            need(valid_candidates, contract_place + ".candidate_repos",
+                 "identified-repos scope needs unique captured candidate Repo IDs")
+            if valid_candidates:
+                anchor = contract.get("evidence")
+                owner = anchor.get("repo") if isinstance(anchor, dict) else None
+                need(owner not in candidates,
+                     contract_place + ".candidate_repos",
+                     "identified candidate Repos must exclude the contract evidence Repo")
+        else:
+            need("candidate_repos" not in contract, contract_place + ".candidate_repos",
+                 "candidate_repos is only valid with identified-repos scope")
         evidence([contract.get("evidence", {})], contract_place + ".evidence", indexed=False)
         if not contract.get("parent_ids"):
             root = contract.get("root")
@@ -278,6 +298,11 @@ def inspect(draft, manifest, *, line_counts=None):
             bound = [searches[i] for i in ids if i in searches and searches[i].get("contract_id") == identifier
                      and searches[i].get("status") == "complete" and searches[i].get("source") == repos.get(repo_id, {}).get("review_source")]
             need(bool(bound), place + ".search_ids", "missing contract search: " + identifier)
+            if boundary.scope(manifest, contract) == "identified-repos":
+                required_terms = {term["query"] for term in contract.get("search_terms", [])
+                                  if isinstance(term, dict) and isinstance(term.get("query"), str)}
+                need(required_terms <= {item.get("query") for item in bound},
+                     place + ".search_ids", "identified consumer needs every fixed contract search term: " + identifier)
             if row.get("status") == "not-related":
                 need(len({item["query"] for item in bound}) >= 2, place + ".search_ids", "exclusion needs alternate terms: " + identifier)
     required_parents = {item["id"] for item in manifest.get("required_merge_views", [])}

@@ -1060,15 +1060,32 @@ def contract_rows(manifest):
     return {c["id"]: c for c in values}
 
 
-def validate_contract(context, manifest, item, api, *, cache=None):
+def validate_contract(context, manifest, item, api, *, cache=None, new_registration=False):
     """Anchor reviewer-selected contracts before searching their names or aliases."""
     require(manifest.get("schema") == CONTEXT, "contract registration needs context v3")
     require(manifest.get("extension_enabled") is True, "contract registration applies only to multi-Repo extension")
     require(isinstance(item, dict), "contract must be an object")
     active_boundary = contract_boundary.enabled(manifest, require)
+    search_scope = item.get("search_scope", "workspace")
     if active_boundary:
-        require(isinstance(item.get("search_scope", "workspace"), str)
-                and item.get("search_scope", "workspace") in contract_boundary.SCOPES, "invalid contract search_scope")
+        if new_registration and manifest.get("contract_scope_policy") == contract_boundary.V2_POLICY:
+            require("search_scope" in item,
+                    "new boundary-contracts/v2 contracts must declare search_scope explicitly")
+        require(isinstance(search_scope, str) and search_scope in contract_boundary.SCOPES,
+                "invalid contract search_scope")
+        if search_scope == "identified-repos":
+            require(manifest.get("contract_scope_policy") == contract_boundary.V2_POLICY,
+                    "identified-repos scope requires boundary-contracts/v2")
+            candidates = item.get("candidate_repos")
+            known = {row.get("id") for row in manifest.get("repositories", []) if isinstance(row, dict)}
+            require(isinstance(candidates, list)
+                    and all(isinstance(candidate, str) for candidate in candidates)
+                    and len(candidates) == len(set(candidates))
+                    and all(candidate in known for candidate in candidates),
+                    "identified-repos scope needs unique captured candidate_repos IDs")
+        else:
+            require("candidate_repos" not in item,
+                    "candidate_repos is only valid with identified-repos scope")
     contracts = contract_rows(manifest)
     identifier = item.get("id")
     require(isinstance(identifier, str) and identifier and identifier not in contracts, "duplicate/empty contract ID")
@@ -1083,6 +1100,9 @@ def validate_contract(context, manifest, item, api, *, cache=None):
     evidence = item.get("evidence")
     require(isinstance(evidence, dict), "contract needs one frozen evidence anchor; evidence must be an object, not an array")
     repo = repository(manifest, evidence.get("repo"))
+    if search_scope == "identified-repos":
+        require(repo["id"] not in item["candidate_repos"],
+                "identified candidate_repos must exclude the contract's evidence Repo")
     source, path = evidence.get("source"), evidence.get("path")
     require(source in repo["sources"] and evidence.get("ref") == repo["sources"][source]["ref"], "contract source identity differs")
     raw = cache.read(repo, source, path) if cache is not None else fixed_bytes(context, repo, source, path, api)
@@ -1124,6 +1144,8 @@ def validate_contract(context, manifest, item, api, *, cache=None):
             t["reason"].strip() for t in terms), "contract search terms need query and relevance reason")
     require(len({t["query"] for t in terms}) == len(terms) and item["symbol"] in {t["query"] for t in terms},
             "search terms need the exact symbol and unique queries")
+    if search_scope == "identified-repos":
+        require(len(terms) >= 2, "identified-repos scope needs two evidence-based contract terms")
     for term in terms:
         if term["query"] in text:
             continue
@@ -1146,7 +1168,7 @@ def validate_contract(context, manifest, item, api, *, cache=None):
 
 
 def register_contract(context, manifest, item, api, *, cache=None):
-    value = validate_contract(context, manifest, item, api, cache=cache)
+    value = validate_contract(context, manifest, item, api, cache=cache, new_registration=True)
     manifest["changed_contracts"].append(value)
     save(context, manifest)
     return value
@@ -1176,13 +1198,21 @@ def search(context: Path, manifest: dict, query: str, repo_ids: list[str] | None
         contract = contract_rows(manifest).get(contract_id)
         require(contract and query in {t["query"] for t in contract["search_terms"]},
                 "search query is unrelated to the registered contract")
-    local_owner = (contract["evidence"]["repo"] if contract and
-                   contract_boundary.scope(manifest, contract) == "repo-local" else None)
+    contract_scope = contract_boundary.scope(manifest, contract) if contract else None
+    local_owner = contract["evidence"]["repo"] if contract_scope == "repo-local" else None
+    identified_owner = contract["evidence"]["repo"] if contract_scope == "identified-repos" else None
+    identified_repos = contract.get("candidate_repos", []) if identified_owner else []
     selected = repo_ids or ([change["root"]["repo"]] if change else
-                            [local_owner] if local_owner else [r["id"] for r in manifest["repositories"]])
+                            [local_owner] if local_owner else
+                            [identified_owner, *identified_repos] if identified_owner else
+                            [r["id"] for r in manifest["repositories"]])
     require(not change or selected == [change["root"]["repo"]], "change search must stay in its own Repo")
     require(not local_owner or selected == [local_owner], "repo-local searches use only their evidence Repo")
     require(len(selected) == len(set(selected)), "duplicate search Repo IDs")
+    if identified_owner:
+        allowed = {identified_owner, *identified_repos}
+        require(all(repo_id in allowed for repo_id in selected),
+                "identified-repos search is limited to its evidence Repo and candidate_repos")
     results = []
     for repo_id in selected:
         import review_coordinator

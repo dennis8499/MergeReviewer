@@ -81,6 +81,7 @@ class ReviewFixture(unittest.TestCase):
                 terms = list(dict.fromkeys([symbol, line]))
                 workspace.register_contract(context, manifest, {
                     "id": contract_id, "root": row, "kind": "behavior", "symbol": symbol,
+                    "search_scope": "workspace",
                     "evidence": copy.deepcopy(evidence),
                     "search_terms": [{"query": term, "reason": "固定變更行中的契約名稱及上下文。"} for term in terms],
                 }, api)
@@ -123,7 +124,8 @@ class ReviewFixture(unittest.TestCase):
                 root = change["root"]
                 row = next(item for item in coverage if all(item.get(key) == value for key, value in root.items()))
                 contracts = [contract["id"] for contract in manifest["changed_contracts"]
-                             if contract["root"] == root and contract.get("search_scope", "workspace") == "workspace"]
+                             if contract["root"] == root and contract.get("search_scope", "workspace") in
+                             ("identified-repos", "workspace")]
                 resolved = row["status"] == "reviewed" and bool(contracts)
                 boundaries.append({"change_id": change["id"], "outcome": "propagates" if resolved else "unresolved",
                                    "reason": "測試作者追查固定契約。" if resolved else "必要變更尚未完成。",

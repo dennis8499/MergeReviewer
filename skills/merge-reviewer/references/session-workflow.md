@@ -4,7 +4,7 @@
 
 ## 開始與恢復
 
-0.21.0 capabilities 增加 `features.launch_preflight`、`read_only_inspection`、`completion_preview`、`scope_notes`，均為 true。既有 `request_preflight` 只代表 step 請求預檢，不能用來推定啟動預檢能力。
+0.21.1 保留 `features.launch_preflight`、`read_only_inspection`、`completion_preview`、`scope_notes`，並在 boundary v2 明確要求新契約指定搜尋範圍。既有 `request_preflight` 只代表 step 請求預檢，不能用來推定啟動預檢能力。
 
 首次啟動用 `preflight` 取代相同命令中的 `start`，保留其餘參數。回應 `MergeReviewPreflight/v1` 含 `valid`、`errors[].code/pointer/message`、`canonical_inputs` 與 `selected_repo`；exit 0 為有效、exit 3 為輸入需修正。它只讀工作區、分支設定及 runtime 身份，不 fetch、不建立 runtime／job／lock／報告，也不以預檢代替 start 的實際寫入測試。遠端分支可用性仍待 start 同步確認。fresh start 自行再預檢，失敗不消耗 request ID；既存 ID 依固定輸入及快照恢復，不重驗可變工作區。
 
@@ -64,7 +64,7 @@ job `progress` 使用 `completed/total`、`operation_id`、`operation` 與 `at`�
 
 Repo 內搜尋可用 `change_id` 指向必要變更；單 Repo 搜尋也可省略 contract。跨 Repo 須先註冊契約，再搜尋及閱讀 consumer；發現間接輸出契約才建立下一輪。
 
-契約的 `search_scope` 可為 `repo-local|workspace`；省略時為 workspace。判定及草稿例子見[契約邊界](contract-boundaries.md)。同來源的安全查詢可合併執行，每個查詢仍有獨立 ledger；特殊輸入以單查詢處理。finish 忽略閱讀階段的搜尋快取並重新驗證。
+新 v2 契約必須明確指定 `search_scope=repo-local|identified-repos|workspace`。`identified-repos` 另填 `candidate_repos`，只搜尋固定證據點名的 Repo；舊 context 若省略範圍仍保守視為 workspace。判定及草稿例子見[契約邊界](contract-boundaries.md)。同來源的安全查詢可合併執行，每個查詢仍有獨立 ledger；特殊輸入以單查詢處理。finish 忽略閱讀階段的搜尋快取並重新驗證。
 
 ## artifact 續讀
 

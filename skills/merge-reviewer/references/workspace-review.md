@@ -163,9 +163,9 @@ python "<skill-dir>/scripts/review_workspace.py" batch-register-contract --conte
 同一份結果另加 `impact_coverage` 與 `repository_coverage`，追查必要的直接／間接影響；其他儲存庫不成為第二起點。
 
 1. 對傳播到邊界的變更，從實際變更行擷取 API、事件、資料、套件、設定或行為契約；無法理解的路徑保留未完成。
-2. 契約 JSON 包含 `id`、`root`（一筆 `required_coverage`）、`kind=api|event|package|data|table|config|behavior`、`symbol`、`evidence`、`search_terms`（`query`／`reason`）。workspace 契約初次註冊即選至少兩個不同且在固定 anchor 中出現的契約詞，包含精確 symbol 與相關欄位／Topic／API 名稱，供無關 Repo 的替代詞排除；repo-local 至少保留 exact symbol，其完成義務見契約邊界。必要時擴至最小相關行段；別名需自己的固定證據（`evidence`）。註冊後以契約 ID 搜尋，所有紀錄由 helper 保存，不直接修改 manifest 或搜尋 ledger。
+2. 契約 JSON 包含 `id`、`root`（一筆 `required_coverage`）、`kind=api|event|package|data|table|config|behavior`、`symbol`、`evidence`、`search_terms`（`query`／`reason`）及明確的 `search_scope=repo-local|identified-repos|workspace`。`identified-repos` 另以 `candidate_repos` 列出固定證據點名的 Repo ID；它與 workspace 範圍都需至少兩個固定錨點支持的契約詞，repo-local 至少保留 exact symbol。必要時擴至最小相關行段；別名需自己的固定證據（`evidence`）。註冊後以契約 ID 搜尋，所有紀錄由 helper 保存，不直接修改 manifest 或搜尋 ledger。
 3. 閱讀呼叫端／消費端，發現延伸契約時加上 `parent_ids` 並繼續查找，直到必要鏈路查清或標為 `unresolved`。預覽契約使用合併預覽來源。
-4. 每個儲存庫記錄 `seed|related|not-related|unresolved`、原因及 `search_ids`。每個跨儲存庫契約都要搜尋候選的固定主來源；排除需至少兩個不同且相關的詞，解釋符合／不符合結果。
+4. 每個儲存庫記錄 `seed|related|not-related|unresolved`、原因及 `search_ids`。repo-local 不要求 peer 搜尋；identified-repos 只搜尋 `candidate_repos`；workspace 才搜尋每個候選 Repo 的固定主來源。對已搜尋範圍的排除需至少兩個不同且相關的詞，解釋符合／不符合結果。
 5. 功能鏈節點包含 `id`、`repo`、`source`、`path`、`status=reviewed|not-reviewed`、`reason`、`contract_ids`、`related_to`、`evidence`。變更覆蓋紀錄（`coverage`）的 `impact_ids` 連到自己的固定根，涵蓋直接註冊的變更契約；延伸契約在自身來源節點引用證據，不需回填成來源檔案的契約。所有節點從變更根可達，循環去重。
 6. 必要外部消費端缺失時，在相關節點留下 `not-reviewed` 與原因，不捏造儲存庫 ID。必要來源、節點或儲存庫未完成時，整體仍為「審查未完成」。
 

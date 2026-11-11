@@ -1,16 +1,16 @@
 # Merge Reviewer
 
-`0.21.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查所選變更的相關契約及消費端，產生繁體中文精簡 Merge Report。
+`0.21.1` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查固定證據指出的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
 目前 Skills root 已安裝 `output-style` 時優先使用其情境風格；沒有時沿用 [Concise 寫作規則](skills/merge-reviewer/references/report-style.md#共用-concise-規則)。必要報告欄位、證據、缺口及錯誤資訊完整保留；要求詳解時完整說明。
 
-本版修正實際審查紀錄中的完成度預覽、空理由渲染及操作進度問題，新增不建立 job 的啟動預檢與唯讀檢視。`scope_notes` 記錄範圍說明，必要缺口仍放 `limitations`；先補查可取得的證據，確實受阻才發布未完成報告。介面、相容性及驗收見 [0.21.0 發布說明](docs/releases/v0.21.0.md)。
+本版明確區分 Repo 內契約、指定消費端與整個工作區契約，避免僅因 `CONTRACT.md` 或 public 函式而搜尋無關 Repo；指定消費端仍以固定 Repo 搜尋，必要實作缺失仍保留未完成。另保留 0.21.0 的完成度預覽、空理由渲染、啟動預檢與唯讀檢視。介面、相容性及驗收見 [0.21.1 發布說明](docs/releases/v0.21.1.md)。
 
 ## 安裝與第一次使用
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.21.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
+從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.21.1.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
 在 Codex 對話輸入：
 
@@ -62,7 +62,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 python -m pip install -r requirements-dev.txt
 python -X utf8 -B -m unittest discover -s tests -v
 python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
-python scripts/package_release.py --tag v0.21.0
+python scripts/package_release.py --tag v0.21.1
 ~~~
 
 CI 使用 Windows 的 Python 3.10 與 3.14 兩個矩陣格；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及必要 Python helpers，不包含測試及舊收據 runtime。

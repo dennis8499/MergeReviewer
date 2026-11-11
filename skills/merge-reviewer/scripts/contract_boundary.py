@@ -3,7 +3,7 @@ from __future__ import annotations
 
 POLICY = "boundary-contracts/v1"
 V2_POLICY = "boundary-contracts/v2"
-SCOPES = {"repo-local", "workspace"}
+SCOPES = {"repo-local", "identified-repos", "workspace"}
 
 
 def enabled(manifest, require):
@@ -53,7 +53,7 @@ def validate_v2(draft, manifest, contracts, nodes, graph, searches, evidence_lis
         keys = evidence_list(review, outcome != "unresolved")
         require(all(key[0] == root["repo"] for key in keys), "boundary evidence must use its own Repo")
         relevant = {i for i, contract in contracts.items() if contract.get("root") == root
-                    and scope(manifest, contract) == "workspace"}
+                    and scope(manifest, contract) in ("identified-repos", "workspace")}
         if outcome == "unresolved":
             require(set(child_ids) <= relevant, "unresolved boundary names unknown workspace contracts")
             gaps.append(identifier + ": " + review["reason"])
@@ -79,7 +79,10 @@ def validate_v2(draft, manifest, contracts, nodes, graph, searches, evidence_lis
 
 def obligations(manifest, contracts, repo_id):
     return {identifier: contract for identifier, contract in contracts.items()
-            if scope(manifest, contract) == "workspace" and contract["evidence"]["repo"] != repo_id}
+            if contract["evidence"]["repo"] != repo_id and
+            (scope(manifest, contract) == "workspace" or
+             scope(manifest, contract) == "identified-repos" and
+             repo_id in contract.get("candidate_repos", []))}
 
 
 def validate(draft, manifest, contracts, nodes, graph, searches, evidence_list, require, *, only=None):

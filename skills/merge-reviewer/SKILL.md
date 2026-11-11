@@ -50,7 +50,7 @@ python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" -
 
 逐一判斷 `required_coverage`、`required_merge_views`，讀取基礎版本、最終內容及必要 parent。每完成一條功能／契約鏈，就把判斷、固定證據引用與未完成項寫入草稿；恢復時由 `status` 的 `remaining` 接續未完成項。二進位讀取會回傳大小與 hash、但不提供文字；無法可靠解碼的文字會標示 `lossy=true`，兩者都不能當成已讀懂。刪除 API／欄位但檔案保留時，舊符號錨定本次比較左側的實際刪除行，最終內容仍須覆蓋；來源與影響節點範例見[操作範例](references/session-workflow.md#刪除契約與影響圖)。改名及 submodule 也需明確判定。`ancestor-noop/v1` 的空集合依 helper 推導。
 
-多 Repo 逐筆完成 `boundary_changes`：`contained` 引用變更及必要使用／輸出證據；`propagates` 建立實際 workspace 契約與連通影響圖，追查直接及間接消費端；不確定則 `unresolved`。Repo 內搜尋可綁定 `change_id`，跨 Repo 搜尋須綁定已註冊契約。副檔名、private 名稱或零命中不足以排除外部影響；每個其他 Repo 仍保留判定。
+多 Repo 先按[契約邊界](references/contract-boundaries.md)明確選擇 `repo-local`、`identified-repos` 或 `workspace` 範圍；Repo 內行為契約不會只因檔名、public 函式或泛稱 export 而擴成 workspace 契約。`propagates` 只追查固定證據指出的消費端；未知但必要的消費端保持 `unresolved`。每個其他 Repo 仍有 disposition。
 
 回應上限 24 KiB，全文與命中落盤；逐操作查看是否完整回傳，必要時使用純讀取 `view` 命令按 artifact、JSON pointer 及 offset 續讀。能力支援 `batch_artifact_view` 時，用 `view --requests-file` 合併獨立續讀；批次 `next_index` 表示尚未回傳的請求，各頁的 continue 仍須讀完。不要把翻頁包成 step 操作。敏感值在展示內容中遮罩，行號與原始內容 hash 仍保留。`evidence_complete` 表示保存，語意「已審查」由 agent 判斷；必要內容未讀完不能標已審查。定位命中可用 `around_line`。
 
