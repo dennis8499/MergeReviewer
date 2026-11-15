@@ -5,6 +5,7 @@ import copy
 import re
 
 import review_coordinator as coordination
+import review_checkpoint
 
 ROW_KEYS = {"coverage": "change_id", "boundary_reviews": "change_id", "merge_parent_review": "id",
             "repository_coverage": "repo", "impact_coverage": "id", "findings": "id"}
@@ -15,20 +16,26 @@ def apply(context, manifest, operation):
     from review_flow import diagnostics, now
     from review_workspace import require, safe_path
 
-    require(set(operation) <= {"id", "op", "expected_draft_sha256", "updates", "checkpoint"}, "unknown author argument")
+    require(set(operation) <= {"id", "op", "expected_draft_sha256", "expected_checkpoint_revision", "updates", "checkpoint"}, "unknown author argument")
     expected = operation.get("expected_draft_sha256")
     require(isinstance(expected, str) and re.fullmatch(r"[a-f0-9]{64}", expected), "author needs expected_draft_sha256")
     identifier = operation["id"]
     draft_path = safe_path(context, "draft.json")
     journal_path = safe_path(context, "author-" + identifier + ".json")
     fingerprint = coordination.digest(operation)
+    current_checkpoint = review_checkpoint.load(context)
     if journal_path.exists():
         journal = coordination.read_json(journal_path)
         require(journal["fingerprint"] == fingerprint, "operation id already has different input")
+        finish_checkpoint = review_checkpoint.restore(context, journal, current_checkpoint)
         current = coordination.file_digest(draft_path)
         require(current in (journal["before"], journal["after"]), "draft changed since author transaction")
-        if current == journal["before"]:
+        if not finish_checkpoint and "checkpoint_before" in journal:
+            require(current == journal["after"], "draft changed since committed author transaction")
+        if current == journal["before"] and current != journal["after"]:
             coordination.atomic(draft_path, journal["draft"])
+        if finish_checkpoint:
+            coordination.atomic(review_checkpoint.location(context), journal["result"]["checkpoint"])
         return journal["result"]
 
     require(coordination.file_digest(draft_path) == expected, "draft hash conflict; read current draft before authoring")
@@ -55,7 +62,15 @@ def apply(context, manifest, operation):
             candidate[field] = values
     checkpoint = operation.get("checkpoint", {})
     require(isinstance(checkpoint, dict) and set(checkpoint) <= {
-        "completed_operation_ids", "unread_evidence", "open_questions", "next_action"}, "invalid checkpoint")
+        "completed_operation_ids", "unread_evidence", "open_questions", "next_action", "paging"}, "invalid checkpoint")
+    expected_revision = operation.get("expected_checkpoint_revision")
+    if expected_revision is not None or "paging" in checkpoint:
+        require(type(expected_revision) is int and expected_revision >= 0,
+                "paging author needs expected_checkpoint_revision as a nonnegative integer")
+        require(expected_revision == review_checkpoint.revision(current_checkpoint),
+                "checkpoint revision conflict; read current checkpoint before authoring")
+    if "paging" in checkpoint:
+        require(isinstance(checkpoint["paging"], dict), "checkpoint paging must be an object")
     for field in ("completed_operation_ids", "unread_evidence", "open_questions"):
         values = checkpoint.get(field, [])
         require(isinstance(values, list) and len(values) <= 1000 and all(
@@ -73,13 +88,14 @@ def apply(context, manifest, operation):
     import os
     # Match git_network_lease._atomic_json, including platform newline translation.
     after = hashlib.sha256((json.dumps(candidate, separators=(",", ":")) + os.linesep).encode("utf-8")).hexdigest()
+    at = now()
+    saved_checkpoint = review_checkpoint.prepare(context, manifest, checkpoint, current_checkpoint,
+                                                 draft_sha256=after, at=at)
     journal = {"fingerprint": fingerprint, "before": expected, "draft": candidate,
-               "checkpoint": checkpoint, "at": now()}
+               "checkpoint_before": current_checkpoint, "at": at}
     result = {"saved": True, "draft_sha256": after, "updated_fields": list(updates),
-              "diagnostics": inspected, "checkpoint": {**checkpoint, "request_id": context.name,
-              "draft_sha256": after, "source_identity": coordination.digest([
-                  {"id": row["id"], "sources": row.get("sources", {})} for row in manifest["repositories"]]),
-              "at": journal["at"]}}
+              "diagnostics": inspected, "checkpoint": saved_checkpoint}
     coordination.atomic(journal_path, {**journal, "after": after, "result": result})
     coordination.atomic(draft_path, candidate)
+    coordination.atomic(review_checkpoint.location(context), saved_checkpoint)
     return result

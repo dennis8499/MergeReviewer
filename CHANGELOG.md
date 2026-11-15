@@ -1,5 +1,12 @@
 # Change log
 
+## 0.23.0 - 2026-11-15
+
+- 新增明確確認的分頁狀態與批次去重、blocked 修復項、checkpoint revision／中斷恢復、完整分頁 artifact 引用、純讀 operation schema 與子命令幫助。保留舊陣列 view、固定來源及首次發布完整驗證。
+- 修正 runtime 所有權建立中的啟動預檢競態，新增驗證活動累積計時。分頁與恢復回歸、五組 helper 配對及選定模型品質情境的證據見[驗證紀錄](docs/validation/review-efficiency-20261115.md)；量測不代表整體模型審查加速。
+
+- Output Style 改為使用者明確要求或選取時才載入；一般審查沿用原報告風格，保留報告結構、固定證據與人工核對契約。
+
 ## 0.22.0
 
 修正跨 Repo 搜尋預抓範圍，新增原子 compact 保存與原生 checkpoint、便宜狀態摘要及相同 blob 回應共用。首次發布保留完整證據驗證。

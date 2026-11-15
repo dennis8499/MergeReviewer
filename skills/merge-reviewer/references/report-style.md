@@ -5,7 +5,7 @@ description: 結論先行的繁體中文（zh-TW）審查報告
 
 # Merge Report 寫作風格
 
-目前執行 Skill 的 agent 統一依 Codex Code Review 準則判斷問題與 P0–P3；呈現風格不重新定級。已安裝 `output-style/SKILL.md` 時依情境使用，其餘遵循本頁；報告結構、證據與人工核對契約依下列規則保留。
+目前執行 Skill 的 agent 統一依 Codex Code Review 準則判斷問題與 P0–P3；呈現風格不重新定級。預設遵循本頁；只有使用者明確要求或選取 output-style，才載入該 Skill 與本次必要參考。報告結構、證據與人工核對契約依下列規則保留。
 
 ## 共用 Concise 規則
 

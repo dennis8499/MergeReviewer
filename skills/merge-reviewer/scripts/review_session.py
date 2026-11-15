@@ -218,11 +218,14 @@ def cleanup_if_owned(requested: str | Path) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     values = sys.argv[1:] if argv is None else argv
-    if values and values[0] in ("capabilities", "preflight", "start", "step", "check", "finish", "status", "cancel", "view"):
+    native = ("capabilities", "schema", "preflight", "start", "step", "check", "finish", "status", "cancel", "view")
+    if values and values[0] in native:
         from review_flow import main as flow_main
         return flow_main(values)
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    for name in native:
+        commands.add_parser(name, help="Native " + name + "; use " + name + " --help for options")
     cleanup = commands.add_parser("cleanup", help="Remove one verified owned evidence session.")
     cleanup.add_argument("--context-dir", required=True)
     args = parser.parse_args(values)

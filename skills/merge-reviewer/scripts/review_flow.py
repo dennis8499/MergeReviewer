@@ -14,6 +14,8 @@ import uuid
 
 import review_coordinator as coordination
 import review_runtime
+import review_checkpoint
+from review_operation_schema import ARGUMENTS as OPERATION_ARGUMENTS
 import review_session
 import report_publication
 from review_validation import fixed_line_count_key
@@ -75,6 +77,37 @@ class LaunchPreflightError(ValueError):
         super().__init__("; ".join(row["message"] for row in result["errors"]))
 
 
+def inspect_runtime_ownership(root):
+    """Read-only check that tolerates a peer's brief, locked marker bootstrap."""
+    marker = root / ".merge-reviewer-runtime.json"
+    ownership_lock = root / ".ownership.lock"
+    deadline = None
+    while True:
+        if marker.exists():
+            coordination.runtime(root)
+            return
+        unexpected = any(item.name != ".ownership.lock" for item in root.iterdir())
+        # A simultaneous creator may have finished between the first check and
+        # enumeration. Its valid marker must not be classified as foreign data.
+        if marker.exists():
+            coordination.runtime(root)
+            return
+        if not unexpected:
+            return
+        if ownership_lock.is_symlink() or not ownership_lock.is_file():
+            raise ValueError(f"Review runtime is not owned: {root}")
+        # Marker writes use an atomic temporary under the existing ownership
+        # lock. Wait without creating/acquiring anything, and accept only after
+        # the unchanged strict ownership validator sees the completed marker.
+        moment = time.monotonic()
+        if deadline is None:
+            deadline = moment + .5
+        remaining = deadline - moment
+        if remaining <= 0:
+            raise ValueError(f"Review runtime is not owned: {root}")
+        time.sleep(min(.01, remaining))
+
+
 def launch_preflight(args):
     """Inspect launch inputs without creating a runtime, job, lock or Git ref."""
     import git_review_context as api
@@ -131,11 +164,7 @@ def launch_preflight(args):
         if root.exists():
             if not root.is_dir():
                 raise ValueError("Review runtime must be a directory.")
-            marker = root / ".merge-reviewer-runtime.json"
-            if marker.exists():
-                coordination.runtime(root)
-            elif any(item.name != ".ownership.lock" for item in root.iterdir()):
-                raise ValueError(f"Review runtime is not owned: {root}")
+            inspect_runtime_ownership(root)
         canonical["runtime_root"] = str(root)
     except (ValueError, OSError) as exc:
         error("runtime_root", exc)
@@ -199,6 +228,10 @@ def status(root, identifier, *, summary=False):
         raise ValueError("Session identity differs.")
     result = {key: value for key, value in job.items() if key not in ("input_digest",)}
     context = job_context(root, identifier, job)
+    if context.exists():
+        persisted_checkpoint = review_checkpoint.load(context)
+        if persisted_checkpoint is not None:
+            result["execution_checkpoint"] = persisted_checkpoint
     if job["state"] == "published" or job.get("planned_report") and Path(job["planned_report"]).is_file():
         import report_receipt
         result["publication"] = report_receipt.verify(job)
@@ -216,7 +249,7 @@ def status(root, identifier, *, summary=False):
                             "remaining": cached.get("remaining", {}) if fresh else {}}
         result.update(check_current=fresh, draft_sha256=current_hash,
                       status_revision=coordination.digest([job.get("updated_at"), current_hash, manifest_hash]), last_check_at=job.get("last_check_at"),
-                      execution_checkpoint=job.get("execution_checkpoint"))
+                      execution_checkpoint=result.get("execution_checkpoint"))
         if not fresh:
             result["expected_outcome"] = None
             result["blocking_gaps"] = []
@@ -285,6 +318,9 @@ def status_summary(value):
     result.update(check_current=value.get("check_current", False), draft_sha256=value.get("draft_sha256"), status_revision=value.get("status_revision"),
                   last_check_at=value.get("last_check_at"), updated_at=value.get("updated_at"),
                   execution_checkpoint=brief(value.get("execution_checkpoint")))
+    checkpoint = value.get("execution_checkpoint") or {}
+    result.update(checkpoint_revision=review_checkpoint.revision(checkpoint),
+                  paging_ref=checkpoint.get("paging_ref"), paging_counts=checkpoint.get("paging_counts"))
     result["checkpoint_current"] = bool(value.get("execution_checkpoint") and value.get("draft_sha256") ==
                                         value["execution_checkpoint"].get("draft_sha256"))
     if value["state"] == "published":
@@ -331,6 +367,7 @@ def capabilities():
                          "incremental_resume": True,
                           "publication_retry": True, "batch_artifact_view": True, "summary_status": True,
                           "validation_progress": True, "atomic_authoring": True, "native_checkpoint": True,
+                           "paging_state": True, "operation_schema": True,
                           "shared_read_contents": True,
                          "launch_preflight": True, "read_only_inspection": True,
                          "completion_preview": True, "scope_notes": True,
@@ -448,15 +485,7 @@ def operation_preflight(operations, manifest=None, line_counts=None):
     if not isinstance(operations, list) or not operations:
         return {"next_index": 0, "code": "authoring.invalid-requests",
                 "pointer": "/operations", "error": "operations must be a nonempty array"}
-    allowed = {
-        "read": {"repo", "source", "path", "line_start", "line_end", "around_line", "context_lines"},
-        "instructions": {"repo", "path"}, "inventory": {"repo", "source"},
-        "patch": {"repo", "path", "line_start", "line_end"},
-        "register-contract": {"contract"},
-        "search": {"query", "repo", "source", "contract", "change_id"},
-        "author": {"expected_draft_sha256", "updates", "checkpoint"},
-        "view": {"artifact", "pointer", "offset", "page_size", "string_offset"},
-    }
+    allowed = OPERATION_ARGUMENTS
     seen_ids = set()
     repositories = {item.get("id"): item for item in (manifest or {}).get("repositories", [])}
     for index, operation in enumerate(operations):
@@ -558,6 +587,11 @@ def operation_preflight(operations, manifest=None, line_counts=None):
             return {"next_index": index, "code": "authoring.invalid-operation-argument",
                     "pointer": base + "/contract", "operation_id": identifier,
                     "error": "register-contract needs one contract object"}
+        if kind == "author" and "expected_checkpoint_revision" in args and (
+                type(args["expected_checkpoint_revision"]) is not int or args["expected_checkpoint_revision"] < 0):
+            return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                    "pointer": base + "/expected_checkpoint_revision", "operation_id": identifier,
+                    "error": "expected_checkpoint_revision must be a nonnegative integer"}
         if kind in ("read", "patch"):
             if ("line_start" in args) != ("line_end" in args):
                 bad = "line_start" if "line_start" not in args else "line_end"
@@ -1068,6 +1102,11 @@ def read_artifact(root, identifier, artifact, *, scope=None, pointer="", offset=
 
 def batch_artifact_views(root, identifier, requests, *, offset=0):
     """Read independent pages once per artifact, stopping before the response limit."""
+    if isinstance(requests, dict):
+        if offset != 0:
+            raise ValueError("Paging state uses its pending queue, not --offset")
+        import review_paging
+        return review_paging.execute(root, identifier, requests, read_artifact, limit=LIMIT)
     if (not isinstance(requests, list) or not requests or type(offset) is not int
             or not 0 <= offset <= len(requests)):
         raise ValueError("view requests must be a nonempty array with a valid offset")
@@ -1303,11 +1342,15 @@ def step(root, identifier, operations, *, requests_file=None):
                     operation_seconds[kind] = operation_seconds.get(kind, 0.0) + time.perf_counter() - began
                 operation_starts.clear()
                 line_counts = dict(job.get("line_counts", {}))
+                persisted_checkpoint = review_checkpoint.load(context)
                 for completed in result.get("operations", []):
                     read = completed.get("result", {})
                     if (isinstance(read, dict) and read.get("saved") and isinstance(read.get("checkpoint"), dict)
                             and coordination.file_digest(context / "draft.json") == read.get("draft_sha256")):
-                        job = update(root, identifier, execution_checkpoint=read["checkpoint"],
+                        # A reused author result may be older than a checkpoint-only
+                        # transaction. The durable checkpoint is authoritative.
+                        checkpoint = persisted_checkpoint or read["checkpoint"]
+                        job = update(root, identifier, execution_checkpoint=checkpoint,
                                      first_draft_at=job.get("first_draft_at") or now())
                     if not isinstance(read, dict) or not isinstance(read.get("lines"), list) or read.get("binary"):
                         continue
@@ -1482,16 +1525,21 @@ def _finish_once(root, identifier):
         previous_progress = job.get("progress") or {}
         validation_counts = previous_progress.get("validation")
         validation_updated_at = previous_progress.get("validation_updated_at")
+        validation_activity_seconds = dict(job.get("metrics", {}).get("validation_activity_seconds", {}))
 
         def progress(stage, *, completed=0, total=0, **details):
             nonlocal validation_counts, validation_updated_at
             timestamp = now()
             if "validation" in details:
                 validation_counts, validation_updated_at = details["validation"], timestamp
+            if "activity_seconds" in details:
+                validation_activity_seconds[stage] = details["activity_seconds"]
             row = {"stage": stage, "completed": completed, "total": total,
                    "at": timestamp, **details}
             if validation_counts is not None:
                 row.update(validation=validation_counts, validation_updated_at=validation_updated_at)
+            if validation_activity_seconds:
+                row["activity_seconds_by_stage"] = dict(validation_activity_seconds)
             update(root, identifier, progress=row)
             print(json.dumps({"request_id": identifier, "phase": stage, **row}, ensure_ascii=False),
                   file=sys.stderr, flush=True)
@@ -1517,7 +1565,8 @@ def _finish_once(root, identifier):
         if job["state"] not in ("ready", "reviewing", "validating"):
             raise ValueError("Session cannot be published.")
         started = time.perf_counter()
-        timing = {"draft_preparation_seconds": 0.0, "finish_error_revalidation_seconds": 0.0}
+        timing = {"draft_preparation_seconds": 0.0, "finish_error_revalidation_seconds": 0.0,
+                  "validation_activity_seconds": validation_activity_seconds}
         def staged(output, receipt):
             if (root / "jobs" / (identifier + ".cancel")).exists():
                 raise coordination.Cancelled("Review cancelled before the report commit.")
@@ -1669,31 +1718,50 @@ def cancel(root, identifier):
     return status(root, identifier)
 
 
-def parser():
-    value = argparse.ArgumentParser(description=__doc__)
-    value.add_argument("command", choices=("capabilities", "preflight", "start", "step", "check", "finish", "status", "cancel", "view"))
-    value.add_argument("--workspace")
-    value.add_argument("--workspace-file")
-    value.add_argument("--runtime-root")
-    value.add_argument("--request-id")
-    value.add_argument("--project")
-    value.add_argument("--base")
-    value.add_argument("--head")
-    value.add_argument("--draft-format", choices=("compact", "v3"), default="v3")
-    value.add_argument("--requests-file", type=Path)
-    value.add_argument("--summary", action="store_true", help="Return actionable status without large receipts")
-    value.add_argument("--read-only", action="store_true", help="Read artifact pages without metrics or other writes")
-    value.add_argument("--refresh", action="store_true")
-    value.add_argument("--auth-scope", default=os.environ.get("GITLAB_WORKSPACE_AUTH_SCOPE", ""))
-    value.add_argument("--no-fetch", action="store_true")
-    value.add_argument("--git-timeout", type=float, default=180)
-    value.add_argument("--artifact", help="Read a persisted oversized terminal response with status")
-    value.add_argument("--artifact-scope", choices=("context", "runtime"),
+COMMANDS = ("capabilities", "schema", "preflight", "start", "step", "check", "finish", "status", "cancel", "view")
+
+
+def parser(help_command=None):
+    value = argparse.ArgumentParser(description=__doc__,
+                                    prog="review_session.py" + (" " + help_command if help_command else ""))
+    if help_command is None:
+        value.add_argument("command", choices=COMMANDS)
+    identity = {"--workspace", "--runtime-root", "--request-id"}
+    pages = {"--artifact", "--artifact-scope", "--pointer", "--offset", "--page-size", "--string-offset"}
+    selected = {
+        "capabilities": set(), "schema": {"--operation"},
+        "view": identity | pages | {"--requests-file", "--read-only"},
+        "status": identity | pages | {"--summary"},
+        "step": identity | {"--requests-file"}, "check": identity, "finish": identity, "cancel": identity,
+    }
+
+    def add(*options, **kwargs):
+        if help_command not in selected or options[0] in selected[help_command]:
+            value.add_argument(*options, **kwargs)
+
+    add("--operation", choices=tuple(OPERATION_ARGUMENTS), help="Describe one installed operation without a runtime")
+    add("--workspace")
+    add("--workspace-file")
+    add("--runtime-root")
+    add("--request-id")
+    add("--project")
+    add("--base")
+    add("--head")
+    add("--draft-format", choices=("compact", "v3"), default="v3")
+    add("--requests-file", type=Path)
+    add("--summary", action="store_true", help="Return actionable status without large receipts")
+    add("--read-only", action="store_true", help="Read artifact pages without metrics or other writes")
+    add("--refresh", action="store_true")
+    add("--auth-scope", default=os.environ.get("GITLAB_WORKSPACE_AUTH_SCOPE", ""))
+    add("--no-fetch", action="store_true")
+    add("--git-timeout", type=float, default=180)
+    add("--artifact", help="Read a persisted oversized terminal response with status")
+    add("--artifact-scope", choices=("context", "runtime"),
                        help="Choose the active context or terminal runtime artifact store")
-    value.add_argument("--pointer", default="")
-    value.add_argument("--offset", type=int, default=0)
-    value.add_argument("--page-size", type=int, default=100)
-    value.add_argument("--string-offset", type=int, default=0)
+    add("--pointer", default="")
+    add("--offset", type=int, default=0)
+    add("--page-size", type=int, default=100)
+    add("--string-offset", type=int, default=0)
     return value
 
 
@@ -1701,20 +1769,29 @@ def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
-    args = parser().parse_args(argv)
-    read_only_command = (args.command in ("capabilities", "preflight") or
+    values = sys.argv[1:] if argv is None else list(argv)
+    if len(values) == 2 and values[0] in COMMANDS and values[1] in ("--help", "-h"):
+        parser(values[0]).print_help()
+        return 0
+    args = parser().parse_args(values)
+    read_only_command = (args.command in ("capabilities", "schema", "preflight") or
                          args.command == "status" and args.summary or args.read_only)
     code = 0
     runtime_response = False
     context = None
     paging_started = None
     try:
+        if args.operation is not None and args.command != "schema":
+            raise ValueError("--operation is only supported by schema")
         if args.summary and (args.command != "status" or args.artifact):
             raise ValueError("--summary is only supported by status without --artifact")
         if args.read_only and args.command != "view":
             raise ValueError("--read-only is only supported by view")
         if args.command == "capabilities":
             result = capabilities()
+        elif args.command == "schema":
+            from review_operation_schema import describe
+            result = describe(args.operation)
         elif args.command == "preflight":
             result = launch_preflight(args)
             code = 0 if result["valid"] else 3
@@ -1791,7 +1868,7 @@ def main(argv=None):
             result["response_scope"] = "runtime"
             if len(review_runtime.canonical(result)) >= LIMIT:
                 result["summary"] = {"fields": list(result.get("summary", {}))[:16]}
-        if args.read_only:
+        if args.read_only and result.get("schema") != "MergeReviewPagingBatch/v1":
             def preserve_read_only(value):
                 if isinstance(value, dict):
                     if "command" in value and "artifact" in value:

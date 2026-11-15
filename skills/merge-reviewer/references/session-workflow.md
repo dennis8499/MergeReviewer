@@ -17,6 +17,8 @@ start 回傳 `MergeReviewStart/v1`，含固定 Repo／source ref、必要覆蓋�
 
 先查 capabilities：`skill_version`、`helper_sha256`、`python_version` 識別目前安裝；start 與持久 job 的 `tool_identity` 識別擷取時的工具。helper 摘要依 scripts 內所有 Python 檔名及內容 SHA-256 計算；同版本的不同 helper 內容可區分，不會因工具更新而自動重新擷取。
 
+能力列出 `operation_schema` 時，以 `review_session.py schema --operation read|search|register-contract|author|view` 取得該操作的欄位、型別及最小範本；`--help` 可在沒有 runtime／request 時使用。格式規格不代替固定證據的 symbol、來源與行段驗證。
+
 能力列出 `summary_status` 時，`status --summary` 回傳 `MergeReviewStatusSummary/v1`：狀態、錯誤與缺口預覽／總數、未完成項計數、報告路徑及 `next_action`。大型收據與完整操作索引透過 `details` 的原 status 命令取得；預覽不代表全部內容已讀完。原 status 介面保留，發布狀態仍核對報告正文收據。
 
 能力列出 `read_only_inspection` 時，`status --summary` 與 capabilities 保證不寫檔，artifact 使用 `view --read-only`；單筆及批次均略過 metrics 寫入，continuation 保留 `read_only=true`。舊版 view 預設的分頁計量維持相容。唯讀檢視不建立額外 artifact 或快取。
@@ -93,6 +95,8 @@ python "<skill-dir>/scripts/review_session.py" view --runtime-root "<runtime>" -
 ~~~
 
 批次回傳 `MergeReviewArtifactBatch/v1`，`results[].result` 與單筆頁面相同；同一 artifact 在該批只讀取及驗 hash 一次。整批仍受 24 KiB 限制；若 `complete=false`，用同一檔案及 `--offset <next_index>` 接續未回傳的請求。此 offset 是批次索引，各筆 JSON 的 offset 是該頁資料位置。單頁太大時減少該筆 page_size。獨立錯誤留在對應 result，其他頁仍可返回；有錯誤或尚有未回傳請求時 exit 3。`complete=true` 只表示所有請求已有回應，各頁仍須沿 continue／drilldowns 讀完。批次不新增 step operation、不改 manifest、不產生新 artifact、不啟動 Git。單筆 view 與 status --artifact 介面保留。
+
+能力另列出 `paging_state` 時，同一入口可接受 `MergeReviewPaging/v1` 狀態，保留穩定請求識別、已確認頁面與待修項；原陣列及 `next_index` 語意不變。新狀態的完整操作及 checkpoint 保存見[分頁與恢復](paging-workflow.md)。
 
 終止後 context 已清理、且 status 或 finish 結果仍超過上限時，摘要標示 `response_scope=runtime`，完整回應保存於該 request 的 runtime；用 `review_session.py view --artifact-scope runtime` 續讀，長字串依 `string_offset` 接續。此續讀只讀本機回應，不重新驗證或連線；終止紀錄到期後隨之清理。
 

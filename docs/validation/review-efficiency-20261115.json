@@ -1,0 +1,671 @@
+{
+  "schema": "MergeReviewEfficiencyValidation/v1",
+  "date": "2026-11-15",
+  "timezone": "Asia/Taipei",
+  "status": "validated-local-candidate-with-disclosed-limits",
+  "publication": "local-candidate-not-remotely-published",
+  "versions": {
+    "merge_reviewer": "0.23.0",
+    "workflow_kit": "1.11.0",
+    "gitlab_workspace": "0.51.0"
+  },
+  "environment": {
+    "os": "Windows",
+    "execution_python": "3.14.7",
+    "formal_model": "gpt-6.1-sol",
+    "formal_effort": "max",
+    "python310": {
+      "status": "syntax-only",
+      "native_files": 22,
+      "workflowkit_files": 2,
+      "total_files": 24,
+      "runtime_tested": false,
+      "evidence": ".tmp/review-efficiency-20261115/python310-syntax-final.json"
+    }
+  },
+  "artifacts": {
+    "merge_zip": {
+      "path": "MergeReviewer/dist/merge-reviewer-0.23.0.zip",
+      "sha256": "be4b41298af51296b34705a7639282d3590a19bae078e926301170f0e3e218f5"
+    },
+    "workflowkit_source_zip": {
+      "path": "WorkflowKit/resources/offline-tools/sources/merge-reviewer-0.23.0.zip",
+      "sha256": "be4b41298af51296b34705a7639282d3590a19bae078e926301170f0e3e218f5",
+      "canonical_entries_equal": true,
+      "asset_bytes_equal": true,
+      "file_count": 36,
+      "other_source_pins_unchanged": true,
+      "evidence": ".tmp/review-efficiency-20261115/source-asset-parity-post-bootstrap.json"
+    },
+    "workflowkit_zip": {
+      "path": "WorkflowKit/dist/gitlab-workspace-kit-1.11.0.zip",
+      "sha256": "14657002f6f7ab688e5c80333d195f30572703bf59afd96649421d54535570dc",
+      "bytes": 33679965,
+      "build_evidence": ".tmp/review-efficiency-20261115/workflowkit-build-post-bootstrap.log",
+      "verification_evidence": ".tmp/review-efficiency-20261115/workflowkit-verify-release-post-bootstrap.log"
+    },
+    "installed_reviewer_payload_sha256": "6221e167abd3358a2fad959cd46d97bfff38b91a1aff442e7b57f32a12a4a1ba",
+    "identity_note": "ZIP hashes, installed payload hashes and replay skill digests have different scopes and are not interchangeable."
+  },
+  "tests": [
+    {
+      "suite": "MergeReviewer verified full discovery",
+      "expected": 471,
+      "observed": 471,
+      "passed": 468,
+      "skipped": 3,
+      "failures": 0,
+      "errors": 0,
+      "status": "passed-with-platform-environment-skips",
+      "skips_are_passes": false,
+      "evidence": ".tmp/review-efficiency-20261115/merge-shards-verified/summary.json"
+    },
+    {
+      "suite": "WorkflowKit bound launcher",
+      "passed": 20,
+      "status": "passed",
+      "command": "python -X utf8 -B -m unittest discover -s test/release -p review_launch_test.py -v",
+      "cwd": "WorkflowKit",
+      "evidence": ".tmp/review-efficiency-20261115/workflowkit-launch-current.log"
+    },
+    {
+      "suite": "WorkflowKit reliability metadata and prompt guards",
+      "passed": 17,
+      "benchmark_tests": 14,
+      "prompt_tests": 3,
+      "status": "passed",
+      "command": "python -X utf8 -B -m unittest discover -s test/release -p reviewer_reliability*test.py -v",
+      "cwd": "WorkflowKit",
+      "evidence": ".tmp/review-efficiency-20261115/workflowkit-reliability-current.log"
+    },
+    {
+      "suite": "WorkflowKit source freeze",
+      "passed": 10,
+      "status": "passed",
+      "evidence": ".tmp/review-efficiency-20261115/workflowkit-sources-tests-final.log"
+    },
+    {
+      "suite": "WorkflowKit local release CI contracts",
+      "passed": 25,
+      "status": "passed",
+      "remote_actions_executed": false,
+      "evidence": ".tmp/review-efficiency-20261115/workflowkit-matrix-tail/release-ci.log"
+    },
+    {
+      "suite": "GitlabWorkSpace selected review compatibility",
+      "passed": 49,
+      "skipped": 0,
+      "status": "passed",
+      "full_extension_suite": false,
+      "evidence": ".tmp/review-efficiency-20261115/gws-review-compat-elevated.log"
+    },
+    {
+      "suite": "WorkflowKit initial direct scripts/test.py attempt",
+      "status": "interrupted",
+      "accepted": false,
+      "initial_error_trace_complete": false,
+      "evidence": ".tmp/review-efficiency-20261115/workflowkit-full-initial.log",
+      "scope": "Preserved initial history; final equivalent four-stage validation is recorded separately."
+    },
+    {
+      "suite": "Previously errored BMAD installer case",
+      "status": "passed-on-focused-rerun",
+      "passed": 1,
+      "test": "test_bmad_output_alone_does_not_suppress_the_bundled_component",
+      "evidence": ".tmp/review-efficiency-20261115/workflowkit-bmad-hosttemp-final.log"
+    },
+    {
+      "suite": "WorkflowKit complete release regression",
+      "status": "passed-reconciled-inventory-with-disclosed-skips-and-prior-failures",
+      "expected_unique_test_ids": 197,
+      "predecessor_scenarios": 38,
+      "expected_scenario_set_sha256": "c0bc7b22c42a631193fc9a37f26233c96d082808c27fa41c39dcd54dfbec600f",
+      "accepted": true,
+      "known_windows_symlink_privilege_skips": 2,
+      "evidence": {
+        "path": ".tmp/review-efficiency-20261115/workflowkit-matrix-tail/summary.json",
+        "sha256": "b4456e29071b5876c0b9bf09518433eddf91e284d87f3c2860c7d24553e52c15"
+      },
+      "observed_unique_test_ids": 197,
+      "passed": 195,
+      "skipped": 2,
+      "failed_unique_test_ids": 0,
+      "completed_physical_unittest_invocations": 209,
+      "failed_physical_invocations_preserved": 2,
+      "interrupted_matrix_invocations_not_credited": 1,
+      "physical_filtered_matrix_invocations": 11,
+      "test_sources_unchanged": true,
+      "execution_mode": "scripts/test.py four stages equivalent; exact fixed inventory reconciled across isolated module shards, supported matrix filters, and two receipt-preserving browser diagnostic reruns (last isolated); no claim of an unbroken single script run",
+      "physical_invocation_scope": "Completed invocations contributing to this reconciled full inventory, including all three browser attempts (original failed plus two retained diagnostics); prior interrupted sequential and narrow runs are separate evidence, not included in this count."
+    }
+  ],
+  "installed_profiles": [
+    {
+      "profile": "group",
+      "status": "passed",
+      "checks": 15,
+      "fresh_request_and_binding": true,
+      "review_complete": true,
+      "model_evaluation": false,
+      "evidence": ".tmp/review-efficiency-20261115/installed-group-post-bootstrap.json"
+    },
+    {
+      "profile": "repository",
+      "status": "passed",
+      "checks": 15,
+      "fresh_request_and_binding": true,
+      "review_complete": true,
+      "model_evaluation": false,
+      "evidence": ".tmp/review-efficiency-20261115/installed-repository-post-bootstrap.json"
+    }
+  ],
+  "helper_replay": {
+    "status": "equivalent-with-fewer-round-trips-and-output-growth",
+    "scope": "Sanitized deterministic helper interactions; no model-analysis or model-quality acceptance.",
+    "pairs": 5,
+    "order": "alternating-baseline-candidate",
+    "all_oracles_passed": true,
+    "evidence_findings_gaps_equal": true,
+    "baseline_revision": "b9963266432aff75602ae64b385a4dff15cea405",
+    "baseline_skill_sha256": "e77fbc7d1ac5912bc2f9b296f745848f8049f746072f08d74fce2b9adeb898e8",
+    "candidate_skill_sha256": "5dbf575d37161b7ec82b6c2e1d9df2468966d7ab11ba48135f60f79b4ac02db4",
+    "tool_round_trips": {
+      "baseline": 124,
+      "candidate": 11
+    },
+    "helper_seconds_median": {
+      "baseline": 40.97599679999985,
+      "candidate": 7.624708100018324
+    },
+    "paired_time_ratio_median": 0.18867915764610071,
+    "duplicates_avoided_per_candidate": 100,
+    "git_commands_per_run": {
+      "baseline": 79,
+      "candidate": 79
+    },
+    "finish_attempts_per_run": {
+      "baseline": 1,
+      "candidate": 1
+    },
+    "full_validations_per_run": {
+      "baseline": 1,
+      "candidate": 1
+    },
+    "candidate_atomic_author_calls": 2,
+    "candidate_checkpoint_recoveries": 1,
+    "stdout_bytes_median": {
+      "baseline": 43191,
+      "candidate": 52133
+    },
+    "stderr_bytes_median": {
+      "baseline": 5947,
+      "candidate": 8189
+    },
+    "stdout_increased_percent_approx": 20.7,
+    "stderr_increased_percent_approx": 37.7,
+    "total_output_reduction_claim": false,
+    "model_review_seconds": null,
+    "formal_model_speed_claim": false,
+    "evidence": ".tmp/review-efficiency-20261115/helper-pairs-final/summary.json"
+  },
+  "model_acceptance": {
+    "status": "accepted-quality-only",
+    "accepted": true,
+    "adjudication": "18-independent-agent-audits-completed",
+    "cases": 3,
+    "required_pairs_per_case": 3,
+    "planned_runs": 18,
+    "completed_attempts_at_report_snapshot": 18,
+    "snapshot_is_not_a_final_result": false,
+    "model": "gpt-6.1-sol",
+    "effort": "max",
+    "elapsed_classification": "diagnostic/nonisolated",
+    "parallel_independent_cases": 2,
+    "formal_speed_claim": false,
+    "timing_gate": null,
+    "first_pair_diagnostic": {
+      "baseline_elapsed_seconds_approx": 443,
+      "candidate_elapsed_seconds_approx": 449,
+      "baseline_tool_calls": 28,
+      "candidate_tool_calls": 25,
+      "formal_speed_evidence": false
+    },
+    "execution_status": ".tmp/rm17/execution-status.json",
+    "identity_manifest": ".tmp/rm17/identity-manifest.json",
+    "schedule": ".tmp/rm17/schedule.json",
+    "note": "authoring_retries in original receipts only counts check/finish exit3; zero does not establish zero rejected author operations. Cached redelivery purpose may be unobservable.",
+    "completed_attempts": 18,
+    "reviewer_type": "independent-agent-not-human-or-blinded",
+    "false_positives": 0,
+    "required_available_evidence_omitted": 0,
+    "expected_completeness_matched": 18,
+    "source_integrity_verified": true,
+    "case_results": [
+      {
+        "case": "date-boundary-files-7",
+        "pairs": 3,
+        "expected_findings": [
+          "expiry-day-excluded"
+        ],
+        "expected_review_complete": true,
+        "variants": {
+          "baseline": {
+            "runs": 3,
+            "quality_passed": 3,
+            "tool_calls": [
+              28,
+              24,
+              26
+            ],
+            "tool_calls_median": 26,
+            "elapsed_seconds": [
+              443.2050190999871,
+              324.49736170002143,
+              390.4492692000058
+            ],
+            "elapsed_seconds_median": 390.4492692000058,
+            "tokens": [
+              1365254,
+              1104063,
+              1278297
+            ]
+          },
+          "candidate": {
+            "runs": 3,
+            "quality_passed": 3,
+            "tool_calls": [
+              25,
+              32,
+              28
+            ],
+            "tool_calls_median": 28,
+            "elapsed_seconds": [
+              449.2310231999727,
+              421.29458509999677,
+              374.79847430001246
+            ],
+            "elapsed_seconds_median": 421.29458509999677,
+            "tokens": [
+              1223226,
+              1173349,
+              1121702
+            ]
+          }
+        }
+      },
+      {
+        "case": "safe-existing",
+        "pairs": 3,
+        "expected_findings": [],
+        "expected_review_complete": true,
+        "variants": {
+          "baseline": {
+            "runs": 3,
+            "quality_passed": 3,
+            "tool_calls": [
+              33,
+              24,
+              30
+            ],
+            "tool_calls_median": 30,
+            "elapsed_seconds": [
+              235.13190780000878,
+              293.5211371000041,
+              361.99485479999566
+            ],
+            "elapsed_seconds_median": 293.5211371000041,
+            "tokens": [
+              1006283,
+              727498,
+              1172449
+            ]
+          },
+          "candidate": {
+            "runs": 3,
+            "quality_passed": 3,
+            "tool_calls": [
+              31,
+              27,
+              37
+            ],
+            "tool_calls_median": 31,
+            "elapsed_seconds": [
+              360.0185162000125,
+              313.60156239999924,
+              293.04594039998483
+            ],
+            "elapsed_seconds_median": 313.60156239999924,
+            "tokens": [
+              1194836,
+              833654,
+              1240184
+            ]
+          }
+        }
+      },
+      {
+        "case": "required-consumer-gap",
+        "pairs": 3,
+        "expected_findings": [],
+        "expected_review_complete": false,
+        "variants": {
+          "baseline": {
+            "runs": 3,
+            "quality_passed": 3,
+            "tool_calls": [
+              33,
+              28,
+              29
+            ],
+            "tool_calls_median": 29,
+            "elapsed_seconds": [
+              293.1563540000061,
+              381.73379299999215,
+              344.4113391000137
+            ],
+            "elapsed_seconds_median": 344.4113391000137,
+            "tokens": [
+              1144347,
+              1180276,
+              1199001
+            ]
+          },
+          "candidate": {
+            "runs": 3,
+            "quality_passed": 3,
+            "tool_calls": [
+              26,
+              24,
+              23
+            ],
+            "tool_calls_median": 24,
+            "elapsed_seconds": [
+              293.2953710000147,
+              322.8398186999839,
+              312.32990750001045
+            ],
+            "elapsed_seconds_median": 312.32990750001045,
+            "tokens": [
+              985451,
+              1012481,
+              730093
+            ]
+          }
+        }
+      }
+    ],
+    "acceptance_evidence": {
+      "path": ".tmp/rm17/quality-acceptance.json",
+      "sha256": "eaca5eafd85ce1dce3f1597b856a91ede2d50631b485ae188d357f5d4339f947"
+    },
+    "adjudication_index": {
+      "path": ".tmp/review-efficiency-20261115/adjudications/currentadjudication-index.json",
+      "sha256": "da3b230b495ec6a3d3dbc8283f3478a38ba5e7f36aae44883fe0b0180ccf9910"
+    },
+    "source_baseline_note": "Model baseline is committed releases; helper baseline preserves initial user documentation changes.",
+    "provider_served_model": "not-independently-observed",
+    "paging_state_view_exercised": false,
+    "model_tool_count_reduction_universal": false,
+    "background_work": "Initial pilots overlapped unit shards; later independent cases ran at up to 2 concurrency; full WorkflowKit regression also overlapped late observations. All model times are diagnostic.",
+    "intermediate_rejections": {
+      "baseline": {
+        "author_commands": 9,
+        "contract_commands": 1
+      },
+      "candidate": {
+        "author_commands": 5,
+        "contract_commands": 0
+      },
+      "all_repaired_before_publication": true,
+      "expected_incomplete_checks_excluded": true,
+      "diagnostic_only": true,
+      "evidence": {
+        "path": ".tmp/review-efficiency-20261115/adjudications/intermediate-rejections.json",
+        "sha256": "be2c0a1594cda25b3c28a111f3b6478d447fec3a9005c4a99cf5d812c823afe3"
+      }
+    }
+  },
+  "requirements": [
+    {
+      "requirement": "Deduplication and caller acknowledgment",
+      "tests": [
+        "test_duplicate_pages_share_load_and_acknowledged_pages_do_not_read_again",
+        "test_lost_output_repeats_same_batch_until_caller_applies_delta"
+      ]
+    },
+    {
+      "requirement": "Nested and long-string continuation",
+      "tests": [
+        "test_nested_and_long_string_continuations_recover_all_required_content",
+        "test_large_dictionary_field_pages_remain_reachable_after_each_acknowledgement"
+      ]
+    },
+    {
+      "requirement": "Wire budget and retained pending tail",
+      "tests": [
+        "test_byte_budget_preserves_unreturned_tail_and_does_not_print_large_history",
+        "test_final_cache_count_digit_growth_preserves_wire_budget_and_pending_prefix",
+        "test_oversized_single_page_remains_pending_without_acknowledgement"
+      ]
+    },
+    {
+      "requirement": "Errors block once and source text is not control data",
+      "tests": [
+        "test_bad_inputs_are_blocked_once_and_do_not_hide_valid_rows",
+        "test_source_content_named_continue_is_not_followed",
+        "test_nonadvancing_continuation_and_changed_scope_block_instead_of_looping"
+      ]
+    },
+    {
+      "requirement": "Identity and complete delta accounting",
+      "tests": [
+        "test_identity_and_stale_or_reordered_deltas_are_rejected",
+        "test_delta_cannot_silently_drop_processed_pages_without_acknowledgement",
+        "test_delta_cannot_acknowledge_an_unprocessed_page_or_inject_foreign_pending"
+      ]
+    },
+    {
+      "requirement": "Checkpoint CAS and cached replay cannot roll back",
+      "tests": [
+        "test_checkpoint_only_commit_advances_revision_without_changing_draft",
+        "test_old_successful_journal_cannot_roll_back_newer_checkpoint",
+        "test_cached_author_replay_preserves_latest_checkpoint_and_paging_artifact"
+      ]
+    },
+    {
+      "requirement": "Crash recovery and legacy checkpoint compatibility",
+      "tests": [
+        "test_checkpoint_commit_recovers_after_draft_or_checkpoint_interruption",
+        "test_large_paging_state_recovers_from_summary_reference_without_writes",
+        "test_legacy_author_preserves_paging_and_new_paging_requires_revision"
+      ]
+    },
+    {
+      "requirement": "Runtime-free schema and shared preflight contract",
+      "tests": [
+        "test_schema_and_help_work_without_runtime_or_request",
+        "test_schema_argument_sets_match_preflight_and_author_fields"
+      ]
+    },
+    {
+      "requirement": "Race-safe strict runtime ownership",
+      "tests": [
+        "test_launch_preflight_uses_race_safe_check_without_writes_or_git",
+        "test_forged_lock_never_accepts_foreign_directory_and_wait_is_bounded",
+        "test_foreign_without_lock_and_invalid_marker_remain_rejected"
+      ]
+    },
+    {
+      "requirement": "Executable independent-process documentation",
+      "tests": [
+        "test_documented_creation_and_confirmation_work_in_independent_processes"
+      ]
+    },
+    {
+      "requirement": "Bound readonly schema and stderr-only timings",
+      "tests": [
+        "test_bound_schema_matches_native_without_runtime_or_writes",
+        "test_schema_rejects_identity_override_and_missing_capability",
+        "test_action_timings_are_structured_stderr_without_protocol_contamination"
+      ]
+    },
+    {
+      "requirement": "Explicit engine identities and effective effort guard",
+      "tests": [
+        "test_explicit_identity_accepts_new_versions_and_pins_source_payloads",
+        "test_explicit_identity_requires_complete_valid_component_pins",
+        "test_trial_rejects_inconsistent_effort_before_any_model_process"
+      ]
+    },
+    {
+      "requirement": "Scoped source freeze and immutable publication",
+      "tests": [
+        "test_scoped_freeze_preserves_unselected_source_without_reading_its_live_checkout"
+      ],
+      "evidence": [
+        ".tmp/review-efficiency-20261115/source-asset-parity-post-bootstrap.json",
+        ".tmp/review-efficiency-20261115/installed-group-post-bootstrap.json",
+        ".tmp/review-efficiency-20261115/installed-repository-post-bootstrap.json"
+      ]
+    },
+    {
+      "requirement": "Native validation activity timing preserves throttle and actual progress",
+      "tests": [
+        "test_prefetch_transitions_close_elapsed_activities_without_validating_items",
+        "test_revisited_activity_accumulates_once_and_final_counts_match_actual_advances",
+        "test_no_observer_preserves_no_clock_work_and_context_is_reset"
+      ]
+    },
+    {
+      "requirement": "Replay uses real atomic author and independently detects changed evidence",
+      "tests": [
+        "test_paging_replay_uses_atomic_author_and_recovers_equivalent_evidence",
+        "test_evidence_comparison_ignores_duplicate_calls_but_detects_changed_content"
+      ]
+    }
+  ],
+  "failure_history": [
+    {
+      "kind": "sandbox-local-git-access-and-path-limitations",
+      "correction": "Normal Windows token and per-process host temporary directory; no global settings changed.",
+      "evidence": [
+        ".tmp/review-efficiency-20261115/merge-full-01.log",
+        ".tmp/review-efficiency-20261115/merge-full-host-temp-01.log"
+      ]
+    },
+    {
+      "kind": "onedrive-temporary-directory-cleanup-lock",
+      "correction": "Keep artifacts in workspace but use per-process normal-user temporary fixtures.",
+      "evidence": ".tmp/review-efficiency-20261115/merge-full-elevated-01.log"
+    },
+    {
+      "kind": "baseline-and-candidate-runtime-bootstrap-toctou",
+      "correction": "Read-only recheck and bounded 0.5 second wait; unchanged strict ownership verification.",
+      "evidence": [
+        ".tmp/review-efficiency-20261115/runtime-race-baseline.log",
+        ".tmp/review-efficiency-20261115/runtime-race-current.log",
+        ".tmp/review-efficiency-20261115/runtime-race-current-fixed.log",
+        ".tmp/review-efficiency-20261115/runtime-bootstrap-public-fixed-unit.log"
+      ]
+    },
+    {
+      "kind": "scratch-shard-loader-wrong-tests-import",
+      "correction": "Explicit repository import path and expected/observed discovery reconciliation; final 471/471.",
+      "evidence": ".tmp/review-efficiency-20261115/merge-shards-verified/summary.json"
+    },
+    {
+      "kind": "initial-full-workflowkit-suite-incomplete",
+      "correction": "Preserve incomplete log and focused passing rerun; do not claim full suite green.",
+      "evidence": [
+        ".tmp/review-efficiency-20261115/workflowkit-full-initial.log",
+        ".tmp/review-efficiency-20261115/workflowkit-bmad-hosttemp-final.log"
+      ]
+    },
+    {
+      "kind": "group-archify-browser-check-during-full-kit-regression",
+      "status": "preserved-two-failed-attempts-final-isolated-original-test-passed",
+      "initial_specific_cause": "unknown-detailed-receipt-cleaned-by-test",
+      "evidence": ".tmp/review-efficiency-20261115/workflowkit-shards-hosttemp/shard-1.log",
+      "source_changes_for_diagnosis": false,
+      "first_failure_specific_cause": "unknown-original-detailed-receipt-was-cleaned",
+      "second_failure_observation": "viewer/temp-cleanup-incomplete: no Chrome exit acknowledgement after TERM1.5s and KILL1.5s; finally may mask earlier inspection errors",
+      "final_isolated_profiles_successful": {
+        "group": true,
+        "repository": true
+      },
+      "vendor_or_test_source_changed": false,
+      "timeout_policy_changed": false,
+      "causes_proven_fixed": false
+    }
+  ],
+  "limitations": [
+    "Model elapsed measurements are diagnostic/nonisolated, not formal paired speed evidence.",
+    "Total helper stdout and stderr bytes increased.",
+    "Python 3.10 syntax parsing is not Python 3.10 runtime validation.",
+    "Three platform/environment skips are not passes.",
+    "No remote publication or existing-user-installation upgrade was performed.",
+    "The 18 model observations support only the selected three synthetic quality cases, not all reviews.",
+    "Independent adjudication was by an implementation/test contributor Agent, not blinded human review.",
+    "Model tool-call counts did not universally decrease; small fixtures did not require paging_state view.",
+    "Original execution-status remains an untouched raw executor record; final quality acceptance is separate.",
+    "WorkflowKit full inventory used equivalent four stages with partitioned unittest/matrix execution, not one unbroken direct scripts/test.py run.",
+    "Two Windows symlink-availability skips are not passes; one records WinError1314, the other records that the account cannot create symlinks.",
+    "Two browser attempts failed; final unchanged isolated group/repository test passed, but first cause is unknown and second cleanup exception may mask an earlier inspection error. No claim that both causes were fixed."
+  ],
+  "full_workflowkit_validation": {
+    "status": "passed-reconciled-inventory",
+    "single_unbroken_script_run": false,
+    "unique_test_ids": 197,
+    "passed": 195,
+    "skipped": 2,
+    "final_failed": 0,
+    "completed_physical_unittest_invocations": 209,
+    "prior_failed_physical_invocations": 2,
+    "predecessor_scenarios": 38,
+    "filtered_matrix_invocations": 11,
+    "expected_scenario_set_sha256": "c0bc7b22c42a631193fc9a37f26233c96d082808c27fa41c39dcd54dfbec600f",
+    "release_ci": {
+      "command": [
+        "C:\\Python314\\python.exe",
+        "-X",
+        "utf8",
+        "-B",
+        "scripts/test_release_ci.py",
+        "-v"
+      ],
+      "expected": 25,
+      "observed": 25,
+      "exit_code": 0,
+      "passed": true
+    },
+    "assets_unchanged": true,
+    "frozen_sources_checked": 5,
+    "workspace_files_checked": 28,
+    "canonical_merge_entries": 36,
+    "test_source_modules_unchanged": 21,
+    "skipped_tests": [
+      {
+        "test": "output_style_test.OutputStylePackageTests.test_linked_resources_are_rejected",
+        "reason": "skipped \"Symbolic links are unavailable: [WinError 1314] 用戶端沒有這項特殊權限。: 'C:\\\\\\\\Users\\\\\\\\denni\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\output-style-link-49173ps6\\\\\\\\outside.md' -> 'C:\\\\\\\\Users\\\\\\\\denni\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\output-style-link-49173ps6\\\\\\\\skills\\\\\\\\output-style\\\\\\\\linked.md'\""
+      },
+      {
+        "test": "workflow_kit_runtime_test.WorkflowKitRuntimeTests.test_rejects_symlink_runtime_before_launch",
+        "reason": "skipped 'This Windows account cannot create symlinks.'"
+      }
+    ],
+    "summary": {
+      "path": ".tmp/review-efficiency-20261115/workflowkit-matrix-tail/summary.json",
+      "sha256": "b4456e29071b5876c0b9bf09518433eddf91e284d87f3c2860c7d24553e52c15"
+    },
+    "outer_log": ".tmp/review-efficiency-20261115/workflowkit-full-reconciled-final.log",
+    "outer_exit_code": 0,
+    "isolated_browser": {
+      "path": ".tmp/review-efficiency-20261115/workflowkit-browser-isolated/result.json",
+      "sha256": "7a9f0d35f6d8ec8974b9ef42258fed73aff562a7a0c3114621ba9068b3cb1e02"
+    },
+    "prior_browser_diagnostic": {
+      "path": ".tmp/review-efficiency-20261115/workflowkit-browser-diagnostic/result.json",
+      "sha256": "7e49bd9adf724df2c2b9350a3c0f6343293d65067966f6d38f353c7ee6c443c5"
+    }
+  }
+}

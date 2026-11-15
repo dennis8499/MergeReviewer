@@ -17,9 +17,17 @@ metadata:
 
 由執行本 Skill 的 agent 依 Codex Code Review 準則判斷本次引入的可修正問題及 P0–P3；helper 準備固定證據、驗證覆蓋及發布。helper 成功不代表語意審查完成。正常啟動無條件破壞整批持久資料的 P0 例子及條件性影響的 P1 邊界，見[審查規則](references/review-rules.md)。
 
-開始時讀[審查規則](references/review-rules.md)，使用 start 回傳的固定索引與草稿。操作或續讀 artifact 查[操作範例](references/session-workflow.md)；多 Repo 判定前讀[契約邊界](references/contract-boundaries.md)；填精簡草稿才讀[草稿格式](references/authoring.md)，舊草稿才讀[v3 契約](references/workspace-review.md)。撰寫報告時才讀同層 `../output-style/SKILL.md` 並套用其情境風格，未安裝時用[報告風格](references/report-style.md)。適用的 `AGENTS.md` 以固定內容為準。
+開始時讀[審查規則](references/review-rules.md)，使用 start 回傳的固定索引與草稿。操作或續讀 artifact 查[操作範例](references/session-workflow.md)；多 Repo 判定前讀[契約邊界](references/contract-boundaries.md)；填精簡草稿才讀[草稿格式](references/authoring.md)，舊草稿才讀[v3 契約](references/workspace-review.md)。撰寫報告時遵循[報告風格](references/report-style.md)；只有使用者明確要求或選取 output-style，才載入該 Skill 與本次必要參考，必要報告欄位與證據契約仍保留。適用的 `AGENTS.md` 以固定內容為準。
 
 三項必填：恰一個 Repo 名稱或路徑、基礎分支、比較分支。缺漏或有歧義時補齊後才開始；分支使用本機名稱或明確含遠端的名稱，例如 `origin/main`。只接受已提交分支；tag、commit、HEAD、Stage、quick、多起點及 MR task 不屬此入口。工作區以使用者宣告根目錄及實際 `.code-workspace` 為界。
+
+## 每輪閱讀與保存
+
+1. 用固定索引選下一條功能鏈，合併該輪獨立讀取與搜尋；首次 step 沿用 `initial_reads_file`。
+2. 支援批次時用 `view --requests-file` 續讀；將回傳 continuation 直接序列化，沿實際游標前進。支援 `paging_state` 時依[分頁與恢復](references/paging-workflow.md)整理去重及待修項。
+3. 必要內容及安全反例讀完後作語意判斷；證據保存、頁面返回與「已審查」分開確認。
+4. 每條鏈完成即原子保存判斷、引用、待讀狀態與下一個操作。成功取得並解析頁面後才保存其確認，遺失回應可沿原狀態重送。
+5. 恢復先讀 `status --summary`，由完整 checkpoint 引用接續；收到完整發布收據後核對交付，依 `cleanup_pending` 決定是否仍需清理。
 
 ## 1. start：固定證據與草稿
 
@@ -52,7 +60,7 @@ python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" -
 
 多 Repo 先按[契約邊界](references/contract-boundaries.md)明確選擇 `repo-local`、`identified-repos` 或 `workspace` 範圍；Repo 內行為契約不會只因檔名、public 函式或泛稱 export 而擴成 workspace 契約。`propagates` 只追查固定證據指出的消費端；未知但必要的消費端保持 `unresolved`。每個其他 Repo 仍有 disposition。
 
-回應上限 24 KiB，全文與命中落盤；逐操作查看是否完整回傳，必要時使用純讀取 `view` 命令按 artifact、JSON pointer 及 offset 續讀。能力支援 `batch_artifact_view` 時，用 `view --requests-file` 合併獨立續讀；批次 `next_index` 表示尚未回傳的請求，各頁的 continue 仍須讀完。不要把翻頁包成 step 操作。敏感值在展示內容中遮罩，行號與原始內容 hash 仍保留。`evidence_complete` 表示保存，語意「已審查」由 agent 判斷；必要內容未讀完不能標已審查。定位命中可用 `around_line`。
+回應上限 24 KiB，全文與命中落盤；逐操作查看是否完整回傳，必要時使用純讀取 `view` 命令按 artifact、JSON pointer 及 offset 續讀。能力支援 `batch_artifact_view` 時，用 `view --requests-file` 合併獨立續讀；批次 `next_index` 表示尚未回傳的請求，各頁的 continue 仍須讀完。`paging_state` 的去重、確認與恢復依[分頁與恢復](references/paging-workflow.md)；舊版仍沿原批次介面。不要把翻頁包成 step 操作。敏感值在展示內容中遮罩，行號與原始內容 hash 仍保留。`evidence_complete` 表示保存，語意「已審查」由 agent 判斷；必要內容未讀完不能標已審查。定位命中可用 `around_line`。
 
 能力列出 `atomic_authoring` 時，以 `step` 的 `author` 操作原子保存精簡更新與 checkpoint，詳見草稿格式。草稿由 agent 填寫逐檔與 parent 判定、影響鏈、Repo 判定及實際測試；靜態推導用 `code-derived`。每完成一條契約鏈即保存草稿、回讀確認再 check。待確認須有實際必要關係的固定證據；有可取得的必要內容就沿 remaining 繼續補查，確實受阻才保留缺口並發布未完成報告。
 

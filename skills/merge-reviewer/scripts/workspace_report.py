@@ -50,6 +50,8 @@ class ValidationProgress:
     def __init__(self, manifest, *, stage="validation"):
         self.callback = VALIDATION_PROGRESS.get()
         self.stage, self.activity, self.last_emit = stage, None, None
+        self.activity_started = None
+        self.activity_seconds = {}
         self.counts = {name: {"completed": 0, "total": total} for name, total in (
             ("repositories", sum(repo.get("state") != "error" for repo in manifest.get("repositories", []))),
             ("contracts", len(manifest.get("changed_contracts", []))),
@@ -59,12 +61,22 @@ class ValidationProgress:
         if self.callback is None:
             return
         moment = time.monotonic()
-        if force or activity != self.activity or self.last_emit is None or moment - self.last_emit >= 1.0:
-            self.activity, self.last_emit = activity, moment
+        changed = activity != self.activity
+        if changed:
+            if self.activity is not None and self.activity_started is not None:
+                self.activity_seconds[self.activity] = (self.activity_seconds.get(self.activity, 0.0)
+                                                        + max(0.0, moment - self.activity_started))
+            self.activity, self.activity_started = activity, moment
+        if force or changed or self.last_emit is None or moment - self.last_emit >= 1.0:
+            self.last_emit = moment
+            activity_seconds = dict(self.activity_seconds)
+            activity_seconds[activity] = (activity_seconds.get(activity, 0.0)
+                                          + max(0.0, moment - self.activity_started))
             self.callback(stage=self.stage, activity=activity,
                           completed=sum(row["completed"] for row in self.counts.values()),
                           total=sum(row["total"] for row in self.counts.values()),
-                          validation={name: dict(row) for name, row in self.counts.items()})
+                          validation={name: dict(row) for name, row in self.counts.items()},
+                          activity_seconds=activity_seconds)
 
     def advance(self, category):
         row = self.counts[category]
