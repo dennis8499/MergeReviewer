@@ -77,6 +77,9 @@ def inspect(draft, manifest, *, line_counts=None):
     for field in ("coverage", "impact_coverage", "repository_coverage", "findings", "merge_parent_review",
                   "next_steps", "tests_executed", "tests_not_executed", "limitations"):
         need(isinstance(draft.get(field), list), "draft." + field, "must be an array")
+    if manifest.get("extension_enabled") is False:
+        need(not draft.get("impact_coverage"), "draft.impact_coverage",
+             "single-Repo review does not use cross-Repo impact coverage; keep this list empty")
     need(manifest.get("contract_scope_policy") in (None, boundary.POLICY, boundary.V2_POLICY), "manifest.contract_scope_policy", "unsupported policy")
     repos = {row["id"]: row for row in manifest.get("repositories", [])}
     contracts = {row["id"]: row for row in manifest.get("changed_contracts", [])}

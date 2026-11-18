@@ -1,0 +1,2098 @@
+{
+  "schema": "MergeReviewerImprovementValidation/v1",
+  "task_date": "2026-11-17",
+  "timezone": "Asia/Taipei",
+  "finalized_utc": "2026-11-17T16:55:38.003810+00:00",
+  "status": "local-candidate-with-bounded-validation",
+  "publication": {
+    "remote_published": false,
+    "existing_installations_updated": false
+  },
+  "baseline_revision": "5a255fc9f35643eb4164fc893826cec42737ccbe",
+  "identities": {
+    "baseline_skill_sha256": "e4763e2aec7dcee16d824441a02e1706c1cab9189ebf617d4ded5a0967a37f5f",
+    "model_cohort_candidate_skill_sha256": "582df6e83572a78b5b415de1a6bd7f7a2bd8376b461a2e9e8bc0403ef9547e25",
+    "final_artifact_skill_sha256": "bda2fdbcf0418c2b9270901d068f2a2d28827f3f214aef4e923935a368c8271b"
+  },
+  "auth_followup_equivalence": {
+    "passed": true,
+    "model_cohort_skill_sha256": "582df6e83572a78b5b415de1a6bd7f7a2bd8376b461a2e9e8bc0403ef9547e25",
+    "final_skill_sha256": "bda2fdbcf0418c2b9270901d068f2a2d28827f3f214aef4e923935a368c8271b",
+    "changed_skill_files": [
+      "scripts/review_content.py",
+      "scripts/workspace_report.py"
+    ],
+    "source_views_equal": true,
+    "actual_reports_unchanged_by_final_redactor": true,
+    "sources": [
+      {
+        "fixture": "seed-01",
+        "path": "README.md",
+        "ref": "2f265d0fc4abcaf2b147e60540dea3525d3d58cf",
+        "sha256": "147aca837e5ba1e482cb14cf93b4ad7e5c2b92d5f9b64c658b6c89b94d71fe02"
+      },
+      {
+        "fixture": "seed-01",
+        "path": "pricing.py",
+        "ref": "2f265d0fc4abcaf2b147e60540dea3525d3d58cf",
+        "sha256": "50b174d2987dd964764a5b49a57119ba543ad98270be0ca1f184b6b0a4362a4f"
+      },
+      {
+        "fixture": "seed-01",
+        "path": "README.md",
+        "ref": "188fad9e6d35a4b4ec71a82bb0bcba176e7a5911",
+        "sha256": "147aca837e5ba1e482cb14cf93b4ad7e5c2b92d5f9b64c658b6c89b94d71fe02"
+      },
+      {
+        "fixture": "seed-01",
+        "path": "pricing.py",
+        "ref": "188fad9e6d35a4b4ec71a82bb0bcba176e7a5911",
+        "sha256": "5068c62f4bbc25cfe00351d151aaacdbdcf30311db4d105b47b8663c7b2720d4"
+      },
+      {
+        "fixture": "seed-02",
+        "path": "README.md",
+        "ref": "e071a35c9a030c50cdeda1604e04616cdc6a8606",
+        "sha256": "6f07870e4d165321ee4d019a5fb843b1c93fd308edf60569736e8254ca6fb6b3"
+      },
+      {
+        "fixture": "seed-02",
+        "path": "interest.py",
+        "ref": "e071a35c9a030c50cdeda1604e04616cdc6a8606",
+        "sha256": "fa63ae7509baed7ad3ba4899180cef282a14062bd94700489e6ba99d74a3ce48"
+      },
+      {
+        "fixture": "seed-02",
+        "path": "README.md",
+        "ref": "79a8b8c856d22e122eb86bd7c76c4cb60d340827",
+        "sha256": "6f07870e4d165321ee4d019a5fb843b1c93fd308edf60569736e8254ca6fb6b3"
+      },
+      {
+        "fixture": "seed-02",
+        "path": "interest.py",
+        "ref": "79a8b8c856d22e122eb86bd7c76c4cb60d340827",
+        "sha256": "a0a762453601faba4a0565acfad7c9c3cd3e3cd0266e3eb1fc6114f3f373886a"
+      },
+      {
+        "fixture": "seed-03",
+        "path": "README.md",
+        "ref": "4409f15dc7b5a94ce72866a239f011a0e0855c4b",
+        "sha256": "e1bde18da3bb26efef2d6a81674d25efead6a62b96897819de79ef23f72ccea1"
+      },
+      {
+        "fixture": "seed-03",
+        "path": "interest.py",
+        "ref": "4409f15dc7b5a94ce72866a239f011a0e0855c4b",
+        "sha256": "893b6645a84bf1cad0995cbf0e3a210e88f8b893c91b41840fe749fecf05e452"
+      },
+      {
+        "fixture": "seed-03",
+        "path": "README.md",
+        "ref": "024bf7f2653d48e057e0634d52ec6a5c4d655abf",
+        "sha256": "e1bde18da3bb26efef2d6a81674d25efead6a62b96897819de79ef23f72ccea1"
+      },
+      {
+        "fixture": "seed-03",
+        "path": "interest.py",
+        "ref": "024bf7f2653d48e057e0634d52ec6a5c4d655abf",
+        "sha256": "1b46f852795af42ae8cedc460f7d2841a6b43e8bb898f0237b499edd98ef5da7"
+      },
+      {
+        "fixture": "seed-04",
+        "path": "README.md",
+        "ref": "9b16c92d7dae342e2cf07c724631fda1e3444fb9",
+        "sha256": "4c3458f5f5f6b6428ffca16e9b6a6d166a8d1b75ad64e136a17d47843a7f8f06"
+      },
+      {
+        "fixture": "seed-04",
+        "path": "exporter.py",
+        "ref": "9b16c92d7dae342e2cf07c724631fda1e3444fb9",
+        "sha256": "1118b0c686990ad7581b64058a57bea17b577150785f06062086d48917c05be0"
+      },
+      {
+        "fixture": "seed-04",
+        "path": "README.md",
+        "ref": "aec74da01ab84e97838a2a058c1cf075eaed317a",
+        "sha256": "4c3458f5f5f6b6428ffca16e9b6a6d166a8d1b75ad64e136a17d47843a7f8f06"
+      },
+      {
+        "fixture": "seed-04",
+        "path": "exporter.py",
+        "ref": "aec74da01ab84e97838a2a058c1cf075eaed317a",
+        "sha256": "857c46c5114b74fe9fb332dd27f09c7ee808567cfed6d65a679fd3b07a539e1e"
+      },
+      {
+        "fixture": "seed-05",
+        "path": "README.md",
+        "ref": "b415c32025aec1b8d87701e64112cd0e66578a38",
+        "sha256": "1a4c4ff93c30ad17132eda704f9c814eae62421e4f315b979117742ecb878246"
+      },
+      {
+        "fixture": "seed-05",
+        "path": "app.py",
+        "ref": "b415c32025aec1b8d87701e64112cd0e66578a38",
+        "sha256": "347691be148560ef0927b9494fffb5d5d3d156756a4d63ddd1b43d9f4d7cdb8e"
+      },
+      {
+        "fixture": "seed-05",
+        "path": "bootstrap.py",
+        "ref": "b415c32025aec1b8d87701e64112cd0e66578a38",
+        "sha256": "da79078e83745dfd6dfdec123f320c51967e5e2c44250739fdcb126d59bff9a8"
+      },
+      {
+        "fixture": "seed-05",
+        "path": "contract-registry.json",
+        "ref": "b415c32025aec1b8d87701e64112cd0e66578a38",
+        "sha256": "f92d0d2a61e99d6d0ee4efcd45f5dcc7baabc0ce93fa13eee7759c0d203fdbf0"
+      },
+      {
+        "fixture": "seed-05",
+        "path": "README.md",
+        "ref": "7a267f861d863b39aeadd5bae781af6fc78c0f99",
+        "sha256": "1a4c4ff93c30ad17132eda704f9c814eae62421e4f315b979117742ecb878246"
+      },
+      {
+        "fixture": "seed-05",
+        "path": "app.py",
+        "ref": "7a267f861d863b39aeadd5bae781af6fc78c0f99",
+        "sha256": "fb58aa81b0caae5b58cd6963636f509612c4b370721d57744856a0a569be179b"
+      },
+      {
+        "fixture": "seed-05",
+        "path": "bootstrap.py",
+        "ref": "7a267f861d863b39aeadd5bae781af6fc78c0f99",
+        "sha256": "da79078e83745dfd6dfdec123f320c51967e5e2c44250739fdcb126d59bff9a8"
+      },
+      {
+        "fixture": "seed-05",
+        "path": "contract-registry.json",
+        "ref": "7a267f861d863b39aeadd5bae781af6fc78c0f99",
+        "sha256": "f92d0d2a61e99d6d0ee4efcd45f5dcc7baabc0ce93fa13eee7759c0d203fdbf0"
+      }
+    ],
+    "reports": [
+      {
+        "run": "run-01",
+        "sha256": "1e6a06776bad9178676229441e2985aecc9de9d3efbafdbda5bf337b401b20c1"
+      },
+      {
+        "run": "run-02",
+        "sha256": "de2992b4a7d1af784f4c8a980e31e3b8fb0e272f69110fbced56b952e5473b4c"
+      },
+      {
+        "run": "run-03",
+        "sha256": "ed65e233a592a4403bb55c24b20c380cdb787febd82c5ca7d2a073a14f7720f5"
+      },
+      {
+        "run": "run-04",
+        "sha256": "b77e775c1b75cdbda114ee6e1b50087aa82ddfa5cfed909488e75fe527569618"
+      },
+      {
+        "run": "run-05",
+        "sha256": "d9869ebe433a355bdc3aec935b1efb0c1f8d5d66a8a87e5af7b83bd69eade201"
+      },
+      {
+        "run": "run-06",
+        "sha256": "ed1492bff057341c995fe21ae4c8bdc77690c368076ccad2cad2abe52b5919df"
+      },
+      {
+        "run": "run-07",
+        "sha256": "8dc3425a49cec1e4587c91217b0b21840967016c3c6fb758235075f574b36363"
+      },
+      {
+        "run": "run-08",
+        "sha256": "3352254f60b3074e06b3b32cbb333423840362f4997aa183efc28826b8f80c35"
+      },
+      {
+        "run": "run-09",
+        "sha256": "c2af880b47e588f5ce558dc8e5f916cfb8faf133ae648af07f7aa053a0e62a32"
+      },
+      {
+        "run": "run-10",
+        "sha256": "a22a60c8ca0d74818e2f88b9354615873a2da5fca39d81fab7ec280fb5b4713d"
+      }
+    ],
+    "models_rerun_after_auth_followup": false,
+    "scope": "Exact source-view equality on all base/head corpus files and unchanged ten native report bodies. Does not claim a new model timing run on the final helper hash."
+  },
+  "package": {
+    "archive": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\dist\\merge-reviewer-0.24.0.zip",
+    "archive_sha256": "2eb23f6ac3a35c28e621365445add1da3bc380213f9d0050794db2c016b67ddc",
+    "archive_bytes": 651104,
+    "entries": 38,
+    "canonical_source_parity": true,
+    "inspection_writes": 0,
+    "companion_identity_matches_native": true,
+    "packaged_capabilities": {
+      "schema": "MergeReviewCapabilities/v1",
+      "protocol_version": 1,
+      "draft_formats": [
+        "compact",
+        "v3"
+      ],
+      "features": {
+        "artifact_scopes": [
+          "context",
+          "runtime"
+        ],
+        "read_only_artifact_view": true,
+        "request_preflight": true,
+        "incremental_resume": true,
+        "publication_retry": true,
+        "batch_artifact_view": true,
+        "summary_status": true,
+        "validation_progress": true,
+        "atomic_authoring": true,
+        "native_checkpoint": true,
+        "paging_state": true,
+        "operation_schema": true,
+        "paging_seed": true,
+        "shared_paged_contents": true,
+        "patch_file_index": true,
+        "shared_read_contents": true,
+        "launch_preflight": true,
+        "read_only_inspection": true,
+        "completion_preview": true,
+        "scope_notes": true,
+        "phase_metrics": true,
+        "capability_manifest": true,
+        "readable_report": true
+      },
+      "skill_version": "0.24.0",
+      "helper_sha256": "47aba633747ffd11213b2700051891b51de458df447ebe7bc629ca7a78765170",
+      "python_version": "3.14.7",
+      "python_executable": "C:\\Python314\\python.exe",
+      "capabilities_sha256": "083e6646e8cd421dca2606eb4624cd00a6351131706192559b68c57e5611c095"
+    }
+  },
+  "environment": {
+    "python": "3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64 bit (AMD64)]",
+    "python310_ast_files": 82,
+    "python310_runtime_tested": false,
+    "codex_cli": "codex-cli 0.169.0",
+    "model_requested": "gpt-6.1-sol",
+    "reasoning_requested": "max",
+    "served_model": null
+  },
+  "tests": {
+    "initial_full": {
+      "tests": 484,
+      "skipped": 3,
+      "failures": 0
+    },
+    "subsequent_shards": {
+      "expected": 492,
+      "unique_ids": 486,
+      "actual": 492,
+      "skipped": 3,
+      "seconds": 774.3938896000036,
+      "passed": false,
+      "shards": [
+        {
+          "shard": 1,
+          "expected": 164,
+          "actual": 164,
+          "exit_code": 1,
+          "skipped": 0,
+          "seconds": 774.3918119000009,
+          "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\final-suite-v2\\shard-1.log",
+          "passed": false
+        },
+        {
+          "shard": 2,
+          "expected": 164,
+          "actual": 164,
+          "exit_code": 0,
+          "skipped": 1,
+          "seconds": 707.6244479000015,
+          "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\final-suite-v2\\shard-2.log",
+          "passed": true
+        },
+        {
+          "shard": 3,
+          "expected": 164,
+          "actual": 164,
+          "exit_code": 0,
+          "skipped": 2,
+          "seconds": 514.2821530000001,
+          "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\final-suite-v2\\shard-3.log",
+          "passed": true
+        }
+      ]
+    },
+    "documentation_repair": {
+      "name": "documentation-final",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "unittest",
+        "tests.test_documentation",
+        "-v"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/MergeReviewer",
+      "exit_code": 0,
+      "seconds": 7.938346700000693,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\documentation-final.log"
+    },
+    "documentation_completed": {
+      "name": "documentation-links-completed",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "unittest",
+        "tests.test_documentation.DocumentationPackageTests.test_source_and_packaged_markdown_links_resolve",
+        "-v"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/MergeReviewer",
+      "exit_code": 0,
+      "seconds": 0.19986610000341898,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\documentation-links-completed.log"
+    },
+    "scope_fix_flow": {
+      "name": "scope-fix-flow-regression",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "unittest",
+        "tests.test_flow",
+        "tests.test_flow_optimizations",
+        "tests.test_r3_authoring_diagnostics",
+        "tests.test_diagnostic_shapes",
+        "tests.test_operation_schema",
+        "tests.test_source_redaction",
+        "-v"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/MergeReviewer",
+      "exit_code": 0,
+      "seconds": 175.5646285000039,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\scope-fix-flow-regression.log"
+    },
+    "scope_fix_publication": {
+      "name": "scope-fix-publication-regression",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "unittest",
+        "tests.test_report_retry",
+        "tests.test_retry_integrity",
+        "tests.test_review_report",
+        "tests.test_readable_report",
+        "tests.test_presentation_replay",
+        "tests.test_review_recovery",
+        "-v"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/MergeReviewer",
+      "exit_code": 0,
+      "seconds": 177.70949019999534,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\scope-fix-publication-regression.log"
+    },
+    "auth_literals": {
+      "name": "auth-literals-green",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "unittest",
+        "tests.test_source_redaction",
+        "tests.test_readable_report",
+        "tests.test_presentation_replay",
+        "tests.test_flow_optimizations",
+        "tests.test_review_improvement_corpus",
+        "-v"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/MergeReviewer",
+      "exit_code": 0,
+      "seconds": 0.9753233000010368,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\auth-literals-green.log"
+    },
+    "auth_publication": {
+      "name": "auth-publication-regression",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "unittest",
+        "tests.test_review_report",
+        "tests.test_review_updates",
+        "tests.test_report_retry",
+        "-v"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/MergeReviewer",
+      "exit_code": 0,
+      "seconds": 104.1469988999961,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\auth-publication-regression.log"
+    },
+    "final_focused": {
+      "name": "final-auth-focused-checks",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "unittest",
+        "tests.test_source_redaction",
+        "tests.test_readable_report",
+        "tests.test_presentation_replay",
+        "tests.test_review_improvement_corpus",
+        "tests.test_documentation",
+        "tests.test_operation_schema",
+        "-v"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/MergeReviewer",
+      "exit_code": 0,
+      "seconds": 5.359927899997274,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\final-auth-focused-checks.log"
+    },
+    "bdd": {
+      "name": "bdd-final",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "behave",
+        "tests/features",
+        "--tags=not @human-acceptance"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/MergeReviewer",
+      "exit_code": 0,
+      "seconds": 21.798085100002936,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\bdd-final.log"
+    },
+    "release_contracts": {
+      "name": "release-contracts-final",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "scripts/test_release_ci.py",
+        "-v"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/MergeReviewer",
+      "exit_code": 0,
+      "seconds": 0.8840114999984507,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\release-contracts-final.log"
+    },
+    "host_current": {
+      "name": "host-reports-current-final",
+      "command": [
+        "node",
+        "--require",
+        "./test/network-test-environment.cjs",
+        "--test",
+        "--test-concurrency=1",
+        "out/test/unit/reviewSessions.test.js",
+        "out/test/unit/reviewLaunchHost.test.js",
+        "out/test/unit/reviewLaunch.test.js"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/GitlabWorkSpace",
+      "exit_code": 0,
+      "seconds": 2.3727864000029513,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\host-reports-current-final.log"
+    },
+    "host_native_reports": {
+      "passed": true,
+      "host_source": "freshly compiled GitlabWorkSpace reviewSessions.ts",
+      "scope": "Actual native report/receipt/fixed SHA identity parsing; not VSCode UI automation.",
+      "reports": [
+        {
+          "run": "run-01",
+          "variant": "baseline",
+          "identity": {
+            "baseSha": "2f265d0fc4abcaf2b147e60540dea3525d3d58cf",
+            "headSha": "188fad9e6d35a4b4ec71a82bb0bcba176e7a5911"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-01\\workspace\\orders\\review-reports\\merge-review-20261117T153059428082Z-2f265d0f-188fad9e.md",
+          "report_sha256": "1e6a06776bad9178676229441e2985aecc9de9d3efbafdbda5bf337b401b20c1",
+          "review_complete": true,
+          "review_status": "發現具體問題"
+        },
+        {
+          "run": "run-02",
+          "variant": "candidate",
+          "identity": {
+            "baseSha": "2f265d0fc4abcaf2b147e60540dea3525d3d58cf",
+            "headSha": "188fad9e6d35a4b4ec71a82bb0bcba176e7a5911"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-02\\workspace\\orders\\review-reports\\merge-review-20261117T153626589564Z-2f265d0f-188fad9e.md",
+          "report_sha256": "de2992b4a7d1af784f4c8a980e31e3b8fb0e272f69110fbced56b952e5473b4c",
+          "review_complete": true,
+          "review_status": "發現具體問題"
+        },
+        {
+          "run": "run-03",
+          "variant": "candidate",
+          "identity": {
+            "baseSha": "e071a35c9a030c50cdeda1604e04616cdc6a8606",
+            "headSha": "79a8b8c856d22e122eb86bd7c76c4cb60d340827"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-03\\workspace\\orders\\review-reports\\merge-review-20261117T154104595245Z-e071a35c-79a8b8c8.md",
+          "report_sha256": "ed65e233a592a4403bb55c24b20c380cdb787febd82c5ca7d2a073a14f7720f5",
+          "review_complete": true,
+          "review_status": "未發現具體問題"
+        },
+        {
+          "run": "run-04",
+          "variant": "baseline",
+          "identity": {
+            "baseSha": "e071a35c9a030c50cdeda1604e04616cdc6a8606",
+            "headSha": "79a8b8c856d22e122eb86bd7c76c4cb60d340827"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-04\\workspace\\orders\\review-reports\\merge-review-20261117T154614240659Z-e071a35c-79a8b8c8.md",
+          "report_sha256": "b77e775c1b75cdbda114ee6e1b50087aa82ddfa5cfed909488e75fe527569618",
+          "review_complete": true,
+          "review_status": "未發現具體問題"
+        },
+        {
+          "run": "run-05",
+          "variant": "baseline",
+          "identity": {
+            "baseSha": "4409f15dc7b5a94ce72866a239f011a0e0855c4b",
+            "headSha": "024bf7f2653d48e057e0634d52ec6a5c4d655abf"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-05\\workspace\\orders\\review-reports\\merge-review-20261117T155125283479Z-4409f15d-024bf7f2.md",
+          "report_sha256": "d9869ebe433a355bdc3aec935b1efb0c1f8d5d66a8a87e5af7b83bd69eade201",
+          "review_complete": true,
+          "review_status": "發現具體問題"
+        },
+        {
+          "run": "run-06",
+          "variant": "candidate",
+          "identity": {
+            "baseSha": "4409f15dc7b5a94ce72866a239f011a0e0855c4b",
+            "headSha": "024bf7f2653d48e057e0634d52ec6a5c4d655abf"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-06\\workspace\\orders\\review-reports\\merge-review-20261117T155604803254Z-4409f15d-024bf7f2.md",
+          "report_sha256": "ed1492bff057341c995fe21ae4c8bdc77690c368076ccad2cad2abe52b5919df",
+          "review_complete": true,
+          "review_status": "發現具體問題"
+        },
+        {
+          "run": "run-07",
+          "variant": "candidate",
+          "identity": {
+            "baseSha": "9b16c92d7dae342e2cf07c724631fda1e3444fb9",
+            "headSha": "aec74da01ab84e97838a2a058c1cf075eaed317a"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-07\\workspace\\orders\\review-reports\\merge-review-20261117T160011076226Z-9b16c92d-aec74da0.md",
+          "report_sha256": "8dc3425a49cec1e4587c91217b0b21840967016c3c6fb758235075f574b36363",
+          "review_complete": true,
+          "review_status": "發現具體問題"
+        },
+        {
+          "run": "run-08",
+          "variant": "baseline",
+          "identity": {
+            "baseSha": "9b16c92d7dae342e2cf07c724631fda1e3444fb9",
+            "headSha": "aec74da01ab84e97838a2a058c1cf075eaed317a"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-08\\workspace\\orders\\review-reports\\merge-review-20261117T160514426566Z-9b16c92d-aec74da0.md",
+          "report_sha256": "3352254f60b3074e06b3b32cbb333423840362f4997aa183efc28826b8f80c35",
+          "review_complete": true,
+          "review_status": "發現具體問題"
+        },
+        {
+          "run": "run-09",
+          "variant": "baseline",
+          "identity": {
+            "baseSha": "b415c32025aec1b8d87701e64112cd0e66578a38",
+            "headSha": "7a267f861d863b39aeadd5bae781af6fc78c0f99"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-09\\workspace\\orders-service\\review-reports\\merge-review-20261117T161108210686Z-b415c320-7a267f86.md",
+          "report_sha256": "c2af880b47e588f5ce558dc8e5f916cfb8faf133ae648af07f7aa053a0e62a32",
+          "review_complete": false,
+          "review_status": "審查未完成"
+        },
+        {
+          "run": "run-10",
+          "variant": "candidate",
+          "identity": {
+            "baseSha": "b415c32025aec1b8d87701e64112cd0e66578a38",
+            "headSha": "7a267f861d863b39aeadd5bae781af6fc78c0f99"
+          },
+          "report_path": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-10\\workspace\\orders-service\\review-reports\\merge-review-20261117T161708762536Z-b415c320-7a267f86.md",
+          "report_sha256": "a22a60c8ca0d74818e2f88b9354615873a2da5fca39d81fab7ec280fb5b4713d",
+          "review_complete": false,
+          "review_status": "審查未完成"
+        }
+      ]
+    },
+    "workflowkit_launcher": {
+      "name": "workflowkit-launcher-completed",
+      "command": [
+        "python",
+        "-X",
+        "utf8",
+        "-B",
+        "test/release/review_launch_test.py"
+      ],
+      "cwd": "C:/Users/denni/OneDrive/Desktop/新增資料夾/WorkflowKit",
+      "exit_code": 0,
+      "seconds": 11.076152499997988,
+      "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\workflowkit-launcher-completed.log"
+    },
+    "installed_compatibility": {
+      "root": "C:\\Users\\denni\\AppData\\Local\\Temp\\wki-qrwml9eo",
+      "steps": [
+        {
+          "name": "isolated-kit-build-complete-overlay-copy",
+          "exit_code": 0,
+          "seconds": 84.86651929999789,
+          "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\isolated-kit-build-complete-overlay-copy.log"
+        },
+        {
+          "name": "isolated-kit-sessions-complete-overlay-copy",
+          "exit_code": 0,
+          "seconds": 408.2961129000032,
+          "log": "C:\\Users\\denni\\OneDrive\\Desktop\\新增資料夾\\MergeReviewer\\.tmp\\review-improvements-20261117\\isolated-kit-sessions-complete-overlay-copy.log"
+        }
+      ],
+      "passed": true
+    },
+    "bound_native": {
+      "passed": true,
+      "scope": "Controlled managed binding with actual candidate payload; no user installation or official source pins changed.",
+      "tool_identity": {
+        "skill_version": "0.24.0",
+        "helper_sha256": "47aba633747ffd11213b2700051891b51de458df447ebe7bc629ca7a78765170",
+        "python_version": "3.14.7",
+        "python_executable": "C:\\Python314\\python.exe",
+        "capabilities_sha256": "c65b267cf4816582a5adced77f1a54aa6fc0ec9440a3d34034198d13c5be699c"
+      },
+      "readonly_file_and_mtime_parity": true,
+      "actions": [
+        {
+          "action": "schema",
+          "metrics": {
+            "schema": "ReviewLaunchMetrics/v1",
+            "action": "schema",
+            "returncode": 0,
+            "timings": {
+              "request_seconds": 0.0006215000030351803,
+              "binding_seconds": 0.006715700001223013,
+              "capabilities_seconds": 0.0037649999940185808,
+              "child_seconds": 0.18162029999803053,
+              "total_seconds": 0.20830859999841778
+            },
+            "capabilities_source": "verified-manifest"
+          },
+          "schema": "MergeReviewOperationSchema/v1"
+        },
+        {
+          "action": "start",
+          "metrics": {
+            "schema": "ReviewLaunchMetrics/v1",
+            "action": "start",
+            "returncode": 0,
+            "timings": {
+              "request_seconds": 0.000734799999918323,
+              "binding_seconds": 0.007082600001012906,
+              "capabilities_seconds": 0.0036837000006926246,
+              "preflight_seconds": 0.3412884999997914,
+              "child_seconds": 2.2274627999941004,
+              "total_seconds": 2.6071365999960108
+            },
+            "capabilities_source": "verified-manifest"
+          },
+          "schema": "MergeReviewStart/v1"
+        },
+        {
+          "action": "status",
+          "metrics": {
+            "schema": "ReviewLaunchMetrics/v1",
+            "action": "status",
+            "returncode": 0,
+            "timings": {
+              "request_seconds": 0.0006493000037153251,
+              "binding_seconds": 0.006828099998529069,
+              "capabilities_seconds": 0.0036799000008613802,
+              "child_seconds": 0.1653535000004922,
+              "total_seconds": 0.19253970000136178
+            },
+            "capabilities_source": "verified-manifest"
+          },
+          "schema": "MergeReviewStatusSummary/v1"
+        },
+        {
+          "action": "cancel",
+          "metrics": {
+            "schema": "ReviewLaunchMetrics/v1",
+            "action": "cancel",
+            "returncode": 0,
+            "timings": {
+              "request_seconds": 0.0006280000015976839,
+              "binding_seconds": 0.007397600005788263,
+              "capabilities_seconds": 0.0036173999978927895,
+              "child_seconds": 0.1602513000034378,
+              "total_seconds": 0.1937300999998115
+            },
+            "capabilities_source": "verified-manifest"
+          },
+          "schema": "MergeReviewSession/v1"
+        }
+      ]
+    }
+  },
+  "attached_logs": {
+    "schema": "AttachedReviewLogAudit/v1",
+    "definition": "Activity headings and first shell command line only; nonzero includes expected outcomes; observations are not false-positive rates.",
+    "files": [
+      {
+        "file": "codex-session-01a1e212-a327-7a32-ad21-e4f128b73dc6.md",
+        "sha256": "4e5747c5bfce5527f26de49bd3dba191f0b65e15830b59ca461ff4627ea67a5f",
+        "bytes": 981835,
+        "activities": 117,
+        "shell_commands": 116,
+        "view_commands": 45,
+        "permission_denied_activities": 2,
+        "nonzero_exit_activities": 12,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e251-7dd2-7043-9e57-6ff43222161f.md",
+        "sha256": "4008b29e3b47e91c8dd0315acedfc4819a4cf2de8390e6baf11f66385ddafad1",
+        "bytes": 857138,
+        "activities": 148,
+        "shell_commands": 143,
+        "view_commands": 55,
+        "permission_denied_activities": 3,
+        "nonzero_exit_activities": 6,
+        "paging_schema_observed": true
+      },
+      {
+        "file": "codex-session-01a1e252-21ad-7230-8537-61365bef3cd0.md",
+        "sha256": "d99e08de53fa43046cbd34c5d08fd6e8c9e09821a4efdb73c5a3e7c900c1d0d9",
+        "bytes": 1000174,
+        "activities": 143,
+        "shell_commands": 142,
+        "view_commands": 50,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 16,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e2e6-40c2-73d2-96ca-cadb00c8ad41.md",
+        "sha256": "39216b274903ae8fe5032ca7965e73fc75525b602ad8714932bb650a7e51d1ed",
+        "bytes": 399777,
+        "activities": 58,
+        "shell_commands": 58,
+        "view_commands": 6,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 3,
+        "paging_schema_observed": true
+      },
+      {
+        "file": "codex-session-01a1e2e6-74cc-7b33-8bf7-b9a483e1a0cc.md",
+        "sha256": "4c631f01b75bc4a6b6af6bfb9a95fd1bc41408933404275ab91a3d5b5ab05aec",
+        "bytes": 833939,
+        "activities": 110,
+        "shell_commands": 109,
+        "view_commands": 53,
+        "permission_denied_activities": 0,
+        "nonzero_exit_activities": 4,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e2f2-bfd1-72f0-aa4a-495ddb897f8c.md",
+        "sha256": "41a309bd8b8b0f1154ff0e3fce308b7291142ab1813a889fe9c89c443320f50b",
+        "bytes": 1174169,
+        "activities": 157,
+        "shell_commands": 155,
+        "view_commands": 57,
+        "permission_denied_activities": 6,
+        "nonzero_exit_activities": 28,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e309-8393-7473-bcdd-de14c89aebfa.md",
+        "sha256": "75f5e095a7ef8a1b310b70074a605bb15a360a0cd5629883d345453887c20f83",
+        "bytes": 1135614,
+        "activities": 134,
+        "shell_commands": 133,
+        "view_commands": 70,
+        "permission_denied_activities": 2,
+        "nonzero_exit_activities": 15,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e321-b030-72d2-9fbf-51a29c72e52c.md",
+        "sha256": "3ed64f48e3977b1a9f7c9252d89c67ac60800f8fcf500bdf5c1a1b9921a3a392",
+        "bytes": 1123935,
+        "activities": 166,
+        "shell_commands": 161,
+        "view_commands": 27,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 6,
+        "paging_schema_observed": true
+      },
+      {
+        "file": "codex-session-01a1e378-d7f3-7fe1-bee9-ad9c842c7a3c.md",
+        "sha256": "7163bd7fd6480f73ec0b8b2ec24600b6e550e41758e56dde360271698d6b7233",
+        "bytes": 431547,
+        "activities": 44,
+        "shell_commands": 44,
+        "view_commands": 10,
+        "permission_denied_activities": 3,
+        "nonzero_exit_activities": 7,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e6d8-5694-7db1-a2d5-685812b64c4f.md",
+        "sha256": "cd70328ff19c6862c0b800f8b326d3bfc5462db907137a1a724046d9620abe1d",
+        "bytes": 440218,
+        "activities": 78,
+        "shell_commands": 78,
+        "view_commands": 29,
+        "permission_denied_activities": 0,
+        "nonzero_exit_activities": 3,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e6d8-a38d-73c0-8dba-18ee02aa128a.md",
+        "sha256": "eecc0712b5059fbee4a8b2e4a67117e641828733cd1f97933ed92bd4aad6a2dd",
+        "bytes": 830064,
+        "activities": 100,
+        "shell_commands": 91,
+        "view_commands": 17,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 7,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e731-4d5c-7b71-a39b-ee20b35d7316.md",
+        "sha256": "aa310e761c6f797187e66b8688ade6b02d79f28b44dac1fb8919c09edd6793ac",
+        "bytes": 1019592,
+        "activities": 170,
+        "shell_commands": 167,
+        "view_commands": 93,
+        "permission_denied_activities": 2,
+        "nonzero_exit_activities": 7,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e742-2573-7940-b347-f76933fc7f15.md",
+        "sha256": "c92a1a2c6fe2b53391dd9b898ea06aee406e9b644035e3736332ea03d805a594",
+        "bytes": 288312,
+        "activities": 42,
+        "shell_commands": 38,
+        "view_commands": 3,
+        "permission_denied_activities": 0,
+        "nonzero_exit_activities": 1,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e75d-73f9-74d0-8851-ef29fad9fb6c.md",
+        "sha256": "65b1a511581331d8cd58a6d1a28fa45fbc2a766f92f23910a41a64d8fbe3ce23",
+        "bytes": 1085665,
+        "activities": 155,
+        "shell_commands": 154,
+        "view_commands": 39,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 11,
+        "paging_schema_observed": true
+      },
+      {
+        "file": "codex-session-01a1e763-0c74-7381-b6bf-21d6a6b69a18.md",
+        "sha256": "8fdf4f05252da07bb6a2d2f5a58f087dbf9c684fe5822f62aede498a53194814",
+        "bytes": 630719,
+        "activities": 79,
+        "shell_commands": 78,
+        "view_commands": 31,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 1,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e78d-b045-7413-836b-5252541cc022.md",
+        "sha256": "697b5ed33fed09d6fbebc9d51486244ca57eb148dc82ba6a66f321978e144150",
+        "bytes": 1204948,
+        "activities": 181,
+        "shell_commands": 180,
+        "view_commands": 56,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 33,
+        "paging_schema_observed": true
+      },
+      {
+        "file": "codex-session-01a1e78e-4fa6-78e1-ab3d-90e868417675.md",
+        "sha256": "2a9e3f13cb525af991d7b5bae0d394024f42bbc2ff1c653add136596923c47bd",
+        "bytes": 775372,
+        "activities": 100,
+        "shell_commands": 99,
+        "view_commands": 43,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 11,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e7ed-bdc1-79a1-a11b-73eae42de818.md",
+        "sha256": "b9947bf0e69ddcf178ba5e0b01e7521b216dd6999dd89f0a821c4885621aac1d",
+        "bytes": 568732,
+        "activities": 73,
+        "shell_commands": 72,
+        "view_commands": 8,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 5,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e7ed-c3c8-70e3-ac43-a4aeef08c9c0.md",
+        "sha256": "f5930f6d72350c7bda8c4c23d9c5eaba2f2ed67c56b5406f2cbe2ab5761bffc3",
+        "bytes": 576521,
+        "activities": 59,
+        "shell_commands": 58,
+        "view_commands": 28,
+        "permission_denied_activities": 0,
+        "nonzero_exit_activities": 8,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e806-62e1-7313-9da0-6b3c58dfa2d5.md",
+        "sha256": "e2960b10fca5eb1c0ec455858fc6684fcf55015fc3a4b8d24502f7485273ce4f",
+        "bytes": 344834,
+        "activities": 31,
+        "shell_commands": 31,
+        "view_commands": 6,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 2,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e843-ddbd-78b0-8a82-d4fbee9c7aac.md",
+        "sha256": "962e432db90e6b396323d4d60fa5a7b68e9bce22cb0de9ccd7c700e8488d733d",
+        "bytes": 281491,
+        "activities": 35,
+        "shell_commands": 35,
+        "view_commands": 3,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 2,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e843-eafc-7062-b491-3f71f148fa50.md",
+        "sha256": "60e6760a392935d4b310206a4334a6f4fa751311194847edcd6c0db25b912a4b",
+        "bytes": 368202,
+        "activities": 45,
+        "shell_commands": 45,
+        "view_commands": 8,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 2,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e844-076e-7c50-8c35-f15823496d33.md",
+        "sha256": "278b2cab5e257360da83df19459470b67f0b982ee819666db8a7a90b150ab9a8",
+        "bytes": 3197349,
+        "activities": 377,
+        "shell_commands": 370,
+        "view_commands": 323,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 18,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e844-2740-7371-994f-c1fdc298ecd5.md",
+        "sha256": "95fba979d3b37f39f63153c064d14e6722c5eb0ec58f960218feebbda0f25fd2",
+        "bytes": 431476,
+        "activities": 62,
+        "shell_commands": 62,
+        "view_commands": 13,
+        "permission_denied_activities": 2,
+        "nonzero_exit_activities": 6,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e851-b4d3-7fd0-b930-eccb2c6d3905.md",
+        "sha256": "97908dc99eb341a21189991dedc262adfc4320e6474350e0a1c0bbf1560d19cc",
+        "bytes": 370532,
+        "activities": 63,
+        "shell_commands": 58,
+        "view_commands": 23,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 2,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e864-f8a6-75d2-8f21-d8a025c946fd.md",
+        "sha256": "6b4539e3cd595f3895a211404fbe68c0dfb6f5a1755058144327ee7910a54f43",
+        "bytes": 438342,
+        "activities": 64,
+        "shell_commands": 64,
+        "view_commands": 25,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 11,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e8a7-ea0c-79e2-9b24-ba53f9968cc5.md",
+        "sha256": "68bc124fc24772b0f9ce51929ea2fcb059f1b4d43cc86ab0f263f3975a41682a",
+        "bytes": 359047,
+        "activities": 51,
+        "shell_commands": 51,
+        "view_commands": 5,
+        "permission_denied_activities": 1,
+        "nonzero_exit_activities": 2,
+        "paging_schema_observed": false
+      },
+      {
+        "file": "codex-session-01a1e8b2-5da5-76b3-84b1-f14bcc956560.md",
+        "sha256": "8e74956b319ab209bff3f6cd57e50f89021ab3ec56ef37fbf056585c46cd4659",
+        "bytes": 522574,
+        "activities": 66,
+        "shell_commands": 66,
+        "view_commands": 28,
+        "permission_denied_activities": 3,
+        "nonzero_exit_activities": 5,
+        "paging_schema_observed": false
+      }
+    ],
+    "totals": {
+      "bytes": 21672118,
+      "activities": 2908,
+      "shell_commands": 2858,
+      "view_commands": 1154,
+      "permission_denied_activities": 39,
+      "nonzero_exit_activities": 234
+    },
+    "sessions_with_permission_denied": 24,
+    "sessions_with_paging_schema_observed": 5
+  },
+  "helper_replay": {
+    "schema": "MergeReviewLogWorkflowReplay/v1",
+    "baseline_revision": "5a255fc9f35643eb4164fc893826cec42737ccbe",
+    "baseline_skill_sha256": "e4763e2aec7dcee16d824441a02e1706c1cab9189ebf617d4ded5a0967a37f5f",
+    "baseline_source": "frozen-directory",
+    "candidate_skill_sha256": "bda2fdbcf0418c2b9270901d068f2a2d28827f3f214aef4e923935a368c8271b",
+    "repeats": 5,
+    "pairs": [
+      {
+        "baseline": {
+          "helper_workflow_seconds": 5.794179899996379,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52135,
+          "stderr_bytes": 8195,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3255,
+          "default_expanded_source_bytes": 1373,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        },
+        "candidate": {
+          "helper_workflow_seconds": 5.5979240000015125,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52813,
+          "stderr_bytes": 8189,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3530,
+          "default_expanded_source_bytes": 1648,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        }
+      },
+      {
+        "candidate": {
+          "helper_workflow_seconds": 5.63771160000033,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52810,
+          "stderr_bytes": 8189,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3530,
+          "default_expanded_source_bytes": 1648,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        },
+        "baseline": {
+          "helper_workflow_seconds": 5.733809800003655,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52124,
+          "stderr_bytes": 8195,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3255,
+          "default_expanded_source_bytes": 1373,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        }
+      },
+      {
+        "baseline": {
+          "helper_workflow_seconds": 5.650706199994602,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52128,
+          "stderr_bytes": 8177,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3255,
+          "default_expanded_source_bytes": 1373,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        },
+        "candidate": {
+          "helper_workflow_seconds": 5.613610599997628,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52810,
+          "stderr_bytes": 8178,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3530,
+          "default_expanded_source_bytes": 1648,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        }
+      },
+      {
+        "candidate": {
+          "helper_workflow_seconds": 6.085440800001379,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52812,
+          "stderr_bytes": 8189,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3530,
+          "default_expanded_source_bytes": 1648,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        },
+        "baseline": {
+          "helper_workflow_seconds": 5.984223899999051,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52125,
+          "stderr_bytes": 8188,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3255,
+          "default_expanded_source_bytes": 1373,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        }
+      },
+      {
+        "baseline": {
+          "helper_workflow_seconds": 5.644190000006347,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52128,
+          "stderr_bytes": 8188,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3255,
+          "default_expanded_source_bytes": 1373,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        },
+        "candidate": {
+          "helper_workflow_seconds": 5.731612399998994,
+          "tool_round_trips": 11,
+          "finish_attempts": 1,
+          "full_validations": 1,
+          "stdout_bytes": 52816,
+          "stderr_bytes": 8196,
+          "model_review_seconds": null,
+          "oracle_passed": true,
+          "comparison_mode": "presentation",
+          "report_bytes": 3530,
+          "default_expanded_source_bytes": 1648,
+          "interaction_mode": "paging",
+          "paging_protocol_used": true,
+          "redundant_page_requests": 100,
+          "atomic_author_calls": 2,
+          "checkpoint_recoveries": 1,
+          "duplicates_avoided": 100,
+          "git_commands": 79
+        }
+      }
+    ],
+    "evidence_findings_gaps_equal": true,
+    "paired_time_ratio_median": 0.9934352276186277,
+    "scope": "Sanitized deterministic helper interactions; no model analysis or model-quality acceptance.",
+    "interaction_mode": "paging",
+    "comparison_mode": "presentation",
+    "model_review_seconds": null
+  },
+  "capability_discovery_component": {
+    "schema": "CapabilityDiscoveryComponentBenchmark/v1",
+    "pairs": [
+      {
+        "subprocess": {
+          "seconds": 0.13267959999939194,
+          "child_processes": 1
+        },
+        "manifest": {
+          "seconds": 0.004699299999629147,
+          "child_processes": 0
+        }
+      },
+      {
+        "manifest": {
+          "seconds": 0.0033720999999786727,
+          "child_processes": 0
+        },
+        "subprocess": {
+          "seconds": 0.1279376999955275,
+          "child_processes": 1
+        }
+      },
+      {
+        "subprocess": {
+          "seconds": 0.12912089999736054,
+          "child_processes": 1
+        },
+        "manifest": {
+          "seconds": 0.0037855999980820343,
+          "child_processes": 0
+        }
+      },
+      {
+        "manifest": {
+          "seconds": 0.003966800002672244,
+          "child_processes": 0
+        },
+        "subprocess": {
+          "seconds": 0.12670539999817265,
+          "child_processes": 1
+        }
+      },
+      {
+        "subprocess": {
+          "seconds": 0.12665589999960503,
+          "child_processes": 1
+        },
+        "manifest": {
+          "seconds": 0.003790599999774713,
+          "child_processes": 0
+        }
+      }
+    ],
+    "responses_equal": true,
+    "subprocess_median_seconds": 0.1279376999955275,
+    "manifest_median_seconds": 0.003790599999774713,
+    "scope": "Capability discovery only, after payload authentication; excludes binding I/O, model review and Workbench UI.",
+    "tool_identity": {
+      "skill_version": "0.24.0",
+      "helper_sha256": "47aba633747ffd11213b2700051891b51de458df447ebe7bc629ca7a78765170",
+      "capabilities_sha256": "c65b267cf4816582a5adced77f1a54aa6fc0ec9440a3d34034198d13c5be699c",
+      "python_version": "3.14.7",
+      "python_executable": "C:\\Python314\\python.exe"
+    }
+  },
+  "model_comparison": {
+    "root": "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix",
+    "rows": [
+      {
+        "case": "arithmetic-large",
+        "baseline": {
+          "wall_seconds": 392.6226414999983,
+          "helper_calls": 15,
+          "completed_items": {
+            "agent_message": 5,
+            "command_execution": 26
+          },
+          "nonzero_exit_calls": 1,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 0,
+          "paging_batches_returned": 4,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": true,
+            "review_status": "發現具體問題",
+            "recommendation": "修正後再合併",
+            "extension_status": "disabled",
+            "pending_confirmation_count": 0,
+            "gaps": [],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [],
+              "repositories": [],
+              "boundaries": [],
+              "pending_confirmation_count": 0
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 972283,
+              "cached_input_tokens": 889856,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 13208,
+              "reasoning_output_tokens": 4112
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-01\\audit\\helper-audit\\reports\\merge-review-20261117T153059428082Z-2f265d0f-188fad9e.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "candidate": {
+          "wall_seconds": 319.29297329999827,
+          "helper_calls": 14,
+          "completed_items": {
+            "agent_message": 5,
+            "command_execution": 23
+          },
+          "nonzero_exit_calls": 1,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 1,
+          "paging_batches_returned": 3,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": true,
+            "review_status": "發現具體問題",
+            "recommendation": "修正後再合併",
+            "extension_status": "disabled",
+            "pending_confirmation_count": 0,
+            "gaps": [],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [],
+              "repositories": [],
+              "boundaries": [],
+              "pending_confirmation_count": 0
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 849242,
+              "cached_input_tokens": 747904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 10803,
+              "reasoning_output_tokens": 2946
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-02\\audit\\helper-audit\\reports\\merge-review-20261117T153626589564Z-2f265d0f-188fad9e.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "wall_ratio": 0.8132311781107501,
+        "shell_command_ratio": 0.8846153846153846
+      },
+      {
+        "case": "interest-alias-safe",
+        "baseline": {
+          "wall_seconds": 323.41750460000185,
+          "helper_calls": 12,
+          "completed_items": {
+            "agent_message": 5,
+            "command_execution": 25
+          },
+          "nonzero_exit_calls": 0,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 0,
+          "paging_batches_returned": 0,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": true,
+            "review_status": "未發現具體問題",
+            "recommendation": "可以合併",
+            "extension_status": "disabled",
+            "pending_confirmation_count": 0,
+            "gaps": [],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [],
+              "repositories": [],
+              "boundaries": [],
+              "pending_confirmation_count": 0
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 568889,
+              "cached_input_tokens": 526464,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 9176,
+              "reasoning_output_tokens": 2500
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-04\\audit\\helper-audit\\reports\\merge-review-20261117T154614240659Z-e071a35c-79a8b8c8.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "candidate": {
+          "wall_seconds": 272.6644249999954,
+          "helper_calls": 12,
+          "completed_items": {
+            "agent_message": 4,
+            "command_execution": 29
+          },
+          "nonzero_exit_calls": 0,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 0,
+          "paging_batches_returned": 0,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": true,
+            "review_status": "未發現具體問題",
+            "recommendation": "可以合併",
+            "extension_status": "disabled",
+            "pending_confirmation_count": 0,
+            "gaps": [],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [],
+              "repositories": [],
+              "boundaries": [],
+              "pending_confirmation_count": 0
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 613854,
+              "cached_input_tokens": 563328,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 7777,
+              "reasoning_output_tokens": 2533
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-03\\audit\\helper-audit\\reports\\merge-review-20261117T154104595245Z-e071a35c-79a8b8c8.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "wall_ratio": 0.8430725644773707,
+        "shell_command_ratio": 1.16
+      },
+      {
+        "case": "interest-independent",
+        "baseline": {
+          "wall_seconds": 296.38063669999974,
+          "helper_calls": 13,
+          "completed_items": {
+            "agent_message": 4,
+            "command_execution": 28
+          },
+          "nonzero_exit_calls": 1,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 0,
+          "paging_batches_returned": 0,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": true,
+            "review_status": "發現具體問題",
+            "recommendation": "修正後再合併",
+            "extension_status": "disabled",
+            "pending_confirmation_count": 0,
+            "gaps": [],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [],
+              "repositories": [],
+              "boundaries": [],
+              "pending_confirmation_count": 0
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 630476,
+              "cached_input_tokens": 536320,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 7251,
+              "reasoning_output_tokens": 2951
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-05\\audit\\helper-audit\\reports\\merge-review-20261117T155125283479Z-4409f15d-024bf7f2.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "candidate": {
+          "wall_seconds": 282.89257129999896,
+          "helper_calls": 12,
+          "completed_items": {
+            "agent_message": 5,
+            "command_execution": 21
+          },
+          "nonzero_exit_calls": 0,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 0,
+          "paging_batches_returned": 0,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": true,
+            "review_status": "發現具體問題",
+            "recommendation": "修正後再合併",
+            "extension_status": "disabled",
+            "pending_confirmation_count": 0,
+            "gaps": [],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [],
+              "repositories": [],
+              "boundaries": [],
+              "pending_confirmation_count": 0
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 607719,
+              "cached_input_tokens": 558592,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 8850,
+              "reasoning_output_tokens": 2303
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-06\\audit\\helper-audit\\reports\\merge-review-20261117T155604803254Z-4409f15d-024bf7f2.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "wall_ratio": 0.954490733435958,
+        "shell_command_ratio": 0.75
+      },
+      {
+        "case": "public-csv",
+        "baseline": {
+          "wall_seconds": 306.82515180000337,
+          "helper_calls": 12,
+          "completed_items": {
+            "agent_message": 5,
+            "command_execution": 22
+          },
+          "nonzero_exit_calls": 1,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 0,
+          "paging_batches_returned": 0,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": true,
+            "review_status": "發現具體問題",
+            "recommendation": "修正後再合併",
+            "extension_status": "disabled",
+            "pending_confirmation_count": 0,
+            "gaps": [],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [],
+              "repositories": [],
+              "boundaries": [],
+              "pending_confirmation_count": 0
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 716630,
+              "cached_input_tokens": 672256,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 7910,
+              "reasoning_output_tokens": 1473
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-08\\audit\\helper-audit\\reports\\merge-review-20261117T160514426566Z-9b16c92d-aec74da0.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "candidate": {
+          "wall_seconds": 236.08887049999612,
+          "helper_calls": 11,
+          "completed_items": {
+            "agent_message": 4,
+            "command_execution": 16
+          },
+          "nonzero_exit_calls": 0,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 0,
+          "paging_batches_returned": 0,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": true,
+            "review_status": "發現具體問題",
+            "recommendation": "修正後再合併",
+            "extension_status": "disabled",
+            "pending_confirmation_count": 0,
+            "gaps": [],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [],
+              "repositories": [],
+              "boundaries": [],
+              "pending_confirmation_count": 0
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 585028,
+              "cached_input_tokens": 536192,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 7058,
+              "reasoning_output_tokens": 2521
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-07\\audit\\helper-audit\\reports\\merge-review-20261117T160011076226Z-9b16c92d-aec74da0.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "wall_ratio": 0.7694573574394742,
+        "shell_command_ratio": 0.7272727272727273
+      },
+      {
+        "case": "required-gap",
+        "baseline": {
+          "wall_seconds": 362.09538579999935,
+          "helper_calls": 13,
+          "completed_items": {
+            "agent_message": 5,
+            "command_execution": 27
+          },
+          "nonzero_exit_calls": 1,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 0,
+          "paging_batches_returned": 0,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": false,
+            "review_status": "審查未完成",
+            "recommendation": "需補做審查",
+            "extension_status": "incomplete",
+            "pending_confirmation_count": 0,
+            "gaps": [
+              "repo-000: related Repo has no HEAD commit",
+              "必要消費端 billing-consumer（repo-000）沒有 HEAD，快照沒有其已提交來源。固定 contract-registry.json 第 1 行明列該消費端讀取 amount；其實作與 amount／total 搜尋均無法取得，故跨 Repo 契約影響未完成。",
+              "CH-0001: contract-registry.json 明列 orders.created 的 amount 欄位由必要的 billing-consumer 消費；契約範圍限 identified-repos 的 repo-000。該 Repo 沒有 HEAD，無法取得固定來源，故無法執行其 amount／total 搜尋或核對相容性。",
+              "repo-000: 固定 contract-registry.json 指定 billing-consumer 為 amount 的必要消費端；start 記錄該 Repo 沒有 HEAD，未擷取任何來源。缺少已提交實作，無法執行 amount／total 搜尋及消費端核對；不推定其相容或不相容。",
+              "repositories/repo-000: 固定 contract-registry.json 指定 billing-consumer 為 amount 的必要消費端；start 記錄該 Repo 沒有 HEAD，未擷取任何來源。缺少已提交實作，無法執行 amount／total 搜尋及消費端核對；不推定其相容或不相容。",
+              "boundaries/CH-0001: contract-registry.json 明列 orders.created 的 amount 欄位由必要的 billing-consumer 消費；契約範圍限 identified-repos 的 repo-000。該 Repo 沒有 HEAD，無法取得固定來源，故無法執行其 amount／total 搜尋或核對相容性。"
+            ],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [],
+              "repositories": [
+                {
+                  "repo": "repo-000",
+                  "status": "unresolved",
+                  "reason": "固定 contract-registry.json 指定 billing-consumer 為 amount 的必要消費端；start 記錄該 Repo 沒有 HEAD，未擷取任何來源。缺少已提交實作，無法執行 amount／total 搜尋及消費端核對；不推定其相容或不相容。"
+                }
+              ],
+              "boundaries": [
+                {
+                  "change_id": "CH-0001",
+                  "outcome": "unresolved",
+                  "reason": "contract-registry.json 明列 orders.created 的 amount 欄位由必要的 billing-consumer 消費；契約範圍限 identified-repos 的 repo-000。該 Repo 沒有 HEAD，無法取得固定來源，故無法執行其 amount／total 搜尋或核對相容性。"
+                }
+              ],
+              "pending_confirmation_count": 0
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 958267,
+              "cached_input_tokens": 897152,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 10273,
+              "reasoning_output_tokens": 4678
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-09\\audit\\helper-audit\\reports\\merge-review-20261117T161108210686Z-b415c320-7a267f86.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "candidate": {
+          "wall_seconds": 358.3651026000007,
+          "helper_calls": 13,
+          "completed_items": {
+            "agent_message": 5,
+            "command_execution": 25
+          },
+          "nonzero_exit_calls": 1,
+          "helper_failures": 0,
+          "finish_attempts": 1,
+          "paging_seeds_returned": 0,
+          "paging_batches_returned": 0,
+          "outcome": {
+            "schema": "MergeReviewOutcome/v1",
+            "outcome_available": true,
+            "review_complete": false,
+            "review_status": "審查未完成",
+            "recommendation": "需補做審查",
+            "extension_status": "incomplete",
+            "pending_confirmation_count": 1,
+            "gaps": [
+              "repo-000: related Repo has no HEAD commit",
+              "contract-registry.json 明列的必要 billing-consumer 無 HEAD，無法固定或閱讀其實作；amount／total 契約搜尋 S-0005、S-0006 均 unresolved，跨 Repo 相容性審查未完成。",
+              "I-003: 已讀登錄且確認必要 billing-consumer 關係，但該必要消費端無 HEAD，登錄到實作的契約鏈尚未完成；未捏造消費端路徑或相容性結論。",
+              "CH-0001: 本機 checkout→publish→consume 已證實欄位不相容；固定 contract-registry.json 另明列 orders.created 的 amount 欄位與必要 billing-consumer。僅針對此已識別 Repo 追查 amount、total，但其無 HEAD，兩筆搜尋均 unresolved，無法確認必要消費端的欄位讀取或相容轉換。",
+              "repo-000: 固定契約登錄明列 billing-consumer 為 amount 的必要消費端；快照診斷為無 HEAD，amount 與 total 的契約搜尋均 unresolved，無可讀的已提交實作。",
+              "impacts/I-003: 已讀登錄且確認必要 billing-consumer 關係，但該必要消費端無 HEAD，登錄到實作的契約鏈尚未完成；未捏造消費端路徑或相容性結論。",
+              "repositories/repo-000: 固定契約登錄明列 billing-consumer 為 amount 的必要消費端；快照診斷為無 HEAD，amount 與 total 的契約搜尋均 unresolved，無可讀的已提交實作。",
+              "boundaries/CH-0001: 本機 checkout→publish→consume 已證實欄位不相容；固定 contract-registry.json 另明列 orders.created 的 amount 欄位與必要 billing-consumer。僅針對此已識別 Repo 追查 amount、total，但其無 HEAD，兩筆搜尋均 unresolved，無法確認必要消費端的欄位讀取或相容轉換。",
+              "待人工確認：1 項；人工紀錄不會重算初次審查判斷。"
+            ],
+            "remaining": {
+              "changes": [],
+              "parents": [],
+              "impacts": [
+                {
+                  "id": "I-003",
+                  "repo": "repo-001",
+                  "source": "head",
+                  "path": "contract-registry.json",
+                  "status": "not-reviewed",
+                  "reason": "已讀登錄且確認必要 billing-consumer 關係，但該必要消費端無 HEAD，登錄到實作的契約鏈尚未完成；未捏造消費端路徑或相容性結論。"
+                }
+              ],
+              "repositories": [
+                {
+                  "repo": "repo-000",
+                  "status": "unresolved",
+                  "reason": "固定契約登錄明列 billing-consumer 為 amount 的必要消費端；快照診斷為無 HEAD，amount 與 total 的契約搜尋均 unresolved，無可讀的已提交實作。"
+                }
+              ],
+              "boundaries": [
+                {
+                  "change_id": "CH-0001",
+                  "outcome": "unresolved",
+                  "reason": "本機 checkout→publish→consume 已證實欄位不相容；固定 contract-registry.json 另明列 orders.created 的 amount 欄位與必要 billing-consumer。僅針對此已識別 Repo 追查 amount、total，但其無 HEAD，兩筆搜尋均 unresolved，無法確認必要消費端的欄位讀取或相容轉換。"
+                }
+              ],
+              "pending_confirmation_count": 1
+            }
+          },
+          "usage_as_reported": [
+            {
+              "input_tokens": 867404,
+              "cached_input_tokens": 795392,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 12151,
+              "reasoning_output_tokens": 3148
+            }
+          ],
+          "report_paths": [
+            "C:\\Users\\denni\\AppData\\Local\\Temp\\mrq-20261117-scopefix\\runs\\run-10\\audit\\helper-audit\\reports\\merge-review-20261117T161708762536Z-b415c320-7a267f86.md"
+          ],
+          "fixed_refs_match": true,
+          "report_hashes_match": true,
+          "mechanical_check": {
+            "passed": true,
+            "errors": [],
+            "semantic_correctness": "not automatically adjudicated"
+          }
+        },
+        "wall_ratio": 0.9896980648020214,
+        "shell_command_ratio": 0.9259259259259259
+      }
+    ],
+    "valid_speed_pairs": 5,
+    "paired_wall_ratio_median": 0.8430725644773707,
+    "paired_shell_command_ratio_median": 0.8846153846153846,
+    "semantic_adjudication": {
+      "schema": "IncrementalReviewAdjudication/v1",
+      "reviewer": "implementation-agent",
+      "comparison_root": "C:/Users/denni/AppData/Local/Temp/mrq-20261117-scopefix",
+      "independent_third_party_review": false,
+      "method": "Read each actual finding and compare its legal counterexample, cause, scope, status and runtime claims with the predeclared source-only oracle; do not infer correctness from successful finish.",
+      "entries": [
+        {
+          "run": "run-01",
+          "case": "arithmetic-large",
+          "variant": "baseline",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "One P1 identifies multiplication changed to addition. Legal total(10,3) is statically 13 instead of 30; no compensation exists. Impact is bounded to the public function's return value, diagnostic renames are not flagged, and no application execution is claimed. Complete/no-gap outcome matches the predeclared oracle."
+        },
+        {
+          "run": "run-02",
+          "case": "arithmetic-large",
+          "variant": "candidate",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "One P1 correctly identifies total's operator regression with legal (100,3): expected300,actual103. It compares base/head/preview and README, rejects unrelated diagnostic renames as compensation, and truthfully labels static derivation. Correct complete/no-gap native report was published; seed was actually returned and consumed."
+        },
+        {
+          "run": "run-03",
+          "case": "interest-alias-safe",
+          "variant": "candidate",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "Zero findings and no invented pending gap. Report explicitly traces post() overwriting identical event IDs and integer cents into both stores, representing the same economic event; changing total's source therefore preserves once-per-event behavior. Tests and dynamic reproduction are accurately marked unexecuted."
+        },
+        {
+          "run": "run-04",
+          "case": "interest-alias-safe",
+          "variant": "baseline",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "Zero findings, complete and no pending gap. Its coverage reason checks empty ledgers, distinct events and overwriting the same event; both stores remain mirrored and private mutation is excluded by the fixed contract. It accurately says the review is static and no application tests were executed."
+        },
+        {
+          "run": "run-05",
+          "case": "interest-independent",
+          "variant": "baseline",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "One P1 correctly identifies removed history interest. Legal history100 + adjustment25 should125 but becomes25; distinct write methods and README establish independent economic events, including shared IDs in separate namespaces. It states zero-net-history controls and truthfully marks examples as unexecuted static derivations."
+        },
+        {
+          "run": "run-06",
+          "case": "interest-independent",
+          "variant": "candidate",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "One P1 traces the independent history write path and removed history sum, rather than inferring independence from table names. Legal100history +25adjustment should125 but becomes25; zero-history controls and same-ID namespaces are correctly handled. No application execution is claimed; complete/no-gap published outcome matches the oracle."
+        },
+        {
+          "run": "run-07",
+          "case": "public-csv",
+          "variant": "candidate",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "One P1 demonstrates legal[125] becoming1.25 under an unchanged amount_cents integer contract. It compares base/head and README, requires no invented client, and adds no pending gap merely because the public API has no in-repo caller. Static derivation and unexecuted tests are accurately recorded."
+        },
+        {
+          "run": "run-08",
+          "case": "public-csv",
+          "variant": "baseline",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "One P1 demonstrates legal[12345] becoming123.45, and zero becoming0.00, violating the fixed integer-cents contract. It explicitly explains that a public return-contract defect is provable without assuming an external consumer. Scope is bounded to this API; source-derived examples are not presented as executed tests."
+        },
+        {
+          "run": "run-09",
+          "case": "required-gap",
+          "variant": "baseline",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "One supported P1 correctly traces checkout->publish->consume and missing amount causing KeyError. The report explicitly does not claim an unobserved external consumer defect. Registered required billing-consumer has no HEAD; unresolved sources/boundary are preserved and review_complete=false. Static-only execution claims match the observation."
+        },
+        {
+          "run": "run-10",
+          "case": "required-gap",
+          "variant": "candidate",
+          "semantic_match": true,
+          "extra_findings": 0,
+          "runtime_claims_match_observation": true,
+          "notes": "One P1 correctly shows checkout(100) failing on missing amount. Missing registered billing-consumer remains an unresolved gap and an explicit manual confirmation, without inventing its source path or compatibility. The available local defect is preserved while review_complete=false; no application execution is claimed. Pending/gap record counts differ from baseline but represent the same supported missing relationship, not extra confirmed findings."
+        }
+      ]
+    },
+    "scope": "One observation per variant per synthetic case, standalone instrumented native helper; not a production accuracy estimate or Workbench/WK end-to-end benchmark."
+  },
+  "human_readability": {
+    "schema": "ReadableReportUserFeedback/v1",
+    "artifact": ".tmp/review-improvements-20261117/preview/report.md",
+    "fixture": "synthetic single-finding report",
+    "prompt": "Read for about 30 seconds and locate the merge recommendation, finding count, required gaps and next action.",
+    "answer_verbatim": "四項都能快速找到",
+    "source": "User response to request_user_input_async during implementation",
+    "independent_timing": false,
+    "generalized_to_multiple_findings_or_production": false
+  },
+  "excluded_model_observations": {
+    "schema": "ExcludedModelObservations/v1",
+    "entries": [
+      {
+        "root": "C:/Users/denni/AppData/Local/Temp/mrp-m7phu49z",
+        "scope": "successful one-finding pilot",
+        "excluded_reason": "Ran concurrently with initial functional tests and an earlier candidate. Quality-only smoke; not part of final paired timing or final candidate acceptance."
+      },
+      {
+        "root": "C:/Users/denni/AppData/Local/Temp/mrq-20261117-f4a59c",
+        "candidate_skill_sha256": "14ce53959d6669deb9ceb8e7fdbf32f7b6b975e842fd2e95566b9d81233f640c",
+        "scope": "aborted initial comparison",
+        "excluded_reason": "Stopped the owned comparison process tree after identifying the missing empty-file citation schema variant, before completing the final comparison. Files and incomplete traces remain; no observation is silently replaced or counted as a final pass."
+      },
+      {
+        "root": "C:/Users/denni/AppData/Local/Temp/mrq-20261117-final9f21",
+        "candidate_skill_sha256": "caf50bdfa1f16267303235e17dcaeaf4a0b7572ac455e891a2291aebc33a58cd",
+        "scope": "diagnostic cohort with a real publication failure",
+        "observations": "Arithmetic baseline published correctly. Candidate recognized the P1 but check accepted single-Repo cross-Repo impact rows; finish treated it as terminal and cleaned the context. The safe-interest candidate published zero findings. Remaining runs were stopped after identifying the check/finish defect.",
+        "excluded_reason": "Retained as failure evidence and fix motivation; not counted as final candidate acceptance or final paired timing."
+      }
+    ],
+    "final_root": "C:/Users/denni/AppData/Local/Temp/mrq-20261117-scopefix",
+    "final_candidate_skill_sha256": "582df6e83572a78b5b415de1a6bd7f7a2bd8376b461a2e9e8bc0403ef9547e25"
+  },
+  "limitations": [
+    "No production accuracy/recall estimate from five synthetic cases.",
+    "No independent third-party semantic review; implementation agent compared actual reports with predeclared executable oracles.",
+    "No actual VSCode UI or Python3.10 runtime test; three platform/privilege tests were skipped.",
+    "Whole Markdown bytes and closed-details source bytes are not token counts.",
+    "No final full-discovery rerun after the scope and auth fixes; affected112 tests and later focused checks passed.",
+    "The ten model runs used the frozen pre-auth-followup skill. Final source differs in two auth masking files, tested separately with corpus source-view/report equivalence; no new model timing is claimed on the final artifact hash.",
+    "WorkflowKit upstream pins remain unchanged; actual0.24 binding was verified in a controlled fixture."
+  ]
+}

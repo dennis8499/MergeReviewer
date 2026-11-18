@@ -24,8 +24,8 @@ metadata:
 ## 每輪閱讀與保存
 
 1. 用固定索引選下一條功能鏈，合併該輪獨立讀取與搜尋；首次 step 沿用 `initial_reads_file`。
-2. 支援批次時用 `view --requests-file` 續讀；將回傳 continuation 直接序列化，沿實際游標前進。支援 `paging_state` 時依[分頁與恢復](references/paging-workflow.md)整理去重及待修項。
-3. 必要內容及安全反例讀完後作語意判斷；證據保存、頁面返回與「已審查」分開確認。
+2. 回應有 `paging_requests_file` 時，原樣交給 `view --requests-file`；它含逐檔 diff 索引與共用正文。否則將工具的 continuation 直接序列化並沿實際游標續讀。支援 `paging_state` 時依[分頁與恢復](references/paging-workflow.md)確認與保存。
+3. 必要內容及安全反例讀完後作語意判斷；核對變更前後、合法輸入或可達路徑、必要前提及替代解釋。證據保存、頁面返回與「已審查」分開確認。
 4. 每條鏈完成即原子保存判斷、引用、待讀狀態與下一個操作。成功取得並解析頁面後才保存其確認，遺失回應可沿原狀態重送。
 5. 恢復先讀 `status --summary`，由完整 checkpoint 引用接續；收到完整發布收據後核對交付，依 `cleanup_pending` 決定是否仍需清理。
 
@@ -61,6 +61,8 @@ python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" -
 多 Repo 先按[契約邊界](references/contract-boundaries.md)明確選擇 `repo-local`、`identified-repos` 或 `workspace` 範圍；Repo 內行為契約不會只因檔名、public 函式或泛稱 export 而擴成 workspace 契約。`propagates` 只追查固定證據指出的消費端；未知但必要的消費端保持 `unresolved`。每個其他 Repo 仍有 disposition。
 
 回應上限 24 KiB，全文與命中落盤；逐操作查看是否完整回傳，必要時使用純讀取 `view` 命令按 artifact、JSON pointer 及 offset 續讀。能力支援 `batch_artifact_view` 時，用 `view --requests-file` 合併獨立續讀；批次 `next_index` 表示尚未回傳的請求，各頁的 continue 仍須讀完。`paging_state` 的去重、確認與恢復依[分頁與恢復](references/paging-workflow.md)；舊版仍沿原批次介面。不要把翻頁包成 step 操作。敏感值在展示內容中遮罩，行號與原始內容 hash 仍保留。`evidence_complete` 表示保存，語意「已審查」由 agent 判斷；必要內容未讀完不能標已審查。定位命中可用 `around_line`。
+
+有 `paging_requests_file` 時優先使用該固定請求檔，讀取原始來源對應及各份共用正文；實際返回並讀完後才確認 delta。`paging_projection` 僅改呈現，既有 artifact 仍可按原 pointer 重看。操作格式不確定時使用安裝版 `schema --operation author` 的巢狀欄位及範例；PowerShell 用 `ConvertTo-Json -InputObject @($operations) -Depth 100` 保留單筆陣列。
 
 能力列出 `atomic_authoring` 時，以 `step` 的 `author` 操作原子保存精簡更新與 checkpoint，詳見草稿格式。草稿由 agent 填寫逐檔與 parent 判定、影響鏈、Repo 判定及實際測試；靜態推導用 `code-derived`。每完成一條契約鏈即保存草稿、回讀確認再 check。待確認須有實際必要關係的固定證據；有可取得的必要內容就沿 remaining 繼續補查，確實受阻才保留缺口並發布未完成報告。
 

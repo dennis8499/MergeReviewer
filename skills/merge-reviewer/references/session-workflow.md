@@ -1,5 +1,7 @@
 # 三階段操作
 
+大型 step 回應有 `paging_requests_file` 時，優先依[分頁與恢復](paging-workflow.md)原樣開始批次續讀。它提供逐檔 diff 與共用正文，原始 artifact 及引用來源仍保留；確認以實際返回頁面為準。使用綁定 launcher 時沿原命令的 `--action view`，只傳文件列出的 option/value，唯讀旗標由 launcher 加入。
+
 `review_session.py start／step／check／finish` 編排固定讀取、契約與發布。以下 runtime、id、context 沿用 start；Repo ID、來源、path 及 SHA 使用實際固定索引。JSON 以 UTF-8 寫檔。PowerShell 管線傳 Python 前設定 `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)`。
 
 ## 開始與恢復

@@ -1,5 +1,16 @@
 # Change log
 
+## 0.24.0 - 2026-11-18
+
+- 報告新增完整性／適用版本／摘要與檢查紀錄，問題編號導航、兩筆核心證據及其餘收合，保留完整工程事實與人工核對區。
+- 大型 step 回傳可直接使用的 paging_requests_file；投影共用正文並按檔索引 patch，原 artifact 與舊續讀相容。
+- author schema 提供巢狀欄位型別及陣列序列化範例；審查指引補上反證與業務金額來源核對。
+- 單 Repo 草稿誤填跨 Repo 影響鏈時，check／author 提前回傳可修正診斷；finish 保留同一 request 修稿，來源損毀仍終止。
+- 遮罩保留正常連線參數／讀取呼叫，修正 Bearer、Basic、認證建構式與 setter 的漏遮，並保留跨行認證的完整分類資訊。
+- 安裝包新增可由 binding 認證的 capabilities.json；啟動收據另保存能力描述 hash。
+- 重播新增顯式 presentation 比較模式，保留 strict 預設與歷史基準。
+
+
 ## 0.23.0 - 2026-11-15
 
 - 新增明確確認的分頁狀態與批次去重、blocked 修復項、checkpoint revision／中斷恢復、完整分頁 artifact 引用、純讀 operation schema 與子命令幫助。保留舊陣列 view、固定來源及首次發布完整驗證。

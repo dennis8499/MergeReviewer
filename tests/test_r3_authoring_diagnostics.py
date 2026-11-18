@@ -68,6 +68,20 @@ class ImpactOwnEvidenceDiagnosticsTests(unittest.TestCase):
         draft["impact_coverage"][0]["evidence"].pop()
         self.assertEqual(1, len(self.own_errors(self.inspect(draft, manifest))))
 
+    def test_single_repo_impact_rows_are_repairable_before_finish_without_reading_sources(self):
+        draft, manifest = self.fixture()
+        manifest.update(extension_enabled=False, changed_contracts=[])
+        draft["impact_coverage"][0]["contract_ids"] = []
+        inspected = self.inspect(draft, manifest)
+        self.assertFalse(inspected["ready_for_finish"])
+        self.assertTrue(any(row["pointer"] == "/impact_coverage" and "single-Repo" in row["message"]
+                            for row in inspected["errors"]))
+        draft["impact_coverage"] = []
+        draft["coverage"][0]["impact_ids"] = []
+        repaired = self.inspect(draft, manifest)
+        self.assertEqual([], repaired["errors"])
+        self.assertTrue(repaired["ready_for_finish"])
+
     def test_invalid_fixed_reference_blob_or_interval_cannot_count_as_own(self):
         for change in ({"ref": "c" * 40}, {"path": "missing.py"}, {"line_start": 0}, {"line_end": True}):
             with self.subTest(change=change):

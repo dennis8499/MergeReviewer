@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
+import base64
+import binascii
 import re
 
 _BINARY_SUFFIXES = {
@@ -14,13 +16,63 @@ _MAGIC = (b"MZ", b"\x7fELF", b"\x89PNG\r\n\x1a\n", b"PK\x03\x04", b"\xff\xd8\xff
 _SENSITIVE = re.compile(
     r"(?i)([\"']?\b(?:password|passwd|pwd|token|api[_-]?key|secret|access[_-]?key|"
     r"private[_-]?key|client[_-]?secret|credential|authorization|connection[_-]?string)\b[\"']?"
-    r"\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|[^;,\s&]+)"
+    r"\s*[=:]\s*)(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^;,\s&)\]}]+)"
 )
-_SENSITIVE_LINE = re.compile(r"(?i)connection[_ -]?string|data\s*source|initial\s*catalog|server\s*=|host\s*=")
+_SENSITIVE_LINE = re.compile(r"(?i)\b(?:data\s*source|initial\s*catalog|server|host)\s*=")
+_LITERAL = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*' ''', re.VERBOSE)
+_SOURCE_SUFFIXES = {".cs", ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".go", ".rs", ".kt", ".vb", ".cpp", ".c", ".h"}
+_CONFIG_LOOKUP = re.compile(
+    r'''(?:[A-Za-z_]\w*\.)*GetConnectionString\(\s*(?:"[A-Za-z0-9_.:-]+"|'[A-Za-z0-9_.:-]+'|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*$'''
+)
 _URL_CREDENTIALS = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@")
-_BEARER = re.compile(r"(?i)(\bBearer\s+)\S+")
+_BEARER = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/-]+=*")
+_BASIC = re.compile(r"(?i)(\bBasic\s+)([A-Za-z0-9_+/-]+={0,2})")
+_CREDENTIAL_CONTEXT = re.compile(r"(?i)password|passwd|pwd|secret|credential|authorization|authenticationheadervalue|"
+                                 r"api[_-]?key|access[_-]?key|private[_-]?key|\b\w*token\s*\(")
+_HTTP_CONTEXT = re.compile(r"(?i)authenticationheadervalue|\bauthorization\b|\bheaders?\s*\.")
 _PRIVATE_KEY = re.compile(r"(?i)-----BEGIN [^-]*PRIVATE KEY-----")
 _PRIVATE_END = re.compile(r"(?i)-----END [^-]*PRIVATE KEY-----")
+
+
+def redact_auth_lines(lines):
+    """Keep header schemes and call structure while hiding credential literals."""
+    output, depth, http, literal_index = [], 0, False, 0
+
+    def basic(match):
+        token = match.group(2)
+        if re.search(r"(?i)\bauthorization\b", line):
+            return match.group(1) + "[已遮蔽]"
+        try:
+            decoded = base64.b64decode(token + "=" * (-len(token) % 4), altchars=b"-_", validate=True)
+        except (ValueError, binascii.Error):
+            return match.group(0)
+        # Ordinary prose such as 'Basic arithmetic' is not an encoded credential.
+        return match.group(1) + "[已遮蔽]" if b":" in decoded else match.group(0)
+
+    for line in lines:
+        value = _BASIC.sub(basic, _BEARER.sub(r"\1[已遮蔽]", line))
+        structural = _LITERAL.sub("", value)
+        context = bool(_CREDENTIAL_CONTEXT.search(structural))
+        if not depth:
+            literal_index = 0
+            http = bool(_HTTP_CONTEXT.search(structural))
+        if depth or context:
+            def literal(match):
+                nonlocal literal_index
+                raw = match.group(0)
+                body, quote = raw[1:-1], raw[0]
+                first = literal_index == 0
+                literal_index += 1
+                if http and first and body.lower() in ("basic", "bearer", "authorization"):
+                    return raw
+                prefix = re.match(r"(?i)^(Basic|Bearer)\s+", body) if http else None
+                masked = prefix.group(0) + "[已遮蔽]" if prefix else "[已遮蔽]"
+                return quote + masked + quote
+            value = _LITERAL.sub(literal, value)
+            if not line.lstrip().startswith(("#", "//", "/*", "*")):
+                depth = max(0, depth + structural.count("(") - structural.count(")"))
+        output.append(value)
+    return output, output != list(lines)
 
 
 def decode_source(raw: bytes, path: str = "") -> tuple[list[str] | None, str | None, bool]:
@@ -88,8 +140,9 @@ def redact_lines(lines: list[str], path: str = "") -> tuple[list[str], bool]:
     suffix = PurePosixPath(path.replace("\\", "/")).suffix.lower()
     if suffix in {".pem", ".key", ".pfx", ".p12"}:
         return (["[私鑰內容已省略]" for _ in lines], bool(lines))
-    result, changed, in_private_key = [], False, False
-    for line in lines:
+    auth_visible, changed = redact_auth_lines(lines)
+    result, in_private_key = [], False
+    for line in auth_visible:
         if in_private_key or _PRIVATE_KEY.search(line):
             in_private_key = True
             result.append("[私鑰內容已省略]")
@@ -97,13 +150,35 @@ def redact_lines(lines: list[str], path: str = "") -> tuple[list[str], bool]:
             if _PRIVATE_END.search(line):
                 in_private_key = False
             continue
-        if _SENSITIVE_LINE.search(line):
+        literals = list(_LITERAL.finditer(line))
+
+        def in_literal(position):
+            return any(item.start() <= position < item.end() for item in literals)
+
+        connection = _SENSITIVE_LINE.search(line)
+        if connection and (suffix not in _SOURCE_SUFFIXES or in_literal(connection.start())):
             result.append("[含認證或連線設定的行已省略]")
             changed = True
             continue
-        value = _SENSITIVE.sub(r"\1[已遮蔽]", line)
+        # Mask the token before assignment matching can consume the word Bearer.
+        value = _BEARER.sub(r"\1[已遮蔽]", line)
+        literals = list(_LITERAL.finditer(value))
+
+        def assignment(match):
+            supplied = match.group(2)
+            # This argument names configuration; it is not the returned value.
+            # Closing ')' lies outside the assignment match's bare-value token.
+            if suffix in _SOURCE_SUFFIXES and not in_literal(match.start()) and _CONFIG_LOOKUP.fullmatch(supplied):
+                return match.group(0)
+            if (suffix in _SOURCE_SUFFIXES and not in_literal(match.start())
+                    and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9.]*", supplied)):
+                return match.group(0)
+            if supplied == "{":  # A configuration section has no credential value.
+                return match.group(0)
+            return match.group(1) + "[已遮蔽]"
+
+        value = _SENSITIVE.sub(assignment, value)
         value = _URL_CREDENTIALS.sub(r"\1[已遮蔽]@", value)
-        value = _BEARER.sub(r"\1[已遮蔽]", value)
         result.append(value)
         changed |= value != line
     return result, changed

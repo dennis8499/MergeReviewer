@@ -86,12 +86,15 @@ class ValidationProgress:
 
 def redact(value):
     """Omit common credentials from authored prose and report metadata too."""
+    import review_content
+    value = "\n".join(review_content.redact_auth_lines(str(value).split("\n"))[0])
     value = re.sub(r"(?is)-----BEGIN[^\r\n]*PRIVATE KEY-----.*?-----END[^\r\n]*PRIVATE KEY-----",
                    "[私鑰內容已省略]", str(value))
-    value = re.sub(r"(?i)(\b(?:password|passwd|pwd|token|api[_-]?key|secret|access[_-]?key)\b"
-                   r"\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|[^;,\s&]+)", r"\1[已遮蔽]", value)
+    value = re.sub(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/-]+=*", r"\1[已遮蔽]", value)
+    value = re.sub(r"(?i)([\"']?\b(?:password|passwd|pwd|token|api[_-]?key|secret|access[_-]?key)\b[\"']?"
+                   r"\s*[=:]\s*)(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^;,\s&]+)", r"\1[已遮蔽]", value)
     value = re.sub(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@", r"\1[已遮蔽]@", value)
-    return re.sub(r"(?i)(\bBearer\s+)\S+", r"\1[已遮蔽]", value)
+    return value
 
 
 def safe_excerpt(raw, path, start, end):
@@ -111,11 +114,13 @@ def safe_excerpt(raw, path, start, end):
     if not source_lines:
         return None, None
     selected_lines = source_lines[start - 1:end]
-    visible, redacted = review_content.redact_lines(selected_lines, path)
-    sensitive = re.compile(r"(?i)password|passwd|pwd|token|secret|api.?key|access.?key|private.?key|"
-                           r"credential|authorization|connection.?string|data\s*source|initial\s*catalog|server\s*=|host\s*=")
-    cleaned = "\n".join("[含認證或連線設定的行已省略]" if sensitive.search(line) else redact(line)
-                        for line in visible)
+    all_visible, _ = review_content.redact_lines(source_lines, path)
+    visible = all_visible[start - 1:end]
+    redacted = visible != selected_lines
+    # The shared redactor distinguishes identifiers from credential values.
+    # A keyword-only second pass would erase safe connectionString parameters
+    # and GetConnectionString calls after they had already passed redaction.
+    cleaned = "\n".join(visible)
     note = "敏感內容已遮蔽或省略；行號仍對應固定原始內容。" if redacted or cleaned != "\n".join(selected_lines) else None
     if encoding != "utf-8":
         note = (note + "；" if note else "") + f"來源以 {encoding} 無失真解碼。"
@@ -400,8 +405,10 @@ def _validate(draft, manifest, context, api):
     require(all(r.get("role") == ("seed" if r.get("id") == selected else "candidate")
                 for r in manifest["repositories"]), "Repo roles differ from the single selected Repo")
     if not enabled:
-        require(not manifest.get("changed_contracts") and not draft.get("impact_coverage"),
+        require(not manifest.get("changed_contracts"),
                 "single-Repo review does not use cross-Repo impact coverage")
+        draft_require(not draft.get("impact_coverage"),
+                      "single-Repo review does not use cross-Repo impact coverage")
         draft = {**draft, "impact_coverage": [],
                  "repository_coverage": draft.get("repository_coverage", [
                      {"repo": selected, "status": "seed", "reason": "使用者選定的唯一受審 Repo。", "search_ids": []}
@@ -796,8 +803,22 @@ def render(result, manifest):
              f"確認 {len(result['findings'])} 項問題；必要證據缺口 {len(result['limitations'])} 項。", "",
              "問題數量：" + "／".join(f"{p} {result['priority_counts'][p]}" for p in PRIORITIES), ""]
     if engineering:
-        lines[:0] = [f"# 合併審查: {seed['name']}", "", "## 審查結論", ""]
-    if result["pending_confirmation_count"]:
+        lines = [f"# 合併審查: {seed['name']}", "", "## 審查結論", "",
+                 f"**合併建議：{result['recommendation']}**", "", f"審查狀態：{result['review_status']}。", "", lines[2], ""]
+        lines.extend([
+                      f"- 審查完整性：{'完整' if result['review_complete'] else '未完整'}；"
+                      f"必要證據缺口 {len(result['limitations'])} 項；待人工確認 {result['pending_confirmation_count']} 項。",
+                      f"- 適用版本：{mark(native['head_input'])} ({mark(seed['sources']['head']['ref'][:8])}) → "
+                      f"{mark(native['base_input'])} ({mark(seed['sources']['base']['ref'][:8])})", ""])
+        if result.get("summary"):
+            lines.extend([result["summary"], ""])
+        if result.get("next_steps"):
+            first_step = result["next_steps"][0]
+            lines.extend([f"下一步：{first_step['action']}（{first_step['owner']}）"
+                          + (f"；另有 {len(result['next_steps']) - 1} 項見範圍與限制。" if len(result["next_steps"]) > 1 else ""), ""])
+        lines.extend(["已執行檢查：" + ("；".join(result["tests_executed"]) or "無"), "",
+                      "未執行檢查：" + ("；".join(result["tests_not_executed"]) or "無其他紀錄"), ""])
+    if result["pending_confirmation_count"] and not engineering:
         lines.extend([f"待人工確認：{result['pending_confirmation_count']} 項。", ""])
     comparison_start = len(lines)
     lines.extend(["### 比較資訊" if engineering else "## 比較資訊", "", f"- Repo：{mark(seed['name'])}", f"- 本機路徑：{mark(seed['path'])}", "",
@@ -819,7 +840,7 @@ def render(result, manifest):
         comparison, lines = lines[comparison_start:], lines[:comparison_start]
         lines.extend(["## 問題總攬", "", "| 問題 | 優先程度 | 名稱 | 影響 |",
                       "| --- | --- | --- | --- |"])
-        lines.extend(f"| {cell(f['id'])} | {cell(f['priority'])} | {cell(f['title'])} | {cell(f['impact'])} |"
+        lines.extend(f"| [{cell(f['id'])}](#finding-{f['id']}) | {cell(f['priority'])} | {cell(f['title'])} | {cell(f['impact'])} |"
                      for f in result["findings"])
         if not result["findings"]:
             lines.append("| 無已確認問題 | — | — | — |")
@@ -840,7 +861,9 @@ def render(result, manifest):
                       "**預期結果**", "", finding["expected"], "",
                       "**實際結果**", "", finding["actual"], "", "**證據**", "",
                       *paragraphs(optional(finding, "technical_explanation"), finding.get("evidence_summary", ""))])
-        for evidence in finding["evidence"]:
+        for evidence_index, evidence in enumerate(finding["evidence"]):
+            if engineering and evidence_index == 2:
+                lines.extend(["<details>", f"<summary>其他證據（{len(finding['evidence']) - 2} 筆）</summary>", ""])
             span = "" if evidence.get("line_start") is None else f":{evidence['line_start']}–{evidence['line_end']}"
             name = repository(manifest, evidence["repo"])["name"]
             lines.extend([f"{mark(name + '/' + evidence['path'] + span)}（來源：{mark(evidence['source'])}；"
@@ -853,9 +876,15 @@ def render(result, manifest):
                     lines.extend(["固定版本內容為空（0 行）", ""])
             else:
                 fence = "`" * max(3, max((len(run) + 1 for run in re.findall(r"`+", excerpt)), default=0))
-                lines.extend([fence, excerpt, fence, ""])
+                language = {".cs": "csharp", ".py": "python", ".ts": "typescript", ".tsx": "tsx",
+                            ".js": "javascript", ".json": "json", ".xml": "xml", ".csproj": "xml",
+                            ".sql": "sql", ".yml": "yaml", ".yaml": "yaml", ".ps1": "powershell"}.get(
+                                Path(evidence["path"]).suffix.lower(), "") if engineering else ""
+                lines.extend([fence + language, excerpt, fence, ""])
                 if evidence.get("excerpt_replaced_bytes"):
                     lines.extend(["片段以 UTF-8 顯示；無法解碼的位元組以 � 取代。", ""])
+        if engineering and len(finding["evidence"]) > 2:
+            lines.extend(["</details>", ""])
         fixes = paragraphs(finding["recommendation"], optional(finding, "engineering_fix"))
         fixes[-2] += f"（{finding['owner']}）"
         lines.extend(["**建議改善方式**", "", *fixes])

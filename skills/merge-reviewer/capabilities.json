@@ -1,0 +1,36 @@
+{
+  "schema": "MergeReviewCapabilities/v1",
+  "protocol_version": 1,
+  "draft_formats": [
+    "compact",
+    "v3"
+  ],
+  "features": {
+    "artifact_scopes": [
+      "context",
+      "runtime"
+    ],
+    "read_only_artifact_view": true,
+    "request_preflight": true,
+    "incremental_resume": true,
+    "publication_retry": true,
+    "batch_artifact_view": true,
+    "summary_status": true,
+    "validation_progress": true,
+    "atomic_authoring": true,
+    "native_checkpoint": true,
+    "paging_state": true,
+    "operation_schema": true,
+    "paging_seed": true,
+    "shared_paged_contents": true,
+    "patch_file_index": true,
+    "shared_read_contents": true,
+    "launch_preflight": true,
+    "read_only_inspection": true,
+    "completion_preview": true,
+    "scope_notes": true,
+    "phase_metrics": true,
+    "capability_manifest": true,
+    "readable_report": true
+  }
+}

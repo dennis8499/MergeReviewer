@@ -1,8 +1,10 @@
 """Fast protocol, paging, decode and redaction regression cases."""
 from pathlib import Path
+import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/merge-reviewer/scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -21,6 +23,17 @@ class FlowOptimizationTests(unittest.TestCase):
         self.assertIn("compact", value["draft_formats"])
         self.assertEqual(["context", "runtime"], value["features"]["artifact_scopes"])
         self.assertTrue(value["features"]["read_only_artifact_view"])
+
+    def test_capability_manifest_rejects_undeclared_identity_fields_and_records_current_interpreter(self):
+        value = review_flow.capabilities()
+        self.assertEqual(str(Path(sys.executable).resolve()), value["python_executable"])
+        self.assertEqual(sys.version.split()[0], value["python_version"])
+        declared = json.loads((SCRIPTS.parent / "capabilities.json").read_text(encoding="utf-8"))
+        for wrong in ({**declared, "helper_sha256": "0" * 64}, {**declared, "protocol_version": True},
+                      {**declared, "draft_formats": [17]}):
+            with self.subTest(value=wrong), mock.patch.object(review_flow.coordination, "read_json", return_value=wrong):
+                with self.assertRaisesRegex(ValueError, "Invalid installed capability manifest"):
+                    review_flow.capabilities()
 
     def test_compact_draft_template_expands_to_the_same_v3_validator_input(self):
         root = {"id": "CH-0001", "repo": "repo-000", "source": "head", "path": "app.py"}

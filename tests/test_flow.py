@@ -70,6 +70,35 @@ class FlowTests(ReviewFixture):
         snapshot = workspace.evidence_repository(context, workspace.repository(workspace.load(context), result["selected_repo"]))
         self.assertTrue(list((snapshot / "refs").rglob("*")))
 
+    def test_single_repo_impact_error_retains_same_request_for_repair_and_publication(self):
+        result = self.start()
+        context, manifest, draft = self.authored_draft(result)
+        self.assertFalse(manifest["extension_enabled"])
+        original_manifest = (context / "manifest.json").read_bytes()
+        anchor = draft["coverage"][0]["evidence"][0]
+        draft["impact_coverage"] = [{"id": "I-001", **{key: anchor[key] for key in ("repo", "source", "path")},
+            "status": "reviewed", "reason": "Local support was incorrectly entered as a cross-Repo graph.",
+            "evidence": [anchor], "contract_ids": [], "related_to": []}]
+        draft["coverage"][0]["impact_ids"] = ["I-001"]
+        coordination.atomic(context / "draft.json", draft)
+        root, identifier = Path(result["runtime_root"]), result["request_id"]
+        checked, check_code = flow.check(root, identifier)
+        self.assertFalse(checked["ready_for_finish"])
+        self.assertEqual(3, check_code)
+        with self.assertRaises(workspace_report.DraftValidationError):
+            workspace_report.validate(draft, manifest, context)
+        invalid, code = flow.finish(root, identifier)
+        self.assertEqual(3, code)
+        self.assertTrue(invalid["context_retained"])
+        self.assertEqual(original_manifest, (context / "manifest.json").read_bytes())
+        draft["impact_coverage"] = []
+        draft["coverage"][0]["impact_ids"] = []
+        coordination.atomic(context / "draft.json", draft)
+        published, code = flow.finish(root, identifier)
+        self.assertEqual(0, code)
+        self.assertEqual(identifier, published["request_id"])
+        self.assertTrue(Path(published["report_path"]).is_file())
+
     def test_cancel_after_successful_capture_keeps_the_executors_network_count(self):
         self.remote()
         identifier = uuid.uuid4().hex

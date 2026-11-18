@@ -15,6 +15,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import statistics
 import subprocess
@@ -116,6 +117,118 @@ def canonical_pages(pages):
     return [unique[key] for key in sorted(unique)]
 
 
+def unfenced_lines(text):
+    """Keep structural Markdown separate from literal source inside code fences."""
+    fence = None
+    output = []
+    for line in text.splitlines():
+        match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if match:
+            run, tail = match.groups()
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence) and not tail.strip():
+                fence = None
+            continue
+        if fence is None:
+            output.append(line)
+    return output
+
+
+def presentation_signature(findings, report, *, repo_names=None, excerpts=None, outcome=None):
+    """Accept layout changes only after every authored fact and anchor is found."""
+    labels = ["問題描述", "重現原因", "預期結果", "實際結果", "證據", "建議改善方式"]
+    fields = {"問題描述": ("impact", "impact_scope"),
+              "重現原因": ("operation_scenario", "scenario", "trigger", "technical_trigger"),
+              "預期結果": ("expected",), "實際結果": ("actual",),
+              "證據": ("technical_explanation", "explanation", "evidence_summary"),
+              "建議改善方式": ("recommendation", "engineering_fix", "fix", "owner")}
+    structural = "\n".join(unfenced_lines(report))
+    if outcome is not None:
+        top = structural.split("## 問題", 1)[0]
+        for key in ("recommendation", "review_status"):
+            if outcome[key] not in top:
+                raise AssertionError("rendered review decision differs: " + key)
+        for priority in ("P0", "P1", "P2", "P3"):
+            count = sum(finding["priority"] == priority for finding in findings)
+            if not re.search(r"\b" + priority + r"\s+" + str(count) + r"\b", top):
+                raise AssertionError("rendered priority count differs")
+        completeness = re.search(r"審查完整性：([^；\n]+)", top)
+        if completeness and completeness.group(1) != ("完整" if outcome["review_complete"] else "未完整"):
+            raise AssertionError("rendered review completeness differs")
+        scope = structural.split("## 範圍與限制", 1)[-1].split("## 技術審查紀錄", 1)[0]
+        for gap in outcome.get("gaps", []):
+            if gap not in scope:
+                raise AssertionError("rendered required gap missing")
+    identifiers = re.findall(r"^### (F-\d{3})｜", structural, re.M)
+    if identifiers != [finding["id"] for finding in findings]:
+        raise AssertionError("rendered finding identifiers or order differs")
+    checked = []
+    for finding in findings:
+        heading = f"### {finding['id']}｜[{finding['priority']}] {finding['title']}"
+        if heading not in structural:
+            raise AssertionError("rendered finding priority or title differs")
+        section = report.split(heading, 1)[1].split("## 範圍與限制", 1)[0]
+        section = re.split(r"^### F-\d{3}｜", section, maxsplit=1, flags=re.M)[0]
+        clean = "\n".join(unfenced_lines(section))
+        matches = list(re.finditer(r"^\*\*([^*]+)\*\*$", clean, re.M))
+        if [match.group(1) for match in matches] != labels:
+            raise AssertionError("rendered finding blocks differ")
+        blocks = {match.group(1): clean[match.end():matches[index + 1].start() if index + 1 < len(matches) else len(clean)]
+                  for index, match in enumerate(matches)}
+        for label, names in fields.items():
+            for name in names:
+                if finding.get(name):
+                    for paragraph in re.split(r"\n\s*\n", finding[name].strip()):
+                        if " ".join(paragraph.split()) not in " ".join(blocks[label].split()):
+                            raise AssertionError("rendered finding fact missing: " + name)
+        marker = "依程式推導，未實際重現" if finding["scenario_source"] == "code-derived" else "已實際重現"
+        if marker not in blocks["重現原因"]:
+            raise AssertionError("rendered reproduction status differs")
+        for entry in finding["evidence"]:
+            path = entry["path"]
+            if entry.get("line_start") is not None:
+                path += f":{entry['line_start']}–{entry['line_end']}"
+            name = (repo_names or {}).get(entry["repo"])
+            if name:
+                path = name + "/" + path
+            pattern = r"^.*" + re.escape(path) + r".*來源：.*" + re.escape(entry["source"]) + r".*固定版本：.*" + re.escape(entry["ref"]) + r".*$"
+            if not re.search(pattern, blocks["證據"], re.M):
+                raise AssertionError("rendered fixed evidence anchor missing")
+        for excerpt in (excerpts or {}).get(finding["id"], []):
+            if excerpt not in section:
+                raise AssertionError("rendered fixed excerpt missing")
+        checked.append(finding)
+    return checked
+
+
+def expanded_source_bytes(report):
+    """Diagnostic source size with details closed; this is not a token count."""
+    depth, visible, fence = 0, [], None
+    for line in report.splitlines():
+        match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if match:
+            run, tail = match.groups()
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence) and not tail.strip():
+                fence = None
+            if depth == 0:
+                visible.append(line)
+        elif fence is not None:
+            if depth == 0:
+                visible.append(line)
+        elif line == "<details>":
+            depth += 1
+        elif line == "</details>":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            visible.append(line)
+        elif depth == 1 and line.startswith("<summary>"):
+            visible.append(line)
+    return len("\n".join(visible).encode("utf-8"))
+
+
 def paging_module(skill):
     """Load only the frozen candidate's pure state transformer, not live helpers."""
     scripts = skill / "scripts"
@@ -129,7 +242,9 @@ def paging_module(skill):
     return module
 
 
-def worker(skill, repo, destination, interaction_mode="legacy", *, duplicate_count=100):
+def worker(skill, repo, destination, interaction_mode="legacy", *, duplicate_count=100, comparison_mode="strict"):
+    if comparison_mode not in ("strict", "presentation"):
+        raise ValueError("unsupported comparison mode")
     destination.mkdir()
     runtime = repo.parent.parent / "runtimes" / destination.name
     trace = destination / "trace.jsonl"
@@ -287,6 +402,14 @@ def worker(skill, repo, destination, interaction_mode="legacy", *, duplicate_cou
                                  for name, source in seed["sources"].items()},
                      "pages": canonical_pages(pages), "findings": actual_findings, "outcome": published["review_outcome"],
                      "finding_body": report.split('<a id="finding-F-001"></a>', 1)[1].split("## 範圍與限制", 1)[0]}
+        if comparison_mode == "presentation":
+            head_read = next(row["result"] for row in reads if row["result"]["source"] == "head")
+            head_lines = head_read.get("lines", step.get("contents", {}).get(head_read.get("content_id"), {}).get("lines", []))
+            selected_excerpt = "\n".join(line["text"] for line in head_lines if line["line"] == 2)
+            if not selected_excerpt:
+                raise AssertionError("fixed finding excerpt was not returned")
+            signature["finding_body"] = presentation_signature(actual_findings, report,
+                repo_names={seed["id"]: seed["name"]}, excerpts={"F-001": [selected_excerpt]}, outcome=published["review_outcome"])
         oracle(signature, report)
         save(destination / "signature.json", signature)
         events = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
@@ -296,6 +419,8 @@ def worker(skill, repo, destination, interaction_mode="legacy", *, duplicate_cou
                    "stdout_bytes": sum(row["output_bytes"] for row in events),
                    "stderr_bytes": sum(row["stderr_bytes"] for row in events),
                    "model_review_seconds": None, "oracle_passed": True,
+                   "comparison_mode": comparison_mode, "report_bytes": len(report.encode("utf-8")),
+                   "default_expanded_source_bytes": expanded_source_bytes(report),
                    "interaction_mode": interaction_mode, "paging_protocol_used": paging_enabled,
                    "redundant_page_requests": duplicate_count if interaction_mode == "paging" else 0,
                    "atomic_author_calls": atomic_author_calls, "checkpoint_recoveries": checkpoint_recoveries,
@@ -316,6 +441,7 @@ def main(argv=None):
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--interaction-mode", choices=("legacy", "paging"), default="legacy")
+    parser.add_argument("--comparison-mode", choices=("strict", "presentation"), default="strict")
     args = parser.parse_args(argv)
     if args.repeats < 1:
         parser.error("repeats must be positive")
@@ -331,7 +457,8 @@ def main(argv=None):
             order = ("baseline", "candidate") if repetition % 2 == 0 else ("candidate", "baseline")
             for label in order:
                 metrics, signature = worker(baseline if label == "baseline" else candidate, repo,
-                                             output / f"{repetition + 1:02}-{label}", args.interaction_mode)
+                                             output / f"{repetition + 1:02}-{label}", args.interaction_mode,
+                                             comparison_mode=args.comparison_mode)
                 if label == "candidate" and args.interaction_mode == "paging" and not metrics["paging_protocol_used"]:
                     raise AssertionError("candidate did not execute the requested paging protocol")
                 if expected is None:
@@ -347,6 +474,7 @@ def main(argv=None):
                    row["candidate"]["helper_workflow_seconds"] / row["baseline"]["helper_workflow_seconds"] for row in rows),
                "scope": "Sanitized deterministic helper interactions; no model analysis or model-quality acceptance.",
                "interaction_mode": args.interaction_mode,
+               "comparison_mode": args.comparison_mode,
                "model_review_seconds": None}
     save(output / "summary.json", summary)
     return 0

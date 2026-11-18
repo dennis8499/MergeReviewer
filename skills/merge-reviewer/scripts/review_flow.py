@@ -354,24 +354,22 @@ def tool_identity():
     for path in sorted(directory.glob("*.py"), key=lambda item: item.name):
         digest.update(path.name.encode("utf-8") + b"\0" + hashlib.sha256(path.read_bytes()).digest())
     return {"skill_version": (directory.parent / "VERSION").read_text(encoding="utf-8").strip(),
-            "helper_sha256": digest.hexdigest(), "python_version": sys.version.split()[0]}
+            "helper_sha256": digest.hexdigest(), "python_version": sys.version.split()[0],
+            "python_executable": str(Path(sys.executable).resolve()),
+            "capabilities_sha256": coordination.file_digest(directory.parent / "capabilities.json")}
 
 
 def capabilities():
     """Machine-readable protocol discovery for workbenches and agent hosts."""
-    return {"schema": "MergeReviewCapabilities/v1", "protocol_version": 1, **tool_identity(),
-            "draft_formats": ["compact", "v3"],
-            "features": {"artifact_scopes": ["context", "runtime"],
-                         "read_only_artifact_view": True,
-                         "request_preflight": True,
-                         "incremental_resume": True,
-                          "publication_retry": True, "batch_artifact_view": True, "summary_status": True,
-                          "validation_progress": True, "atomic_authoring": True, "native_checkpoint": True,
-                           "paging_state": True, "operation_schema": True,
-                          "shared_read_contents": True,
-                         "launch_preflight": True, "read_only_inspection": True,
-                         "completion_preview": True, "scope_notes": True,
-                         "phase_metrics": True}}
+    declared = coordination.read_json(Path(__file__).resolve().parent.parent / "capabilities.json")
+    if (not isinstance(declared, dict) or set(declared) != {"schema", "protocol_version", "draft_formats", "features"}
+            or declared.get("schema") != "MergeReviewCapabilities/v1"
+            or type(declared.get("protocol_version")) is not int or declared["protocol_version"] != 1
+            or not isinstance(declared.get("features"), dict) or declared["features"].get("capability_manifest") is not True
+            or not isinstance(declared.get("draft_formats"), list)
+            or not all(isinstance(item, str) for item in declared["draft_formats"])):
+        raise ValueError("Invalid installed capability manifest")
+    return {**declared, **tool_identity()}
 
 
 def repo_index(manifest):
@@ -1172,7 +1170,7 @@ def step_projection(value):
     return {**value, "operations": projected, "contents": contents}
 
 
-def compact(value, context):
+def _compact(value, context, *, limit=LIMIT):
     scope = "runtime" if Path(context).parent.name == "responses" else "context"
     if isinstance(value, dict) and isinstance(value.get("operations"), list) and all(
             isinstance(item, dict) and "id" in item and "result" in item for item in value["operations"]):
@@ -1180,7 +1178,7 @@ def compact(value, context):
                     "operations": [{**item, "saved": True, "result_returned": True} for item in value["operations"]]}
     else:
         returned = value
-    source_requires_artifact = len(review_runtime.canonical(returned)) >= LIMIT
+    source_requires_artifact = len(review_runtime.canonical(returned)) >= limit
     # Share equal blob bodies even when the entire response fits in one page.
     projected = step_projection(value)
     if projected and len(projected.get("contents", {})) < sum(
@@ -1191,7 +1189,7 @@ def compact(value, context):
                     "operations": [{**item, "saved": True, "result_returned": True} for item in projected["operations"]]}
         if source_requires_artifact:
             returned["artifact"] = review_runtime.store_view(context, value)
-    if len(review_runtime.canonical(returned)) < LIMIT:
+    if len(review_runtime.canonical(returned)) < limit:
         return returned
     artifact = review_runtime.store_view(context, value)
     projected = step_projection(value)
@@ -1199,7 +1197,7 @@ def compact(value, context):
         lean = {"schema": "MergeReviewEvidenceStep/v1", "artifact": artifact,
                 "evidence_complete": True, "projection_complete": True, "review_status": "agent-determined", **projected}
         lean["operations"] = [{**item, "saved": True, "result_returned": True} for item in lean["operations"]]
-        if len(review_runtime.canonical(lean)) < LIMIT:
+        if len(review_runtime.canonical(lean)) < limit:
             return lean
         # Reserve a continuation for each operation, then fill the smallest
         # results first. One large operation must not hide unrelated small ones.
@@ -1212,17 +1210,17 @@ def compact(value, context):
                    "schema": "MergeReviewEvidenceStep/v2", "artifact": artifact,
                    "evidence_complete": True, "review_status": "agent-determined",
                    "projection_complete": False, "operations": rows}
-        if len(review_runtime.canonical(partial)) >= LIMIT and len(rows) > 64:
+        if len(review_runtime.canonical(partial)) >= limit and len(rows) > 64:
             rows[:] = rows[:64]
             partial.update(operations_total=len(operations), operations_next_offset=len(rows),
                            continue_operations=view_continuation(context, artifact, "/operations", len(rows),
                                                                  page_size=64, scope=scope))
-        if len(review_runtime.canonical(partial)) < LIMIT:
+        if len(review_runtime.canonical(partial)) < limit:
             sizes = sorted(range(len(rows)), key=lambda index: len(review_runtime.canonical(operations[index])))
             for index in sizes:
                 previous = rows[index]
                 rows[index] = {**operations[index], "saved": True, "result_returned": True}
-                if len(review_runtime.canonical(partial)) >= LIMIT:
+                if len(review_runtime.canonical(partial)) >= limit:
                     rows[index] = previous
             partial["projection_complete"] = len(rows) == len(operations) and all(row["result_returned"] for row in rows)
             return partial
@@ -1247,9 +1245,29 @@ def compact(value, context):
     if isinstance(value, dict) and "evidence_verified" in value:
         result["evidence_verified"] = value["evidence_verified"]
         result["ready_for_finish"] = value.get("ready_for_finish", False)
-    if len(review_runtime.canonical(result)) >= LIMIT:
+    if len(review_runtime.canonical(result)) >= limit:
         result["summary"] = {"fields": [str(key)[:80] for key in list(value)[:32]] if isinstance(value, dict) else None,
                              "count": len(value)}
+    return result
+
+
+def compact(value, context):
+    """Offer ready paging input; acknowledgement remains a caller operation."""
+    additions = {}
+    if isinstance(value, dict) and isinstance(value.get("operations"), list) and len(review_runtime.canonical(value)) >= LIMIT:
+        projected = step_projection(value)
+        if projected is not None:
+            import review_projection
+            import review_checkpoint
+            location = Path(context)
+            manifest_path = location / "manifest.json"
+            identity = review_checkpoint.source_identity(coordination.read_json(manifest_path)) if manifest_path.is_file() else None
+            additions = review_projection.prepare(location, projected, review_runtime.store_view(location, value),
+                scope="runtime" if location.parent.name == "responses" else "context", source_identity=identity)
+    reserve = len(review_runtime.canonical(additions)) + 32 if additions else 0
+    result = _compact(value, context, limit=LIMIT - reserve)
+    if additions:
+        result.update(additions)
     return result
 
 

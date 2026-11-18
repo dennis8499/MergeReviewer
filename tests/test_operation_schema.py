@@ -62,6 +62,34 @@ class OperationSchemaTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("invalid choice", result.stderr)
 
+    def test_author_nested_schema_describes_partial_merges_lists_citations_and_findings(self):
+        value = schema.describe("author")
+        properties = value["operations"]["author"]["update_schema"]["properties"]
+        self.assertEqual(set(author.ROW_KEYS) | author.TEXT_LISTS | {"summary"}, set(properties))
+        self.assertEqual("array", properties["tests_not_executed"]["type"])
+        self.assertEqual("string", properties["tests_not_executed"]["items"]["type"])
+        self.assertEqual(["action", "owner"], properties["next_steps"]["items"]["required"])
+        coverage = properties["coverage"]
+        self.assertEqual("change_id", coverage["merge_key"])
+        self.assertEqual(["change_id"], coverage["items"]["required"])
+        citation = coverage["items"]["properties"]["evidence"]["items"]
+        compact, full = citation["oneOf"]
+        self.assertEqual(["read_id", "line_start", "line_end"], compact["required"])
+        self.assertFalse(compact["additionalProperties"])
+        self.assertEqual({"repo", "source", "ref", "path"}, set(full["required"]))
+        self.assertEqual({"line_start": ["line_end"], "line_end": ["line_start"]}, full["dependentRequired"])
+        self.assertEqual(["integer", "null"], full["properties"]["line_start"]["type"])
+        self.assertFalse(full["additionalProperties"])
+        related = properties["pending_confirmations"]["items"]["properties"]["related_changes"]["items"]["oneOf"]
+        self.assertEqual("string", related[0]["type"])
+        self.assertEqual({"repo", "source", "path"}, set(related[1]["required"]))
+        finding = properties["findings"]["items"]["properties"]
+        self.assertEqual(["P0", "P1", "P2", "P3"], finding["priority"]["enum"])
+        self.assertEqual(["code-derived", "reproduced"], finding["scenario_source"]["enum"])
+        self.assertTrue({"scenario", "explanation", "fix", "operation_scenario", "technical_explanation",
+                         "engineering_fix", "recommendation"}.issubset(finding))
+        self.assertIn("-InputObject @($operations)", value["serialization"]["powershell"])
+
 
 if __name__ == "__main__":
     unittest.main()

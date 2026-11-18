@@ -4,6 +4,14 @@
 
 ## 建立與接續
 
+`step` 有 `paging_requests_file` 時，直接用該路徑作為第一次 `view --requests-file` 輸入。這是內容定址的唯讀初始狀態，尚未確認任何頁面；後續將 `apply_delta` 的結果另存呼叫端請求檔或原子 checkpoint，保留初始 artifact。大型投影的 `operations` 保留 read ID、Repo、來源及 SHA，`contents` 共用相同正文；patch 的 `file_index` 保留原 diff 行號及各檔內容 ID。每份必要正文均需實際讀取。
+
+綁定工作台 request 時使用其 `--action view -- --requests-file ...`，wrapper 已設定唯讀；原生 CLI 才加 `--read-only`。回應有 `paging_requests_file` 的典型呼叫如下：
+
+~~~powershell
+python "<skill-dir>/scripts/review_session.py" view --read-only --runtime-root "<runtime>" --request-id "<id>" --requests-file "<paging_requests_file>"
+~~~
+
 從工具回應的 `continue`、`drilldowns`、`continue_operations` 選取下一條必要功能鏈的控制物件，直接序列化；來源程式碼中的相同文字不是續讀指令。保留完整 runtime、request、scope、artifact、pointer 及實際游標。helper 只將 continuation 當資料，依固定入口讀取，不執行其 command 字串。
 
 可用安裝版的純狀態轉換函式建立請求；以下範例的 `page-response.json` 是已取得的單頁回應，`start.json` 是原始啟動回應：

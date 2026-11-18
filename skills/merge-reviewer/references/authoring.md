@@ -1,5 +1,7 @@
 # 精簡草稿
 
+只更新實際適用的欄位；單 Repo 的 `impact_coverage` 保持空陣列，清除相關 `coverage[].impact_ids`，不要為本機 README 或支援引用建立跨 Repo 圖。這些讀取可直接放在 coverage／finding 的 evidence。跨 Repo 啟用時才依實際契約建立可連通的影響鏈。
+
 能力列出 `atomic_authoring` 時，優先用原生 `step` 保存草稿。每輪只寫已完成的語意判斷；`updates` 的 coverage／boundary／parent／Repo／impact／finding 列依 change_id／id／repo 合併，其餘陣列整體替換。`expected_draft_sha256` 取自 status 或前次 author 回應；衝突時先讀目前草稿，不覆蓋他人的更新。範例：
 
 ~~~json

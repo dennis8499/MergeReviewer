@@ -1,18 +1,20 @@
 # Merge Reviewer
 
-`0.23.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查固定證據指出的相關契約及消費端，產生繁體中文精簡 Merge Report。
+目前版本為 **0.24.0**；既有活動 request 沿用原綁定套件，升級後的新 request 使用新版。
+
+`0.24.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查固定證據指出的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
 預設沿用 [Concise 寫作規則](skills/merge-reviewer/references/report-style.md#共用-concise-規則)；只有使用者明確要求或選取 `output-style` 時，才載入其情境風格與本次必要參考。必要報告欄位、證據、缺口及錯誤資訊完整保留；要求詳解時完整說明。
 
-本版沿用批次預抓與正式搜尋的 Repo 範圍、原子草稿更新及固定正文共用，新增可確認的分頁續讀、checkpoint revision 防回退、完整狀態引用及純讀 schema／CLI 幫助。完整來源對應、覆蓋義務及首次發布驗證保留。
+本版新增決策與工程分層的報告：結論列出完整性、適用版本、摘要與檢查紀錄，每項展開兩筆核心證據，其餘收合。大型回應提供可直接續讀的分頁請求檔、逐檔 diff 索引與共用正文；巢狀 author schema 與固定序列化範例降低格式修正。固定來源、P0–P3、必要缺口及發布收據維持原契約。
 
-介面、相容性與驗收限制見 [0.23.0 發布說明](docs/releases/v0.23.0.md)與[本機驗證紀錄](docs/validation/review-efficiency-20261115.md)。既有活動 request 沿用原綁定版本；更新後的新 request 使用本版。
+介面、相容性與驗收限制見 [0.24.0 發布說明](docs/releases/v0.24.0.md)與[本輪驗證紀錄](docs/validation/review-improvements-20261117.md)。
 
 ## 安裝與第一次使用
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-從 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載 `merge-reviewer-0.23.0.zip`，把其中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
+正式版由 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載；本機可用 `python scripts/package_release.py --tag v0.24.0` 建立 `dist/merge-reviewer-0.24.0.zip`。把 ZIP 中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
 在 Codex 對話輸入：
 
@@ -64,7 +66,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 python -m pip install -r requirements-dev.txt
 python -X utf8 -B -m unittest discover -s tests -v
 python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
-python scripts/package_release.py --tag v0.23.0
+python scripts/package_release.py --tag v0.24.0
 ~~~
 
 CI 使用 Windows 的 Python 3.10 與 3.14 兩個矩陣格；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及必要 Python helpers，不包含測試及舊收據 runtime。
@@ -94,7 +96,7 @@ main 與手動驗證會保存完整矩陣證據及 Windows／Python 3.14 的正�
 執行配額、快取及相容入口見 [操作與負載](skills/merge-reviewer/references/runtime-controls.md)；設計背景見 [執行最佳化](docs/runtime-optimization.md)。升級時使用完整 ZIP，避免混合不同版本的 helper。
 ## 完整審查效能與品質驗收
 
-候選版以固定的 `e2430b69b005226a1d77402bb090289c74e31dc2`／MergeReviewer 0.20.1 為基準。驗收排程採五組交錯配對；大型多 Repo 完整審查比值中位數須 ≤0.90，單 Repo 須 ≤1.05，helper 暖快取須 ≤0.80、冷啟動與陸續啟動須 ≤0.90。這些都是待量測的目標，須同時通過獨立語意稽核才算達標。
+歷史完整矩陣仍以固定的 `e2430b69b005226a1d77402bb090289c74e31dc2`／MergeReviewer 0.20.1 為基準；不隨本輪增量比較變更。驗收排程採五組交錯配對；大型多 Repo 完整審查比值中位數須 ≤0.90，單 Repo 須 ≤1.05，helper 暖快取須 ≤0.80、冷啟動與陸續啟動須 ≤0.90。這些都是待量測的目標，須同時通過獨立語意稽核才算達標。
 
 請在所有 Git Repo 之外準備全新驗收矩陣。預設會封裝指定 commit，並在建立案例前驗證技能內容雜湊：
 
@@ -103,3 +105,5 @@ python -X utf8 -B tests/merge_acceptance_matrix.py prepare --root <fresh-matrix-
 ```
 
 量測及稽核門檻見 [acceptance-ref-sync.md](docs/acceptance-ref-sync.md)。CI 目前涵蓋 Windows 上的 Python 3.10 與 3.14。
+
+本輪另固定 0.23.0 commit `5a255fc9f35643eb4164fc893826cec42737ccbe`。Helper 互動使用 `tests/replay_log_workflow.py --comparison-mode presentation --interaction-mode paging --repeats 5`，允許呈現調整但核對問題事實、引用、片段與結論；預設仍為 `strict`。`python -m tests.compare_review_models --help` 提供實際 Codex 配對入口，五個來源夾具與答案分離，凍結兩版內容、保留所有執行與失敗。機械核對通過仍須逐份審查語意，不能當成正式專案正確率。
