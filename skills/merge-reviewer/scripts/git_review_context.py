@@ -439,10 +439,6 @@ def discover_repositories(workspace: Path, workspace_file: Path | None, *, roots
     return sorted(repositories, key=lambda item: str(item).casefold())
 
 
-def is_group_workspace(workspace: Path, workspace_file: Path | None, repositories: list[Path]) -> bool:
-    """Only two or more distinct declared Git roots enable impact extension."""
-    return len(set(repositories)) > 1
-
 def choose_repository(
     workspace: Path,
     workspace_file: Path | None,
@@ -516,10 +512,6 @@ def resolve_commit_ref(repo: Path, ref: str) -> tuple[str | None, str]:
     if not git_ok(repo, ["check-ref-format", local_ref]):
         return None, ref
     return verified_commit(repo, local_ref), local_ref
-
-def local_branch_exists(repo: Path, branch: str) -> bool:
-    return git_ok(repo, ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"])
-
 
 def remote_target_for_ref(repo: Path, ref: str) -> RemoteTarget | None:
     """Classify only explicitly remote-qualified refs.
@@ -780,10 +772,6 @@ def collect_submodule_paths(
     return paths
 
 
-def commit_subject(repo: Path, commit: str) -> str:
-    return str(run_git(repo, ["show", "-s", "--format=%s", commit])).strip()
-
-
 def merge_commit_records(repo: Path, left: str, right: str) -> list[dict[str, Any]]:
     # One history walk returns the ordered merge SHA, complete parent list and
     # subject. The former rev-list + per-merge parent + per-merge show sequence
@@ -989,17 +977,6 @@ def snapshot(repo: Path) -> dict[str, Any]:
         "index_digest": index_digest,
         "working_tree_digest": working_tree_digest(repo, tracked_index=tracked_index),
         "dirty_submodules": dirty_submodule_paths(repo, tracked_index=tracked_index),
-    }
-
-
-def snapshot_environment(repo: Path, temporary_dir: Path) -> dict[str, str]:
-    objects = temporary_dir / "objects"
-    objects.mkdir(parents=True, exist_ok=True)
-    repository_objects = git_path(repo, "objects")
-    return {
-        "GIT_INDEX_FILE": str(temporary_dir / "index"),
-        "GIT_OBJECT_DIRECTORY": str(objects),
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(repository_objects),
     }
 
 

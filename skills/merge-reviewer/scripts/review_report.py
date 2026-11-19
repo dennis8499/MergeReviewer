@@ -26,11 +26,6 @@ def validate_result(draft, manifest, context_dir, *, timeout=180.0):
     return validate(draft, manifest, context_dir, timeout=timeout)
 
 
-def render_markdown(result, manifest):
-    from workspace_report import render
-    return render(result, manifest)
-
-
 def publish_report(context_dir: Path, result_file: Path, report_dir: Path | None = None, *,
                    timeout: float = 180.0, retain_on_validation_error: bool = False,
                    on_stage=None, on_published=None, cleanup_context=True, on_stage_receipt=None) -> Path:
