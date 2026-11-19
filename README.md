@@ -1,20 +1,20 @@
 # Merge Reviewer
 
-目前版本為 **0.24.0**；既有活動 request 沿用原綁定套件，升級後的新 request 使用新版。
+目前版本為 **0.24.1**；既有活動 request 沿用原綁定套件，升級後的新 request 使用新版。
 
-`0.24.0` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查固定證據指出的相關契約及消費端，產生繁體中文精簡 Merge Report。
+`0.24.1` 是以 Codex 原生 Code Review 準則審查**單一 Repo、基礎分支與比較分支**的技能。宣告工作區包含多個 Repo 時，只延伸檢查固定證據指出的相關契約及消費端，產生繁體中文精簡 Merge Report。
 
 預設沿用 [Concise 寫作規則](skills/merge-reviewer/references/report-style.md#共用-concise-規則)；只有使用者明確要求或選取 `output-style` 時，才載入其情境風格與本次必要參考。必要報告欄位、證據、缺口及錯誤資訊完整保留；要求詳解時完整說明。
 
 本版新增決策與工程分層的報告：結論列出完整性、適用版本、摘要與檢查紀錄，每項展開兩筆核心證據，其餘收合。大型回應提供可直接續讀的分頁請求檔、逐檔 diff 索引與共用正文；巢狀 author schema 與固定序列化範例降低格式修正。固定來源、P0–P3、必要缺口及發布收據維持原契約。
 
-介面、相容性與驗收限制見 [0.24.0 發布說明](docs/releases/v0.24.0.md)與[本輪驗證紀錄](docs/validation/review-improvements-20261117.md)。
+介面、相容性與驗收限制見 [0.24.1 發布說明](docs/releases/v0.24.0.md)與[本輪驗證紀錄](docs/validation/review-improvements-20261117.md)。
 
 ## 安裝與第一次使用
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-正式版由 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載；本機可用 `python scripts/package_release.py --tag v0.24.0` 建立 `dist/merge-reviewer-0.24.0.zip`。把 ZIP 中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
+正式版由 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載；本機可用 `python scripts/package_release.py --tag v0.24.1` 建立 `dist/merge-reviewer-0.24.1.zip`。把 ZIP 中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
 在 Codex 對話輸入：
 
@@ -66,7 +66,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 python -m pip install -r requirements-dev.txt
 python -X utf8 -B -m unittest discover -s tests -v
 python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
-python scripts/package_release.py --tag v0.24.0
+python scripts/package_release.py --tag v0.24.1
 ~~~
 
 CI 使用 Windows 的 Python 3.10 與 3.14 兩個矩陣格；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及必要 Python helpers，不包含測試及舊收據 runtime。
