@@ -44,6 +44,15 @@ def readable_fixture():
 
 
 class ReadableReportTests(unittest.TestCase):
+    def test_overview_states_observable_impact_certainty_and_owner_without_engineering_excerpt(self):
+        result, manifest = readable_fixture()
+        result["next_steps"] = []
+        body = workspace_report.render(result, manifest)
+        overview = body.split("## 問題詳情", 1)[0]
+        for fact in ("下一步：開發先處理", "建立訂單並取得總額", "訂單總額不正確", "依程式推導"):
+            self.assertIn(fact, overview)
+        self.assertNotIn("total = price + quantity", overview)
+
     def test_summary_exposes_decision_completeness_versions_and_authored_summary(self):
         result, manifest = readable_fixture()
         text = workspace_report.render(result, manifest)

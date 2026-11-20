@@ -816,6 +816,14 @@ def render(result, manifest):
             first_step = result["next_steps"][0]
             lines.extend([f"下一步：{first_step['action']}（{first_step['owner']}）"
                           + (f"；另有 {len(result['next_steps']) - 1} 項見範圍與限制。" if len(result["next_steps"]) > 1 else ""), ""])
+        elif result.get("limitations"):
+            lines.extend(["下一步：審查負責人先補查[範圍與限制](#範圍與限制)列出的證據。", ""])
+        elif result.get("pending_confirmations"):
+            first = result["pending_confirmations"][0]
+            lines.extend([f"下一步：{first['verification']}（{first['owner']}，見[待人工確認](#待人工確認)）", ""])
+        elif result["findings"]:
+            first = result["findings"][0]
+            lines.extend([f"下一步：{first['owner']}先處理 [{first['id']}](#finding-{first['id']})，按問題情境核對修正結果。", ""])
         lines.extend(["已執行檢查：" + ("；".join(result["tests_executed"]) or "無"), "",
                       "未執行檢查：" + ("；".join(result["tests_not_executed"]) or "無其他紀錄"), ""])
     if result["pending_confirmation_count"] and not engineering:
@@ -838,12 +846,15 @@ def render(result, manifest):
     comparison = []
     if engineering:
         comparison, lines = lines[comparison_start:], lines[:comparison_start]
-        lines.extend(["## 問題總攬", "", "| 問題 | 優先程度 | 名稱 | 影響 |",
-                      "| --- | --- | --- | --- |"])
-        lines.extend(f"| [{cell(f['id'])}](#finding-{f['id']}) | {cell(f['priority'])} | {cell(f['title'])} | {cell(f['impact'])} |"
-                     for f in result["findings"])
+        lines.extend(["## 問題總攬", "", "| 問題 | 優先程度 | 名稱 | 什麼情況下發生 | 會看到的影響 | 確認方式 |",
+                      "| --- | --- | --- | --- | --- | --- |"])
+        for finding in result["findings"]:
+            confirmed = "依程式推導" if finding["scenario_source"] == "code-derived" else "已實際重現"
+            scenario = finding.get("operation_scenario") or finding["trigger"]
+            lines.append(f"| [{cell(finding['id'])}](#finding-{finding['id']}) | {cell(finding['priority'])} | "
+                         f"{cell(finding['title'])} | {cell(scenario)} | {cell(finding['impact'])} | {confirmed} |")
         if not result["findings"]:
-            lines.append("| 無已確認問題 | — | — | — |")
+            lines.append("| 無已確認問題 | — | — | — | — | — |")
         lines.extend(["", "## 問題詳情（工程師參考）", ""])
     else:
         lines.extend(["## 問題", ""])
