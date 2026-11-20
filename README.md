@@ -12,7 +12,7 @@ Merge Reviewer 以 Codex 原生 Code Review 準則審查**單一 Repo、基礎�
 
 需求：Git（預覽需支援 `git merge-tree --write-tree`）、Python 3.10 以上，以及可載入 Codex skill 的環境。
 
-正式版由 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載；本機可用 `python scripts/package_release.py --tag v0.24.1` 建立 `dist/merge-reviewer-0.24.1.zip`。把 ZIP 中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
+正式版由 [Releases](https://github.com/dennis8499/MergeReviewer/releases) 下載；本機可用 `python scripts/package_release.py --tag v0.24.2` 建立 `dist/merge-reviewer-0.24.2.zip`。把 ZIP 中的 `merge-reviewer` 放到 `$CODEX_HOME/skills/merge-reviewer`；未設定 CODEX_HOME 時用 `~/.codex/skills/merge-reviewer`。原始碼安裝複製 `skills/merge-reviewer`。已有舊版時先依[升級說明](skills/merge-reviewer/references/usage.md#8-升級與舊入口遷移)處理，避免混入舊檔案。
 
 在 Codex 對話輸入：
 
@@ -64,7 +64,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 python -m pip install -r requirements-dev.txt
 python -X utf8 -B -m unittest discover -s tests -v
 python -X utf8 -B -m behave tests/features --tags="not @human-acceptance"
-python scripts/package_release.py --tag v0.24.1
+python scripts/package_release.py --tag v0.24.2
 ~~~
 
 CI 使用 Windows 的 Python 3.10 與 3.14 兩個矩陣格；版本在 `skills/merge-reviewer/VERSION`，Release tag 需一致。ZIP 包含技能、使用指南、原生準則、風格、v3 契約及必要 Python helpers，不包含測試及舊收據 runtime。
