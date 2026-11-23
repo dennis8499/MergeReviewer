@@ -12,7 +12,7 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 ARCHIVE_ROOT = "merge-reviewer"
-TEXT_SUFFIXES = {".md", ".py", ".yaml", ".yml", ".json", ".txt", ".toml"}
+TEXT_SUFFIXES = {".md", ".py", ".yaml", ".yml", ".json", ".txt", ".toml", ".cs", ".ps1"}
 
 
 def canonical_bytes(path: Path) -> bytes:
