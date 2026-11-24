@@ -10,7 +10,7 @@ metadata:
 ## 必須遵守的來源與審查規則
 
 - `main`、`feature/payment` 等未加 remote 前綴的分支只解析為本機 ref；不得從 upstream 推定需要同步。只有明確指定 `origin/main` 這類遠端 ref 才能依五分鐘同步收據同步該 ref；`--refresh` 只更新本次指定且需要更新的 ref。
-- 間接 Repo 一律固定並審查本機 `HEAD`。分支審查不呼叫 GitLab MR、分支或檔案 API。快照完成後，讀取、搜尋、修稿、`check`、`finish` 與恢復都使用本機固定證據；來源不足就列出缺口並維持未完成。
+- 間接 Repo 一律固定並審查本機 `HEAD`。分支審查不呼叫 GitLab MR、分支或檔案 API。快照完成後，Repo 的讀取、搜尋及確認都使用本機固定證據。`--no-fetch` 的請求全程只用本機證據。套件對外查證前，確認同一請求的 `no_fetch=false` 且會話可使用 Web Search。`check` 和 `finish` 使用已保存的結果。
 - 單 Repo 必須檢查每個變更、相關呼叫端、base/head、適用的 merge-parent 與 merge-preview。多 Repo 只有一個受審 Repo，其餘 Repo 只用於契約消費端追查；按證據標示 `contained`、`propagates` 或 `unresolved`。
 - 只回報本次變更引入、可重現或可由固定證據推導且可修正的缺陷，保留 P0–P3，說明觸發條件、影響範圍、修正方向與 Repo／來源／SHA／路徑／行號。區分靜態推導與實際重現，遮蔽敏感值；排除既有問題、已修復問題及安全重構誤報。
 - 逐層套用根目錄與巢狀 `AGENTS.md`：只採用涵蓋目標路徑的規則，並檢查相反的安全範例。零命中、保存 artifact、helper 成功都不能代替語意判斷或表示審查完成；必要證據未讀完、關鍵路徑 unresolved 或安全反例未核對時不得標記完成。
@@ -56,6 +56,8 @@ python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" -
 
 首輪將 start 產生的 `initial_reads_file` 原樣交給 step，先讀取已擷取 diff、適用的 `AGENTS.md`、改動檔及必要 base／head／merge-preview／parent 內容；逐項讀完再決定動態呼叫鏈追查。必要 parent 只需核對與有效變更路徑相交的差異及最終內容，不要逐頁重讀無關 parent patch。後續每輪合併固定讀取、契約註冊及搜尋；各操作給唯一 ID，先登錄父契約，再登錄子契約及搜尋。
 
+遇到可能改變相依套件或版本的宣告、來源設定或鎖定檔差異時，先讀[套件版本查核](references/dependency-review.md)。將每項適用的開源套件異動查證完畢，或把確實受阻的項目寫入 `pending_confirmations`，再把對應路徑標記為 `reviewed`。
+
 逐一判斷 `required_coverage`、`required_merge_views`，讀取基礎版本、最終內容及必要 parent。每完成一條功能／契約鏈，就把判斷、固定證據引用與未完成項寫入草稿；恢復時由 `status` 的 `remaining` 接續未完成項。二進位讀取會回傳大小與 hash、但不提供文字；無法可靠解碼的文字會標示 `lossy=true`，兩者都不能當成已讀懂。刪除 API／欄位但檔案保留時，舊符號錨定本次比較左側的實際刪除行，最終內容仍須覆蓋；來源與影響節點範例見[操作範例](references/session-workflow.md#刪除契約與影響圖)。改名及 submodule 也需明確判定。`ancestor-noop/v1` 的空集合依 helper 推導。
 
 多 Repo 先按[契約邊界](references/contract-boundaries.md)明確選擇 `repo-local`、`identified-repos` 或 `workspace` 範圍；Repo 內行為契約不會只因檔名、public 函式或泛稱 export 而擴成 workspace 契約。`propagates` 只追查固定證據指出的消費端；未知但必要的消費端保持 `unresolved`。每個其他 Repo 仍有 disposition。
@@ -77,7 +79,7 @@ python "<skill-dir>/scripts/review_session.py" finish --runtime-root "<runtime>"
 
 可沿用 v3 草稿或改用 `merge-reviewer-authoring/v1`：每項工程事實寫一次，證據引用實際 read 操作 ID 與行段；helper 補入固定來源及重複欄位，不代填判斷。先用 check 查看欄位、搜尋與邊界缺口；check 不執行 Git，`evidence_verified=false`。
 
-能力列出 `completion_preview` 時，check 的 `expected_outcome` 預覽發布結論，`blocking_gaps` 列出阻擋原因；先完成可補查項及修正草稿再 finish。這仍是 JSON 預覽，正式發布必須通過固定證據驗證。
+能力列出 `completion_preview` 時，check 的 `expected_outcome` 預覽發布結論，`blocking_gaps` 列出阻擋原因。先完成可補查項及修正草稿。若剩餘項目已記錄為必要缺口或待人工確認，直接用 `finish` 驗證固定證據並發布對應狀態的報告。
 
 finish 完整驗證固定證據並在所選 Repo 的 `review-reports/` 發布五區塊報告，保留問題、敏感內容處理及展開的人工核對區；不發布至 GitLab。
 

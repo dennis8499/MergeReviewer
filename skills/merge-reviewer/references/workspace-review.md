@@ -208,7 +208,7 @@ v3 必填欄位、`engineering-review/v1` 完整性驗證與 CLI 維持相容。
 
 ### 待人工確認
 
-`pending_confirmations` 為選填陣列，省略等同 `[]`。只用於固定證據已指出的實際必要 caller／consumer／契約，其具體未知條件會影響本次變更判斷。僅缺任意外部消費端清單或假設 strict schema 不構成待確認／必要缺口，也不填入造成未完成的 draft `limitations`；固定工作區以外只是範圍界線。待確認不是已確認缺陷，也不接受 `priority`、`confirmed` 或草稿中的人工簽核。每項必填 `id`（Q-001 起連續編號）、`title`、`reason`、`missing_evidence`、`verification`（人工應執行的核對步驟文字）、`owner`（開發／維運設定／QA）及 `related_changes`（至少一筆恰含 `repo`、`source`、`path` 的必要變更覆蓋鍵）。以下僅為已有必要消費端證據時的格式示意：
+`pending_confirmations` 為選填陣列，省略等同 `[]`。用於固定證據已指出的實際必要 caller／consumer／契約或[套件異動](dependency-review.md)，其具體未知條件會影響本次變更判斷。僅缺任意外部消費端清單或假設 strict schema 不構成待確認／必要缺口，也不填入造成未完成的 draft `limitations`；固定工作區以外只是範圍界線。待確認不是已確認缺陷，也不接受 `priority`、`confirmed` 或草稿中的人工簽核。每項必填 `id`（Q-001 起連續編號）、`title`、`reason`、`missing_evidence`、`verification`（人工應執行的核對步驟文字）、`owner`（開發／維運設定／QA）及 `related_changes`（至少一筆恰含 `repo`、`source`、`path` 的必要變更覆蓋鍵）。以下僅為已有必要消費端證據時的格式示意：
 
 ~~~json
 {

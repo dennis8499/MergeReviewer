@@ -7,11 +7,18 @@ from pathlib import Path
 import subprocess
 import sys
 
+if __package__:
+    from . import create_quality_fixture as quality_fixture
+else:
+    import create_quality_fixture as quality_fixture
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skills/merge-reviewer/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import git_review_context as api
 import review_session
+
+DEPENDENCY_CASES = ("dependency-httpx-regression", "dependency-httpx-safe")
 
 
 def git(repo, *args):
@@ -34,7 +41,50 @@ def server(fields):
             "post('/orders', createOrder);\n")
 
 
+def prepare_dependency_case(case):
+    root = review_session.create_session()
+    try:
+        repo = root / "api"
+        quality_fixture.git(root, "init", "-b", "main", repo)
+        for key, value in (("user.name", "Skill Acceptance"), ("user.email", "review@example.invalid"),
+                           ("core.autocrlf", "false"), ("commit.gpgsign", "false"),
+                           ("core.hooksPath", str(root / "no-hooks"))):
+            quality_fixture.git(repo, "config", "--local", key, value)
+        quality_fixture.write(repo, "app.py",
+            "from starlette.applications import Starlette\n"
+            "from starlette.responses import PlainTextResponse\n"
+            "from starlette.routing import Route\n\n"
+            "async def health(request):\n"
+            "    return PlainTextResponse('ok')\n\n"
+            "app = Starlette(routes=[Route('/health', health)])\n")
+        quality_fixture.write(repo, "test_app.py",
+            "import unittest\n\nfrom starlette.testclient import TestClient\n\nfrom app import app\n\n"
+            "class AppTests(unittest.TestCase):\n"
+            "    def test_health(self):\n"
+            "        with TestClient(app) as client:\n"
+            "            self.assertEqual('ok', client.get('/health').text)\n")
+        quality_fixture.write(repo, "requirements.txt", "httpx==0.27.2\nstarlette==0.36.3\n")
+        quality_fixture.git(repo, "add", ".")
+        quality_fixture.git(repo, "commit", "-m", "baseline")
+        quality_fixture.git(repo, "switch", "-c", "feature/review")
+        starlette = "0.37.2" if case == "dependency-httpx-safe" else "0.36.3"
+        quality_fixture.write(repo, "requirements.txt", f"httpx==0.28.0\nstarlette=={starlette}\n")
+        quality_fixture.git(repo, "add", "requirements.txt")
+        quality_fixture.git(repo, "commit", "-m", "update dependencies")
+        return {"case": case, "fixture_root": str(root), "project": str(repo),
+                "base": "main", "head": "feature/review",
+                "request": f"Use $merge-reviewer at {ROOT / 'skills/merge-reviewer'} to review workspace {root}, "
+                           f"project {repo}, base main and head feature/review. Follow the normal skill entry and "
+                           "publish one Markdown Merge Report. Perform static review without installing dependencies "
+                           "or running application tests."}
+    except BaseException:
+        review_session.cleanup_session(root)
+        raise
+
+
 def prepare(case):
+    if case in DEPENDENCY_CASES:
+        return prepare_dependency_case(case)
     root = review_session.create_session()
     context = None
     try:
@@ -81,7 +131,7 @@ def prepare(case):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=("regression", "safe"), required=True)
+    parser.add_argument("--case", choices=("regression", "safe", *DEPENDENCY_CASES), required=True)
     args = parser.parse_args()
     print(json.dumps(prepare(args.case), ensure_ascii=False, indent=2))
 

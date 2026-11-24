@@ -16,8 +16,9 @@ BASE = 'def publish(amount):\n    return {"amount": amount}\n\ndef consume(paylo
 
 
 def git(repo, *args, check=True):
-    env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-           "GIT_AUTHOR_DATE": DATE, "GIT_COMMITTER_DATE": DATE}
+    env = {name: value for name, value in os.environ.items() if not name.upper().startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_AUTHOR_DATE=DATE, GIT_COMMITTER_DATE=DATE)
     result = subprocess.run(["git", "-C", str(repo), *map(str, args)], capture_output=True,
                             text=True, encoding="utf-8", env=env, timeout=30)
     if check and result.returncode:

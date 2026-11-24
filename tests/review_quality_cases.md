@@ -75,3 +75,22 @@ export function charge(amount: number): Receipt { /* ... */ }
 - 案例 8：orders-api 同時保留舊欄位並新增別名。應追查同一條功能鏈，但不回報改名相容性問題；在全部必要檢查完成後可輸出未發現具體問題。
 - 兩例都要記錄所有 candidate Repo 的搜尋及處置；各 Repo 沿用工作區 HEAD，不要求同名 feature 分支。只有來源快照準備成功不算通過。
 - 發佈後以 review_session.py cleanup 清理 fixture_root；若提前中止，同時清理輸出的 context_dir。不要保留一次性 Git Repo 到產品目錄。
+
+## 開源套件版本查核
+
+用 `python -X utf8 -B tests/skill_acceptance.py --case dependency-httpx-regression` 或 `--case dependency-httpx-safe` 建立固定分支。將輸出的 `request` 交給可使用 Web Search 的 Codex 從正常入口審查。用發布收據及 Markdown 報告核對以下結果，並從審查紀錄核對實際查詢。
+
+| 案例 | 驗收結果 |
+| --- | --- |
+| `dependency-httpx-regression` | HTTPX 從 `0.27.2` 升到 `0.28.0`，Starlette 仍為 `0.36.3`。問題引用固定的 `requirements.txt` 與 `test_app.py` 呼叫、上游連結及可用的避開版本。標示依程式推導。 |
+| `dependency-httpx-safe` | 同時升到 Starlette `0.37.2`。報告記錄該組合已避開同一個 `TestClient` 問題，該問題計數為零。 |
+| 鎖定檔間接相依 | 固定宣告 `starlette[full]==0.36.3` 與 `TestClient` 呼叫，只更換鎖定檔中的 HTTPX `0.27.2` → `0.28.0`。核對由 Starlette extra 引入 HTTPX 的路徑，回報相同的相容性問題。 |
+| 浮動版本或鎖定檔不一致 | 將目標版本改成跨受影響邊界的區間，或讓鎖定檔與新的宣告不一致。版本結論保留為待人工確認，並指出需要取得的解析資料。 |
+| 自研同名套件與格式變動 | 將同名 `httpx` 明確指向工作區自研套件，或只改公開套件宣告的排序。審查紀錄顯示零上游問題搜尋。 |
+| 基礎分支已異動或預覽有衝突 | 只有基礎分支變更版本時跳過該項查詢。若相依檔有合併衝突，保留既有「審查未完成」及固定分支查核證據。 |
+| 明確離線與續作 | 在 Web Search 可用的會話以 `--no-fetch` 啟動 `dependency-httpx-regression`。在查證前暫停，下一個會話用同一 `request_id` 續作。兩階段均為零 Git fetch、零套件對外查詢。`check` 顯示 `pending` 缺口，`finish` 發布載有離線原因及核對方式的待人工確認報告。 |
+| Web Search 不可用 | 以一般請求審查 `dependency-httpx-regression`，停用 Web Search。確認待人工確認原因為工具不可用，並驗證可發布。 |
+| 已查證後續作 | 以一般請求審查 `dependency-httpx-safe`。查證並保存第一組版本後暫停，續作由同一請求的草稿與 checkpoint 接續其餘查核。 |
+| 搜尋恢復後續作 | 以 `no_fetch=false` 的 `dependency-httpx-safe` 請求保存搜尋不可用的待確認項，在 `finish` 前暫停。搜尋恢復後用同一請求查證，確認已解決的項目從草稿及 checkpoint 移除。部分解決時，`check` 與報告只保留連續編號的未決項。全部解決且其餘檢查完成時，報告記錄已避開此問題。另以相同草稿雜湊和過期 checkpoint 版本送出保存請求，確認會拒絕且保留較新的進度。 |
+
+相容性依據見 [HTTPX 0.28.0](https://github.com/encode/httpx/releases/tag/0.28.0) 與 [Starlette 0.37.2](https://github.com/Kludex/starlette/releases/tag/0.37.2)。驗收後用 `review_session.py cleanup --context-dir <fixture_root>` 清理來源。

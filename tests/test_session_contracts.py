@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests.fixtures import ReviewFixture, api, workspace, workspace_report, review_session
+from tests.support import run_git
 from tests.test_r3_authoring_diagnostics import ImpactOwnEvidenceDiagnosticsTests
 import review_coordinator as coordination
 import review_flow as flow
@@ -99,6 +100,70 @@ class SessionContractTests(ReviewFixture):
     def inventory(self, root):
         return {str(path.relative_to(root)): (path.read_bytes(), path.stat().st_mtime_ns)
                 for path in root.rglob("*") if path.is_file()}
+
+    def test_start_replays_saved_no_fetch_and_rejects_conflicts_with_owner_lock(self):
+        for offline, identifier in ((False, "1" * 32), (True, "2" * 32)):
+            with self.subTest(offline=offline):
+                identity = ("--runtime-root", str(self.root / "runtime"), "--request-id", identifier)
+                start_args = ("start", "--workspace", str(self.root), "--project", str(self.repo),
+                              "--base", "main", "--head", "feature", *identity)
+                offline_args = start_args + ("--no-fetch",)
+                accepted_args, conflicting_args = (offline_args, start_args) if offline else (start_args, offline_args)
+                code, started = self.cli(*accepted_args)
+                self.assertEqual(0, code, started)
+                context = Path(started["context_dir"])
+                self.addCleanup(review_session.cleanup_session, context)
+                self.assertIs(started["no_fetch"], offline)
+                job_path = flow.job_path(Path(started["runtime_root"]), identifier)
+                with mock.patch.object(api, "build_manifest", side_effect=AssertionError("recapture")):
+                    code, replay = self.cli(*accepted_args)
+                    self.assertEqual(0, code, replay)
+                    self.assertEqual(str(context), replay["context_dir"])
+                    self.assertIs(replay["inputs"]["no_fetch"], offline)
+                    with coordination.FileLock(job_path.with_suffix(".owner.lock")):
+                        code, replay = self.cli(*accepted_args)
+                        self.assertEqual(0, code, replay)
+                        self.assertEqual(str(context), replay["context_dir"])
+                        self.assertIs(replay["inputs"]["no_fetch"], offline)
+                        code, rejected = self.cli(*conflicting_args)
+                        self.assertEqual(2, code)
+                        self.assertIn("different inputs", rejected["error"])
+                        self.assertEqual(identifier, rejected["request_id"])
+                        self.assertNotIn("inputs", rejected)
+                    with mock.patch.object(flow, "LIMIT", 512):
+                        code, compacted = self.cli(*accepted_args)
+                    self.assertEqual(0, code, compacted)
+                    self.assertEqual("MergeReviewEvidenceSummary/v1", compacted["schema"])
+                continuation = compacted["continue"]
+                code, summary = self.cli("status", "--summary", "--runtime-root", continuation["runtime_root"],
+                                         "--request-id", continuation["request_id"])
+                self.assertEqual(0, code, summary)
+                self.assertEqual(identifier, summary["request_id"])
+                self.assertIs(summary["no_fetch"], offline)
+
+    def test_start_with_owner_lock_before_job_exists_returns_error(self):
+        root = coordination.runtime(self.root / "runtime", create=True)
+        identifier = "3" * 32
+        job_path = flow.job_path(root, identifier)
+        with coordination.FileLock(job_path.with_suffix(".owner.lock")), \
+             mock.patch.object(api, "build_manifest", side_effect=AssertionError("capture")):
+            code, rejected = self.cli("start", "--workspace", str(self.root), "--project", str(self.repo),
+                                      "--base", "main", "--head", "feature", "--no-fetch",
+                                      "--runtime-root", str(root), "--request-id", identifier)
+            self.assertFalse(job_path.exists())
+        self.assertEqual(2, code)
+        self.assertEqual(identifier, rejected["request_id"])
+        self.assertTrue(rejected["error"])
+        self.assertNotIn("inputs", rejected)
+
+    def test_no_fetch_preflight_rejects_remote_ref_before_capture(self):
+        run_git(self.repo, "remote", "add", "origin", str(self.root / "unused.git"))
+        with mock.patch.object(api, "fetch_inputs", side_effect=AssertionError("fetch")):
+            result = flow.launch_preflight(self.arguments(base="origin/main", no_fetch=True))
+        self.assertFalse(result["valid"])
+        self.assertTrue(any(row["pointer"] == "/base" and "--no-fetch" in row["message"]
+                            for row in result["errors"]), result)
+        self.assertEqual(0, result["network_calls"])
 
     def test_preflight_and_capabilities_write_nothing_and_bad_workspace_does_not_consume_id(self):
         args = self.arguments(request_id="1" * 32)

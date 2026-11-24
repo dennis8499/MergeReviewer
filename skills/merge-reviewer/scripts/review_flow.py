@@ -222,10 +222,12 @@ def job_context(root, identifier, job):
     return expected
 
 
-def status(root, identifier, *, summary=False):
+def status(root, identifier, *, summary=False, expected_input_digest=None):
     job = coordination.read_json(job_path(root, identifier))
     if job.get("schema") != SCHEMA or job.get("request_id") != identifier:
         raise ValueError("Session identity differs.")
+    if expected_input_digest is not None and job.get("input_digest") != expected_input_digest:
+        raise ValueError("request_id already belongs to different inputs.")
     result = {key: value for key, value in job.items() if key not in ("input_digest",)}
     context = job_context(root, identifier, job)
     if context.exists():
@@ -315,6 +317,9 @@ def status_summary(value):
               "failure_kind": value.get("failure_kind"), "retained_until_epoch": value.get("retained_until_epoch"),
               "details": {"command": "status", "runtime_root": value.get("runtime_root"),
                           "request_id": value["request_id"]}}
+    inputs = value.get("inputs")
+    if isinstance(inputs, dict) and isinstance(inputs.get("no_fetch"), bool):
+        result["no_fetch"] = inputs["no_fetch"]
     result.update(check_current=value.get("check_current", False), draft_sha256=value.get("draft_sha256"), status_revision=value.get("status_revision"),
                   last_check_at=value.get("last_check_at"), updated_at=value.get("updated_at"),
                   execution_checkpoint=brief(value.get("execution_checkpoint")))
@@ -917,7 +922,7 @@ def start(args):
     fingerprint = coordination.digest(inputs)
     lock = coordination.FileLock(path.with_suffix(".owner.lock"))
     if not lock.acquire(blocking=False):
-        return status(root, identifier)
+        return status(root, identifier, expected_input_digest=fingerprint)
     git_activity_token = api.GIT_PROCESS_ACTIVITY.set(launch_activity)
     context = None
     active = None
@@ -925,10 +930,7 @@ def start(args):
     job_created = False
     try:
         if path.exists():
-            existing = coordination.read_json(path)
-            if existing.get("input_digest") != fingerprint:
-                raise ValueError("request_id already belongs to different inputs.")
-            return status(root, identifier)
+            return status(root, identifier, expected_input_digest=fingerprint)
         job = {"schema": SCHEMA, "request_id": identifier, "runtime_root": str(root),
                "state": "running", "phase": "preflight", "started_at": now(),
                 "updated_at": now(), "pid": os.getpid(), "inputs": inputs, "input_digest": fingerprint,
@@ -989,7 +991,7 @@ def start(args):
         coordination.atomic(initial_reads_path, initial_reads)
         guide = {"schema": "MergeReviewStart/v1", "request_id": identifier, "runtime_root": str(root),
                   "state": "ready", "context_dir": str(context), "draft_path": str(context / "draft.json"),
-                  "tool_identity": job["tool_identity"],
+                  "tool_identity": job["tool_identity"], "no_fetch": inputs["no_fetch"],
                  "selected_repo": manifest["selected_repo"], "repositories": repo_index(manifest),
                  "contract_scope_policy": manifest.get("contract_scope_policy"),
                  "required_coverage": manifest["required_coverage"],

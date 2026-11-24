@@ -15,13 +15,13 @@ python "<skill-dir>/scripts/review_session.py" start --workspace "C:/team" --pro
 python "<skill-dir>/scripts/review_session.py" status --runtime-root "C:/team/.review-runtime" --request-id "<id>" --summary
 ~~~
 
-start 回傳 `MergeReviewStart/v1`，含固定 Repo／source ref、必要覆蓋及 parent、指示、patch、草稿與操作範例。`<context>/start.json` 保存完整索引；status 補上已執行操作、契約及草稿尚未完成項。stdout 超過 24 KiB 時回傳 `MergeReviewEvidenceSummary/v1`，保留完整 artifact；stderr 為階段事件。
+首次 start 回傳 `MergeReviewStart/v1`，含固定 Repo／source ref、必要覆蓋及 parent、指示、patch、草稿與操作範例。`no_fetch` 是本次請求保存的離線設定。`<context>/start.json` 保存完整索引。status 補上已執行操作、契約及草稿尚未完成項。stdout 超過 24 KiB 時回傳 `MergeReviewEvidenceSummary/v1`，保留完整 artifact。stderr 為階段事件。
 
 先查 capabilities：`skill_version`、`helper_sha256`、`python_version` 識別目前安裝；start 與持久 job 的 `tool_identity` 識別擷取時的工具。helper 摘要依 scripts 內所有 Python 檔名及內容 SHA-256 計算；同版本的不同 helper 內容可區分，不會因工具更新而自動重新擷取。
 
 能力列出 `operation_schema` 時，以 `review_session.py schema --operation read|search|register-contract|author|view` 取得該操作的欄位、型別及最小範本；`--help` 可在沒有 runtime／request 時使用。格式規格不代替固定證據的 symbol、來源與行段驗證。
 
-能力列出 `summary_status` 時，`status --summary` 回傳 `MergeReviewStatusSummary/v1`：狀態、錯誤與缺口預覽／總數、未完成項計數、報告路徑及 `next_action`。大型收據與完整操作索引透過 `details` 的原 status 命令取得；預覽不代表全部內容已讀完。原 status 介面保留，發布狀態仍核對報告正文收據。
+能力列出 `summary_status` 時，`status --summary` 回傳 `MergeReviewStatusSummary/v1`，包含狀態、錯誤與缺口預覽／總數、未完成項計數、報告路徑及 `next_action`。請求具有已保存的 `inputs.no_fetch` 布林值時，摘要在頂層提供同一個 `no_fetch`，供續作查核。大型收據與完整操作索引透過 `details` 的原 status 命令取得；預覽不代表全部內容已讀完。原 status 介面保留，發布狀態仍核對報告正文收據。
 
 能力列出 `read_only_inspection` 時，`status --summary` 與 capabilities 保證不寫檔，artifact 使用 `view --read-only`；單筆及批次均略過 metrics 寫入，continuation 保留 `read_only=true`。舊版 view 預設的分頁計量維持相容。唯讀檢視不建立額外 artifact 或快取。
 

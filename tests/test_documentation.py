@@ -42,6 +42,7 @@ class DocumentationPackageTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as zipped:
                 names = set(zipped.namelist())
                 for relative in ("references/usage.md", "references/report-style.md", "references/review-rules.md",
+                                 "references/dependency-review.md",
                                  "references/workspace-review.md", "scripts/review_workspace.py", "scripts/workspace_report.py"):
                     self.assertIn("merge-reviewer/" + relative, names)
                 self.assertFalse(any("receipt_runtime/" in n or "delivery_binding" in n or "legacy_group_review" in n for n in names))

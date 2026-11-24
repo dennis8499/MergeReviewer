@@ -4,7 +4,7 @@
 
 新流程以 Git common directory、remote URL、有效認證設定／使用者範圍及各分支識別同步。每個 ref 成功後 300 秒有效、命中不延長；失敗 ref 冷卻 30 秒。不同 head 可重用同一 base，只同步缺少或失效的 refs；`--refresh` 重同步要求的 refs。快取命中不呼叫 ls-remote／GitLab API；fetch 使用唯一私人 refs，保留 atomic、無 tags／prune／submodule／maintenance。遠端、帳號或工作台已知 fetch／push／pull 變動使後續請求失效；已固定快照繼續離線。
 
-網路只占用既有共用 Git lease（配額 1），Git 程序樹結束後立即釋放；本機封裝另以 OS 鎖限全 runtime 2 份。peer pack 依 Repo／SHA／object format／policy 共用單一 producer，驗證後複製進各自 context；LRU 上限 2 GiB。所有需協作的審查使用同一 runtime。成功重用者的 fetch 計數為 0，`sync_activity.mode` 記錄 owner／joined／cached，避免重複加總。
+遠端 Git 同步使用既有共用 Git lease（配額 1），Git 程序樹結束後立即釋放；本機封裝另以 OS 鎖限全 runtime 2 份。peer pack 依 Repo／SHA／object format／policy 共用單一 producer，驗證後複製進各自 context；LRU 上限 2 GiB。所有需協作的審查使用同一 runtime。成功重用者的 fetch 計數為 0，`sync_activity.mode` 記錄 owner／joined／cached，避免重複加總。
 
 新 runtime 的 owner／state／同步／封裝鎖由 OS 檔案鎖維持，程序死亡即釋放；共用網路 lease 的未知 Git 程序樹仍隔離。草稿、manifest、artifact、報告及清理獨立；終止紀錄保留 24 小時。既有獨立 CLI 維持原本同步語意，只有新 start 啟用跨請求快取。
 

@@ -28,6 +28,7 @@ $merge-reviewer 專案名稱=OrderService 基礎分支=main 比較分支=feature
 
 - 核心準則及 P0–P3 採 Codex 原生 Code Review，套用適用的 `AGENTS.md` 背景；工具只準備固定證據及驗證覆蓋。
 - 固定比較 `merge-base(基礎分支, 比較分支) → 比較分支`，另提供 preview 及 merge-parent 證據；不納入未提交內容。
+- 允許對外查證時，搜尋開源套件版本的已知問題並核對專案是否會觸發。涵蓋直接相依與鎖定檔中有版本異動的間接相依。自研套件走本機審查。指定 `--no-fetch` 時，需上游查證的項目列為待人工確認。 [套件版本查核](skills/merge-reviewer/references/dependency-review.md)
 - 開始前將固定版本及相關來源保存至自足 Git 證據庫；後續分支更新、force push 或原 Repo 清理不撤銷本次審查，也不自動重審。報告列出擷取時間，結論僅適用固定 SHA。
 - 一個 Git 根目錄或只有一個 Repo 的容器停用跨 Repo 檢核；至少兩個宣告範圍內的不同根目錄才啟用。
 - 永遠只有一個受審 Repo；其他 Repo 使用擷取時的 HEAD，不套用同名分支或本機修改。
