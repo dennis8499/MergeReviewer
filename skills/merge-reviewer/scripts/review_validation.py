@@ -5,6 +5,60 @@ import hashlib
 import review_runtime
 
 
+OWNERS = {"開發", "維運設定", "QA"}
+PENDING_TEXT_FIELDS = ("title", "reason", "missing_evidence", "verification")
+PENDING_FIELDS = {"id", *PENDING_TEXT_FIELDS, "owner", "related_changes", "evidence"}
+
+
+def pending_confirmation_errors(items, expected):
+    """Validate pending decisions against the draft and manifest, without reading source."""
+    path = "draft.pending_confirmations"
+    if not isinstance(items, list):
+        yield path, "must be an array"
+        return
+    fingerprints = set()
+    for index, item in enumerate(items):
+        row = f"{path}[{index}]"
+        if not isinstance(item, dict):
+            yield row, "pending confirmation must be an object"
+            continue
+        identifier = f"Q-{index + 1:03}"
+        if item.get("id") != identifier:
+            yield row + ".id", f"pending confirmation IDs must be sequential: expected {identifier}"
+        if set(item) - PENDING_FIELDS:
+            yield row, "unknown pending confirmation field; human confirmation is recorded only in the report"
+        values = [item.get(field) for field in PENDING_TEXT_FIELDS]
+        for field, value in zip(PENDING_TEXT_FIELDS, values):
+            if not isinstance(value, str) or not value.strip():
+                yield row + "." + field, f"pending confirmation needs {field}"
+        owner = item.get("owner")
+        if not isinstance(owner, str) or owner not in OWNERS:
+            yield row + ".owner", "pending confirmation needs a valid owner"
+        related = item.get("related_changes")
+        if not isinstance(related, list) or not related:
+            yield row + ".related_changes", "pending confirmation must identify captured selected changes"
+        else:
+            seen = set()
+            fields = ("repo", "source", "path")
+            for offset, change in enumerate(related):
+                location = f"{row}.related_changes[{offset}]"
+                if (not isinstance(change, dict) or set(change) != set(fields)
+                        or not all(isinstance(change[field], str) and change[field] for field in fields)):
+                    yield location, "pending confirmation must identify captured selected changes"
+                    continue
+                key = tuple(change[field] for field in fields)
+                if key not in expected:
+                    yield location, "pending confirmation must identify captured selected changes"
+                elif key in seen:
+                    yield location, "duplicate pending related change"
+                seen.add(key)
+        if all(isinstance(value, str) and value.strip() for value in values[:3]):
+            fingerprint = tuple(value.strip() for value in values[:3])
+            if fingerprint in fingerprints:
+                yield row, "duplicate pending confirmation"
+            fingerprints.add(fingerprint)
+
+
 def coverage_reason(row):
     """Preserve the v3 optional reviewed reason without coercing invalid JSON."""
     value = row.get("reason")
@@ -78,7 +132,8 @@ def completion_preview(draft, manifest, gaps=(), *, errors=(), complete_gaps=Fal
                                    if manifest.get("extension_enabled") else "disabled"}
     if errors:
         outcome.update(review_complete=None, review_status="unknown", recommendation="修正草稿後重新檢查")
-    return {"expected_outcome": outcome, "blocking_gaps": blocking}
+    readiness = "repair-draft" if errors else "incomplete" if incomplete else "ready"
+    return {"expected_outcome": outcome, "blocking_gaps": blocking, "publication_readiness": readiness}
 
 
 def comparison_left_sources(repo, key):

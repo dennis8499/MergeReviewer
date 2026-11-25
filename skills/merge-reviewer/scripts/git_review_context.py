@@ -411,14 +411,31 @@ def has_git_marker(path: Path) -> bool:
     return marker.is_dir() or marker.is_file()
 
 
-def discover_repositories(workspace: Path, workspace_file: Path | None, *, roots=None) -> list[Path]:
+def discover_repositories(workspace: Path, workspace_file: Path | None, *, roots=None,
+                          project=None, skip_wiki_staging=True) -> list[Path]:
     roots = roots if roots is not None else workspace_roots(workspace, workspace_file)
-    # Prune only runtime locations, not the surrounding kit/configuration tree.
-    # Lexical paths avoid opening the very directories that may deny access.
+    # Compare paths lexically before opening directories that may deny access.
     runtime_paths = {os.path.normcase(os.path.abspath(git_network_lease.runtime_root()))}
     for variable in ("GITLAB_WORKSPACE_RUNTIME_DIR", "MERGE_REVIEW_RUNTIME_DIR"):
         if os.environ.get(variable):
             runtime_paths.add(os.path.normcase(os.path.abspath(Path(os.environ[variable]).expanduser())))
+    project_path, project_name = None, None
+    if project:
+        requested = Path(project).expanduser()
+        if requested.is_absolute() or "/" in project or "\\" in project:
+            project_path = Path(os.path.abspath(workspace / requested))
+        else:
+            project_name = project.casefold()
+
+    def wiki_staging(root, parent, name):
+        if not skip_wiki_staging or parent != root:
+            return False
+        if not re.fullmatch(r"\.codebase-wiki-write\.[a-z0-9_]{8}", os.path.normcase(name)):
+            return False
+        if project_path is not None and project_path.is_relative_to(parent / name):
+            return False
+        return name.casefold() != project_name
+
     repositories: set[Path] = set()
     def discovery_error(error):
         raise ReviewContextError(f"無法讀取宣告的工作區目錄：{error}")
@@ -432,7 +449,8 @@ def discover_repositories(workspace: Path, workspace_file: Path | None, *, roots
             current_path = Path(current)
             directories[:] = [name for name in directories if name not in SKIP_DIRECTORIES
                               and not (current_path.name == ".gitlab-workspace" and name == "runtime")
-                              and os.path.normcase(os.path.abspath(current_path / name)) not in runtime_paths]
+                              and os.path.normcase(os.path.abspath(current_path / name)) not in runtime_paths
+                              and not wiki_staging(root, current_path, name)]
             if has_git_marker(current_path):
                 repositories.add(normalize_path(current_path))
                 directories[:] = []
@@ -446,7 +464,7 @@ def choose_repository(
     *, repositories: list[Path] | None = None,
 ) -> tuple[Path, list[Path]]:
     if repositories is None:
-        repositories = discover_repositories(workspace, workspace_file)
+        repositories = discover_repositories(workspace, workspace_file, project=project)
     if project:
         requested = Path(project).expanduser()
         candidates: list[Path] = []

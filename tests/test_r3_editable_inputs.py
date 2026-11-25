@@ -196,14 +196,14 @@ class EditableInputRecoveryTests(ReviewFixture):
 
     def test_unreadable_draft_is_repairable_but_owned_load_errors_are_not_swallowed(self):
         self.authored_draft()
-        original = coordination.read_json
+        original = Path.read_bytes
 
         def read(path):
             if Path(path) == self.context / "draft.json":
                 raise PermissionError("synthetic draft ACL")
             return original(path)
 
-        with mock.patch.object(coordination, "read_json", side_effect=read):
+        with mock.patch.object(Path, "read_bytes", autospec=True, side_effect=read):
             result, code = flow.finish(self.runtime, self.identifier)
         self.assertEqual(3, code)
         self.assertTrue(result["context_retained"])

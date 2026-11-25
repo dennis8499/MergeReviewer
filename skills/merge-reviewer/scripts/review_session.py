@@ -218,7 +218,7 @@ def cleanup_if_owned(requested: str | Path) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     values = sys.argv[1:] if argv is None else argv
-    native = ("capabilities", "schema", "preflight", "start", "step", "check", "finish", "status", "cancel", "view")
+    native = ("capabilities", "schema", "preflight", "start", "step", "check", "finish", "status", "cancel", "view", "paging-apply")
     if values and values[0] in native:
         from review_flow import main as flow_main
         return flow_main(values)

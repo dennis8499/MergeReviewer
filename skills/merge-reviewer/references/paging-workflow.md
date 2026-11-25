@@ -47,6 +47,14 @@ python "<skill-dir>/scripts/review_session.py" view --read-only --runtime-root "
 
 先成功取得、解析並閱讀本批回應，再確認其差異。遺失、無法解析或尚未查看的回應，保留原狀態重送；純讀 view 不會先移動持久游標。
 
+能力列出 `paging_apply` 時，先將批次回應存為 UTF-8 JSON，再用已安裝的原生 helper 核對回應及續頁。將結果寫到 runtime 外的呼叫端暫存檔。
+
+~~~powershell
+python "<skill-dir>/scripts/review_session.py" paging-apply --state-file "<paging.json>" --batch-file "<batch-response.json>" --output-file "<confirmed-paging.json>"
+~~~
+
+舊版沿用以下 Python 入口。
+
 ~~~python
 import json
 from pathlib import Path
@@ -64,6 +72,8 @@ Path("confirmed-paging.json").write_text(json.dumps(confirmed, ensure_ascii=Fals
 每條功能鏈完成後，將 `confirmed` 作為 `author` 的 `checkpoint.paging`，與實際判斷及引用同輪原子保存。尚未保存任何 checkpoint 時 `expected_checkpoint_revision` 為 0；已有語意 checkpoint 時，即使首次加入 paging，也取前次 author 或摘要回傳的 `checkpoint_revision`。`expected_draft_sha256` 同樣沿用實際收據。衝突時讀最新狀態並重新套用仍有效的判斷，不覆寫較新的 checkpoint。請求始終是 JSON 陣列，單筆也保留外層 `[]`。
 
 `apply_delta` 只整理已返回頁面與下一批請求，不填 coverage、finding 或語意結論。頁面確認、證據保存與語意已審查是三個不同狀態。`author` 新 ID 配新內容；成功交易重送沿同 ID／同內容，不能以舊交易回退新狀態。省略 paging 的語意修稿保留既有分頁狀態。
+
+要在正式草稿前保存閱讀進度，提交含空 `updates`、`checkpoint` 和 `expected_checkpoint_revision` 的 `author`。分頁完成以套用後的 `pending` 與 `blocked` 都為空為準。
 
 ## 壓縮後恢復
 

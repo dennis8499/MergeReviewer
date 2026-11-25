@@ -31,6 +31,11 @@
     "scope_notes": true,
     "phase_metrics": true,
     "capability_manifest": true,
-    "readable_report": true
+    "readable_report": true,
+    "initial_evidence_resume": true,
+    "manifest_write_recovery": true,
+    "publication_readiness": true,
+    "hunk_initial_reads": true,
+    "paging_apply": true
   }
 }

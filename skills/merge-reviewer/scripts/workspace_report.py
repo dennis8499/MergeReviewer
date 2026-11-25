@@ -14,9 +14,9 @@ import time
 import merge_parent_coverage
 import contract_boundary
 import report_publication
-from review_validation import (comparison_left_sources, contract_has_impact_anchor,
+from review_validation import (OWNERS, comparison_left_sources, contract_has_impact_anchor,
                                coverage_impact_errors, coverage_reason, completion_preview,
-                               evidence_within_involved_repos, finding_evidence_errors,
+                               evidence_within_involved_repos, finding_evidence_errors, pending_confirmation_errors,
                                line_interval_valid, repo_disposition_error)
 
 from review_workspace import (CONTEXT, RESULT, FixedSourceCache, FixedSearchCache, ancestor_noop,
@@ -27,7 +27,6 @@ from review_workspace import (CONTEXT, RESULT, FixedSourceCache, FixedSearchCach
 PRIORITIES = ("P0", "P1", "P2", "P3")
 ENGINEERING_FIELDS = ("operation_scenario", "technical_trigger", "technical_explanation", "impact_scope", "engineering_fix")
 REPORT_LAYOUT = "engineering-review/v1"
-OWNERS = {"開發", "維運設定", "QA"}
 SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 VALIDATION_PROGRESS = contextvars.ContextVar("merge_review_validation_progress", default=None)
 
@@ -515,7 +514,8 @@ def _validate(draft, manifest, context, api):
             if workspace_file is not None:
                 require(hashlib.sha256(workspace_file.read_bytes()).hexdigest() == manifest.get("workspace_file_sha256"),
                         "declared workspace folders changed after capture")
-            current = set(api.discover_repositories(Path(manifest["workspace"]), workspace_file))
+            current = set(api.discover_repositories(Path(manifest["workspace"]), workspace_file,
+                                                    skip_wiki_staging=False))
             captured = {Path(repo["path"]).resolve() for repo in repos.values()}
         require(current == captured, "declared Repo inventory changed after capture; review again")
     except (OSError, ValueError, api.ReviewContextError) as exc:
@@ -688,26 +688,11 @@ def _validate(draft, manifest, context, api):
         dispositions[repo_id] = row
     draft_require(set(dispositions) == set(repos), "every candidate Repo needs an explicit disposition")
 
-    pending_fingerprints = set()
-    for index, item in enumerate(draft["pending_confirmations"], 1):
-        draft_require(isinstance(item, dict) and item.get("id") == f"Q-{index:03}",
-                "pending confirmation IDs must be sequential Q-001")
-        draft_require(set(item) <= {"id", "title", "reason", "missing_evidence", "verification", "owner", "related_changes", "evidence"},
-                "unknown pending confirmation field; human confirmation is recorded only in the report")
-        for field in ("title", "reason", "missing_evidence", "verification"):
-            draft_require(isinstance(item.get(field), str) and item[field].strip(), f"pending confirmation needs {field}")
-        draft_require(item.get("owner") in OWNERS, "pending confirmation needs a valid owner")
-        related = item.get("related_changes")
-        draft_require(isinstance(related, list) and related and all(isinstance(row, dict) and set(row) == {"repo", "source", "path"}
-                    and all(isinstance(row[field], str) and row[field] for field in ("repo", "source", "path"))
-                    and location(row) in expected for row in related),
-                "pending confirmation must identify captured selected changes")
-        draft_require(len({location(row) for row in related}) == len(related), "duplicate pending related change")
+    for path, message in pending_confirmation_errors(draft["pending_confirmations"], expected):
+        draft_require(False, f"{path}: {message}")
+    for item in draft["pending_confirmations"]:
         keys = evidence_list(item, required=False)
         draft_require(evidence_within_involved_repos(keys, involved), "pending evidence cannot expand excluded Repos")
-        fingerprint = tuple(item[field].strip() for field in ("title", "reason", "missing_evidence"))
-        draft_require(fingerprint not in pending_fingerprints, "duplicate pending confirmation")
-        pending_fingerprints.add(fingerprint)
 
     findings = []
     fingerprints, last_priority = set(), -1
@@ -770,6 +755,44 @@ def _validate(draft, manifest, context, api):
             "context_sha256": hashlib.sha256((context / "manifest.json").read_bytes()).hexdigest()}
 
 
+def report_summary(summary):
+    """Keep technical prose while the report header supplies the formal verdict."""
+    verdicts = {"需補做審查", "暫緩合併", "修正後再合併", "需人工確認", "可以合併"}
+    closing_verdict = re.compile(
+        r"(?:(?P<comma>[，,])|(?<=[。！？])|^)[ \t]*因此本次合併建議為[ \t]*"
+        r"(?P<verdict>[^。.!！？\s]+)[ \t]*(?P<period>[。.])?(?P<tail>[ \t]*(?:\r\n?|\n)?)\Z"
+    )
+    last_line_index = len(summary.rstrip().splitlines()) - 1
+    lines, fence = [], None
+    for index, line in enumerate(summary.splitlines(keepends=True)):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if marker:
+            candidate, remainder = marker.groups()
+            if fence is None:
+                fence = candidate
+            elif candidate.startswith(fence) and not remainder.strip():
+                fence = None
+        elif fence is None and not line.startswith(("    ", "\t")) and not line.lstrip().startswith(">"):
+            plain = line.strip().replace("**", "").rstrip("。.")
+            labelled = re.fullmatch(r"合併建議\s*[:：]\s*(.*)", plain)
+            if labelled and labelled[1] in verdicts:
+                continue
+            if plain in {"建議暫緩合併", "建議修正後再合併", "建議可以合併"}:
+                continue
+            line = re.sub(r"(^|[。！？][ \t]*)(建議修正並補上(?:相應驗證|回歸測試))後再合併(?=[。.]?\s*$)",
+                          r"\1\2", line)
+            if index == last_line_index:
+                ending = closing_verdict.search(line)
+                if ending and ending["verdict"] in verdicts:
+                    prefix = line[:ending.start()]
+                    if not prefix:
+                        continue
+                    period = (ending["period"] or "。") if ending["comma"] else ""
+                    line = prefix + period + ending["tail"]
+        lines.append(line)
+    return "".join(lines)
+
+
 def render(result, manifest):
     def mark(value):
         text = redact(value)
@@ -810,8 +833,9 @@ def render(result, manifest):
                       f"必要證據缺口 {len(result['limitations'])} 項；待人工確認 {result['pending_confirmation_count']} 項。",
                       f"- 適用版本：{mark(native['head_input'])} ({mark(seed['sources']['head']['ref'][:8])}) → "
                       f"{mark(native['base_input'])} ({mark(seed['sources']['base']['ref'][:8])})", ""])
-        if result.get("summary"):
-            lines.extend([result["summary"], ""])
+        summary = report_summary(result.get("summary", ""))
+        if summary.strip():
+            lines.extend([summary, ""])
         if result.get("next_steps"):
             first_step = result["next_steps"][0]
             lines.extend([f"下一步：{first_step['action']}（{first_step['owner']}）"

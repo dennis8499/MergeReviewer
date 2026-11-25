@@ -7,6 +7,7 @@ from pathlib import Path
 import review_runtime
 
 LIMIT = 24 * 1024
+TEXT_PAGE_CHARACTERS = 2048
 
 
 def view_continuation(context, artifact, pointer, offset, page_size=100, *, string_offset=None, scope="context"):
@@ -54,7 +55,7 @@ def artifact_view(context, artifact, pointer="", offset=0, page_size=100, string
         if size <= LIMIT // 4 and not start:
             return item, []
         if isinstance(item, str):
-            text = item[:2048]
+            text = item[:TEXT_PAGE_CHARACTERS]
             link = continuation(place, string_offset=len(text))
             return {"omitted": True, "characters": len(item), "preview": text, "continue": link}, [link]
         if isinstance(item, list):
@@ -103,7 +104,7 @@ def artifact_view(context, artifact, pointer="", offset=0, page_size=100, string
         if end < len(value):
             result["continue"] = continuation(pointer, end)
     elif isinstance(value, str):
-        text = value[string_offset:string_offset + 2048]
+        text = value[string_offset:string_offset + TEXT_PAGE_CHARACTERS]
         end = string_offset + len(text)
         result = {"artifact": artifact, "pointer": pointer, "scope": scope, "text": text,
                   "next_string_offset": end if end < len(value) else None, "view_complete": end >= len(value)}

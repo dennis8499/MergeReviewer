@@ -66,6 +66,76 @@ class ReadableReportTests(unittest.TestCase):
         self.assertEqual(1, text.count("- 本機路徑："))
         self.assertIn("| Repo | 角色 | 來源 | 完整 SHA |\n| --- | --- | --- | --- |", text)
 
+    def test_heading_uses_verified_verdict_without_losing_technical_summary_text(self):
+        result, manifest = readable_fixture()
+        result["summary"] = (
+            "**合併建議：可以合併**\n"
+            "固定程式顯示總額誤算。建議修正並補上相應驗證後再合併。\n"
+            "同鍵資料跨 PosKind/Type 是否可合併仍待人工核對。\n"
+            "建議修正並將同鍵資料分組後再合併。\n"
+            "> 合併建議：可以合併\n"
+            "```text\n合併建議：可以合併\n```"
+        )
+        original = result["summary"]
+        text = workspace_report.render(result, manifest)
+        self.assertIn("**合併建議：修正後再合併**", text)
+        self.assertNotIn("**合併建議：可以合併**", text)
+        self.assertIn("固定程式顯示總額誤算。建議修正並補上相應驗證。", text)
+        self.assertIn("同鍵資料跨 PosKind/Type 是否可合併仍待人工核對。", text)
+        self.assertIn("建議修正並將同鍵資料分組後再合併。", text)
+        self.assertIn("> 合併建議：可以合併", text)
+        self.assertIn("```text\n合併建議：可以合併\n```", text)
+        self.assertEqual(original, result["summary"])
+
+    def test_historical_summary_keeps_three_pending_items_and_uses_the_verified_verdict(self):
+        result, manifest = readable_fixture()
+        premises = ("Keeper 帳號範圍", "ClosingPrice 插入條件", "環境端點矩陣")
+        prefix = ("已完成固定快照的六檔覆蓋、必要呼叫鏈和 merge-preview 比對。"
+                  "沒有由目前固定證據可直接確認的缺陷；"
+                  "Keeper 帳號範圍、ClosingPrice 插入條件與環境端點矩陣三項前提仍待權責單位確認")
+        pending = [{"id": f"Q-{index:03}", "title": f"確認{premise}", "reason": f"缺少{premise}的固定證據。",
+                    "missing_evidence": f"{premise}的正式紀錄", "verification": "由權責單位核對。",
+                    "owner": "維運設定", "related_changes": [{"repo": "repo-000", "path": "app.py"}]}
+                   for index, premise in enumerate(premises, 1)]
+        gaps = [item["reason"] for item in pending]
+        result.update(summary=prefix + "，因此本次合併建議為需人工確認。", findings=[],
+                      priority_counts=dict.fromkeys(result["priority_counts"], 0), next_steps=[],
+                      limitations=gaps, pending_confirmations=pending)
+        preview = workspace_report.completion_preview(result, manifest, gaps, complete_gaps=True)
+        result.update(preview["expected_outcome"])
+        original = copy.deepcopy(result)
+
+        text = workspace_report.render(result, manifest)
+        self.assertEqual(1, text.count("**合併建議：需補做審查**"))
+        self.assertNotIn("因此本次合併建議為需人工確認", text)
+        self.assertIn(prefix + "。", text)
+        self.assertIn("必要證據缺口 3 項；待人工確認 3 項。", text)
+        for item in pending:
+            self.assertIn(f"### {item['id']}｜{item['title']}", text)
+            self.assertIn(item["reason"], text)
+        self.assertEqual(original, result)
+
+    def test_summary_filters_only_a_final_explicit_approved_verdict_clause(self):
+        lead = "確認資料列與欄位"
+        for verdict in ("需補做審查", "暫緩合併", "修正後再合併", "需人工確認", "可以合併"):
+            with self.subTest(verdict=verdict):
+                closing = f"因此本次合併建議為{verdict}。"
+                self.assertEqual(lead + "。\r\n\r\n",
+                                 workspace_report.report_summary(f"{lead}，{closing}\r\n\r\n"))
+                self.assertEqual(lead + "。\n", workspace_report.report_summary(f"{lead}。\n{closing}"))
+                self.assertEqual(lead + "。", workspace_report.report_summary(f"{lead}。{closing}"))
+                self.assertEqual(lead + "。",
+                                 workspace_report.report_summary(f"{lead}，{closing.rstrip('。')}"))
+        quoted_sentence = f"{lead}，因此本次合併建議為需人工確認。"
+        for name, text in (("blockquote", "> " + quoted_sentence),
+                           ("code_fence", "```text\n" + quoted_sentence + "\n```"),
+                           ("indented_code", "    " + quoted_sentence),
+                           ("inline_quote", "引用「" + quoted_sentence + "」"),
+                           ("nonfinal", quoted_sentence + "\n仍須核對外部契約。"),
+                           ("technical_condition", quoted_sentence + "實際須採用本機快照。")):
+            with self.subTest(case=name):
+                self.assertEqual(text, workspace_report.report_summary(text))
+
     def test_primary_excerpts_are_open_secondary_evidence_collapses_and_all_facts_survive(self):
         result, manifest = readable_fixture()
         original = copy.deepcopy(result)

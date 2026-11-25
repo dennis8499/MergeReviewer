@@ -16,7 +16,7 @@ _DEFERRED = ContextVar("review_deferred_manifest", default=None)
 
 
 @contextmanager
-def batch_manifest(context, manifest):
+def batch_manifest(context, manifest, *, commit=None):
     """One generation commit for a new ordered batch, including a valid prefix."""
     state = {"context": str(Path(context).resolve()), "dirty": False}
     token = _DEFERRED.set(state)
@@ -25,11 +25,11 @@ def batch_manifest(context, manifest):
     finally:
         _DEFERRED.reset(token)
         if state["dirty"]:
-            save_manifest(context, manifest)
+            (commit or save_manifest)(context, manifest)
 
 
 @contextmanager
-def writer(context, timeout=180.0):
+def writer(context, timeout=180.0, *, allow_pending=False):
     context = Path(context).resolve()
     key = str(context)
     if key in _WRITERS.get():
@@ -37,7 +37,8 @@ def writer(context, timeout=180.0):
         return
     marker = context / ".merge-reviewer-owned.json"
     ownership = json.loads(marker.read_text(encoding="utf-8")) if marker.is_file() else {}
-    if isinstance(ownership, dict) and ownership.get("schema") == "merge-reviewer-session/v2":
+    managed = isinstance(ownership, dict) and ownership.get("schema") == "merge-reviewer-session/v2"
+    if managed:
         import review_coordinator
         import review_session
         review_session.validate_session(context)
@@ -47,13 +48,18 @@ def writer(context, timeout=180.0):
         lease = DirectoryLease(context, name="manifest-writer.lock", kind="manifest", timeout=timeout).acquire()
     token = _WRITERS.set(_WRITERS.get() | {key})
     try:
+        if managed and not allow_pending:
+            import review_manifest_recovery as recovery
+
+            if recovery.read_pending(context) is not None:
+                raise recovery.Retryable("A manifest commit is pending for this review request.")
         yield
     finally:
         _WRITERS.reset(token)
         lease.release()
 
 
-def save_manifest(context, manifest):
+def save_manifest(context, manifest, *, replace=None):
     context = Path(context).resolve()
     deferred = _DEFERRED.get()
     if deferred and deferred["context"] == str(context):
@@ -66,16 +72,28 @@ def save_manifest(context, manifest):
         expected = manifest.get("generation", 0)
         if type(expected) is not int or expected < 0:
             raise ValueError("Invalid manifest generation")
-        actual = json.loads(target.read_text(encoding="utf-8-sig")).get("generation", 0) if target.exists() else 0
+        exists = target.exists()
+        old = target.read_bytes() if exists else b""
+        actual = json.loads(old.decode("utf-8-sig")).get("generation", 0) if exists else 0
         if actual != expected:
             raise ValueError("Manifest generation changed; reload before writing")
         updated = {**manifest, "generation": expected + 1}
         temporary = context / (".manifest-" + uuid.uuid4().hex + ".json")
         try:
-            temporary.write_text(json.dumps(updated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            os.replace(temporary, target)
+            with temporary.open("x", encoding="utf-8") as stream:
+                json.dump(updated, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+            if replace is None:
+                os.replace(temporary, target)
+            else:
+                replace(temporary, target, {
+                    "sha256": hashlib.sha256(old).hexdigest(), "generation": expected,
+                }, {
+                    "sha256": hashlib.sha256(temporary.read_bytes()).hexdigest(), "generation": expected + 1,
+                })
         finally:
-            temporary.unlink(missing_ok=True)
+            if replace is None:
+                temporary.unlink(missing_ok=True)
         manifest["generation"] = expected + 1
 
 

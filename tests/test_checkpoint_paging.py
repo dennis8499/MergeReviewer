@@ -145,6 +145,30 @@ class PagingCheckpointTests(unittest.TestCase):
 
 
 class PagingFlowIntegrationTests(ReviewFixture):
+    def test_empty_draft_can_save_navigation_without_rewriting_or_marking_first_draft(self):
+        self.commit()
+        args = flow.parser().parse_args(["start", "--workspace", str(self.root), "--project", str(self.repo),
+                "--base", "main", "--head", "feature", "--runtime-root", str(self.root / "runtime"),
+                "--draft-format", "compact"])
+        started = flow.start(args)
+        root, identifier, context = Path(started["runtime_root"]), started["request_id"], Path(started["context_dir"])
+        draft = context / "draft.json"
+        original = draft.read_bytes(), draft.stat().st_mtime_ns
+        operation = {"id": "navigation", "op": "author", "updates": {},
+                     "expected_draft_sha256": coordination.file_digest(draft),
+                     "expected_checkpoint_revision": 0, "checkpoint": {"next_action": "Read written evidence."}}
+        result = flow.step(root, identifier, [operation])
+        self.assertTrue(result["complete"], result)
+        self.assertFalse(result["operations"][0]["result"]["draft_changed"])
+        self.assertEqual(original, (draft.read_bytes(), draft.stat().st_mtime_ns))
+        self.assertIsNone(flow.status(root, identifier).get("first_draft_at"))
+        summary = flow.status(root, identifier, summary=True)
+        self.assertEqual("checkpoint", summary["resume_from"])
+        self.assertEqual(1, summary["checkpoint_revision"])
+        checked, code = flow.check(root, identifier)
+        self.assertEqual(3, code)
+        self.assertIn("/summary", {row["pointer"] for row in checked["errors"]})
+
     def test_cached_author_replay_preserves_latest_checkpoint_and_paging_artifact(self):
         self.commit()
         args = flow.parser().parse_args(["start", "--workspace", str(self.root), "--project", str(self.repo),

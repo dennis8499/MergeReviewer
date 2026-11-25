@@ -23,11 +23,11 @@ metadata:
 
 ## 每輪閱讀與保存
 
-1. 用固定索引選下一條功能鏈，合併該輪獨立讀取與搜尋；首次 step 沿用 `initial_reads_file`。
+1. 用固定索引選下一條功能鏈，合併該輪獨立讀取與搜尋。首次 step 使用 `initial_hunk_reads_file`（如有），否則使用 `initial_reads_file`。
 2. 回應有 `paging_requests_file` 時，原樣交給 `view --requests-file`；它含逐檔 diff 索引與共用正文。否則將工具的 continuation 直接序列化並沿實際游標續讀。支援 `paging_state` 時依[分頁與恢復](references/paging-workflow.md)確認與保存。
 3. 必要內容及安全反例讀完後作語意判斷；核對變更前後、合法輸入或可達路徑、必要前提及替代解釋。證據保存、頁面返回與「已審查」分開確認。
 4. 每條鏈完成即原子保存判斷、引用、待讀狀態與下一個操作。成功取得並解析頁面後才保存其確認，遺失回應可沿原狀態重送。
-5. 恢復先讀 `status --summary`，由完整 checkpoint 引用接續；收到完整發布收據後核對交付，依 `cleanup_pending` 決定是否仍需清理。
+5. 恢復先讀 `status --summary`，依 checkpoint、`initial_evidence` 或 `next_action` 接續。遇到 `retry-step` 時依[操作範例](references/session-workflow.md)提交原批次。發布後核對收據與 `cleanup_pending`。
 
 ## 1. start：固定證據與草稿
 
@@ -51,10 +51,10 @@ python "<skill-dir>/scripts/review_session.py" start --workspace "<declared-root
 ## 2. step：閱讀、判斷及必要追查
 
 ~~~powershell
-python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" --request-id "<id>" --requests-file "<initial_reads_file>"
+python "<skill-dir>/scripts/review_session.py" step --runtime-root "<runtime>" --request-id "<id>" --requests-file "<initial-read-file>"
 ~~~
 
-首輪將 start 產生的 `initial_reads_file` 原樣交給 step，先讀取已擷取 diff、適用的 `AGENTS.md`、改動檔及必要 base／head／merge-preview／parent 內容；逐項讀完再決定動態呼叫鏈追查。必要 parent 只需核對與有效變更路徑相交的差異及最終內容，不要逐頁重讀無關 parent patch。後續每輪合併固定讀取、契約註冊及搜尋；各操作給唯一 ID，先登錄父契約，再登錄子契約及搜尋。
+首輪將啟動指南的讀取檔原樣交給 step。讀取固定差異、適用的 `AGENTS.md` 與各版本的內容。只有區段證據時，依呼叫鏈補讀完整語意所需的內容。必要 parent 核對與有效變更路徑相交的差異及最終內容。後續每輪合併固定讀取、契約註冊及搜尋，各操作給唯一 ID，先登錄父契約。
 
 遇到可能改變相依套件或版本的宣告、來源設定或鎖定檔差異時，先讀[套件版本查核](references/dependency-review.md)。將每項適用的開源套件異動查證完畢，或把確實受阻的項目寫入 `pending_confirmations`，再把對應路徑標記為 `reviewed`。
 
@@ -79,7 +79,7 @@ python "<skill-dir>/scripts/review_session.py" finish --runtime-root "<runtime>"
 
 可沿用 v3 草稿或改用 `merge-reviewer-authoring/v1`：每項工程事實寫一次，證據引用實際 read 操作 ID 與行段；helper 補入固定來源及重複欄位，不代填判斷。先用 check 查看欄位、搜尋與邊界缺口；check 不執行 Git，`evidence_verified=false`。
 
-能力列出 `completion_preview` 時，check 的 `expected_outcome` 預覽發布結論，`blocking_gaps` 列出阻擋原因。先完成可補查項及修正草稿。若剩餘項目已記錄為必要缺口或待人工確認，直接用 `finish` 驗證固定證據並發布對應狀態的報告。
+用 check 的 `expected_outcome` 與 `blocking_gaps` 判斷補查範圍。若有 `publication_readiness=ready`，可進入 `finish`，合法待確認項仍會標在收據。若確定無法補足必要證據，使用 `finish` 發布如實標示未完成的報告。
 
 finish 完整驗證固定證據並在所選 Repo 的 `review-reports/` 發布五區塊報告，保留問題、敏感內容處理及展開的人工核對區；不發布至 GitLab。
 

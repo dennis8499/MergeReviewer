@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import copy
+from unittest import mock
 
-from tests.fixtures import ReviewFixture, workspace_report
+from tests.fixtures import ReviewFixture, api, workspace_report
+import review_diagnostics
 
 
 class PendingConfirmationTests(ReviewFixture):
@@ -109,3 +111,44 @@ class PendingConfirmationTests(ReviewFixture):
         self.assertEqual(item["evidence"], result["pending_confirmations"][0]["evidence"])
         self.assertIn(item["evidence"][0]["ref"], workspace_report.render(result, manifest))
         self.assertFalse(result["review_complete"])
+
+    def test_pending_diagnostics_identify_invalid_fields_without_git(self):
+        context, manifest = self.capture()
+        draft = self.draft(context, manifest)
+        draft["report_layout"] = "engineering-review/v1"
+        item = self.pending(draft)
+        cases = [
+            ("wrong_prefix", [{**item, "id": "PC-001"}], "/pending_confirmations/0/id", "expected Q-001"),
+            ("missing_title", [{**item, "title": ""}], "/pending_confirmations/0/title", "needs title"),
+            ("invalid_owner", [{**item, "owner": []}], "/pending_confirmations/0/owner", "valid owner"),
+            ("unbound_change", [{**item, "related_changes": [{"repo": "missing", "source": "head", "path": "app.py"}]}],
+             "/pending_confirmations/0/related_changes/0", "captured selected changes"),
+            ("repeated_change", [{**item, "related_changes": item["related_changes"] * 2}],
+             "/pending_confirmations/0/related_changes/1", "duplicate pending related change"),
+            ("repeated_question", [item, {**item, "id": "Q-002"}], "/pending_confirmations/1", "duplicate pending confirmation"),
+            ("manual_edit_fields", [{**item, "confirmed": True}], "/pending_confirmations/0", "unknown pending confirmation field"),
+        ]
+        with mock.patch.object(api, "run_git", side_effect=AssertionError("diagnostics ran Git")):
+            for name, pending, pointer, message in cases:
+                with self.subTest(case=name):
+                    diagnosed = review_diagnostics.inspect({**draft, "pending_confirmations": pending}, manifest)
+                    error = next(row for row in diagnosed["errors"] if row["pointer"] == pointer)
+                    self.assertIn(message, error["message"])
+                    self.assertEqual("repair-draft", diagnosed["publication_readiness"])
+                    self.assertEqual(0, diagnosed["git_commands"])
+
+    def test_valid_pending_allows_publication_while_coverage_gaps_keep_review_incomplete(self):
+        context, manifest = self.capture()
+        draft = self.draft(context, manifest)
+        draft["report_layout"] = "engineering-review/v1"
+        draft["pending_confirmations"] = [self.pending(draft)]
+        pending = review_diagnostics.inspect(draft, manifest)
+        self.assertEqual([], pending["errors"])
+        self.assertEqual("ready", pending["publication_readiness"])
+        self.assertFalse(pending["ready_for_finish"])
+        self.assertEqual("待人工確認", pending["expected_outcome"]["review_status"])
+        self.assertFalse(pending["expected_outcome"]["review_complete"])
+        draft["coverage"][0].update(status="not-reviewed", reason="必要程式路徑仍待核對。", evidence=[])
+        gap = review_diagnostics.inspect(draft, manifest)
+        self.assertEqual("incomplete", gap["publication_readiness"])
+        self.assertEqual("審查未完成", gap["expected_outcome"]["review_status"])

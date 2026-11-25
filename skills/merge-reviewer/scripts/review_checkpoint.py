@@ -1,6 +1,7 @@
 """Durable navigation checkpoints; returned pages never imply semantic coverage."""
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import review_coordinator as coordination
@@ -38,8 +39,7 @@ def revision(value):
     return value.get("checkpoint_revision", 0) if value else 0
 
 
-def prepare(context, manifest, checkpoint, current, *, draft_sha256, at):
-    """Store immutable paging bytes during the author transaction, never in view."""
+def _from_operation(context, manifest, checkpoint, current, *, draft_sha256, at, paging_artifact):
     result = dict(checkpoint)
     paging = result.pop("paging", None)
     if paging is not None:
@@ -47,7 +47,7 @@ def prepare(context, manifest, checkpoint, current, *, draft_sha256, at):
         review_paging.validate_state(paging, root=Path(context).parent.parent,
                                      identifier=Path(context).name,
                                      source_identity=source_identity(manifest))
-        artifact = review_runtime.store_view(context, paging)
+        artifact = paging_artifact(context, paging)
         result["paging_ref"] = {
             "command": "review_session.py view", "runtime_root": str(Path(context).parent.parent),
             "request_id": Path(context).name, "artifact_scope": "context",
@@ -65,6 +65,26 @@ def prepare(context, manifest, checkpoint, current, *, draft_sha256, at):
                   checkpoint_revision=revision(current) + 1, draft_sha256=draft_sha256,
                   source_identity=source_identity(manifest), at=at)
     return result
+
+
+def prepare(context, manifest, checkpoint, current, *, draft_sha256, at):
+    """Store immutable paging bytes during the author transaction, never in view."""
+    return _from_operation(context, manifest, checkpoint, current, draft_sha256=draft_sha256, at=at,
+                           paging_artifact=review_runtime.store_view)
+
+
+def prepared_matches(context, manifest, checkpoint, current, *, draft_sha256, at, saved):
+    """Verify a saved journal checkpoint without writing another paging artifact."""
+    def existing_paging(context, value):
+        artifact = hashlib.sha256(review_runtime.canonical(value)).hexdigest()
+        review_runtime.load_view(context, artifact)
+        return artifact
+
+    if not isinstance(at, str) or not at or not isinstance(saved, dict):
+        return False
+    expected = _from_operation(context, manifest, checkpoint, current, draft_sha256=draft_sha256, at=at,
+                               paging_artifact=existing_paging)
+    return coordination.digest(saved) == coordination.digest(expected)
 
 
 def restore(context, journal, current):

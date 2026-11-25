@@ -69,10 +69,11 @@ def save(context: Path, manifest: dict):
     review_runtime.save_manifest(context, manifest)
 
 
-def load(context: Path) -> dict:
+def load(context: Path, *, with_digest=False) -> dict | tuple[dict, str]:
     from review_session import validate_session
     context = validate_session(context)
-    manifest = json.loads(safe_path(context, "manifest.json").read_text(encoding="utf-8"))
+    raw = safe_path(context, "manifest.json").read_bytes()
+    manifest = json.loads(raw.decode("utf-8"))
     require(manifest.get("schema") == CONTEXT, "not a portable workspace context")
     require("coverage_policy" not in manifest or manifest["coverage_policy"] == COVERAGE_POLICY,
             "unsupported coverage policy")
@@ -81,7 +82,7 @@ def load(context: Path) -> dict:
         require(manifest["snapshot_policy"] == SNAPSHOT_POLICY, "unsupported snapshot policy")
         require(all(repo.get("snapshot") is not None for repo in manifest["repositories"] if repo["state"] != "error"),
                 "frozen context needs an owned snapshot for every captured Repo")
-    return manifest
+    return (manifest, hashlib.sha256(raw).hexdigest()) if with_digest else manifest
 
 
 def repository(manifest: dict, repo_id: str) -> dict:
@@ -798,7 +799,7 @@ def build(args, api) -> dict:
                 "workspace identity changed during repository discovery")
     else:
         roots = api.workspace_roots(root, workspace_file)
-        paths = api.discover_repositories(root, workspace_file, roots=roots)
+        paths = api.discover_repositories(root, workspace_file, roots=roots, project=args.project)
         seed, _ = api.choose_repository(root, workspace_file, args.project, repositories=paths)
         require(not workspace_file or hashlib.sha256(workspace_file.read_bytes()).hexdigest() == workspace_digest,
                 "workspace file changed during repository discovery")
@@ -1277,10 +1278,23 @@ def read_bounds(line_start, line_end):
             "line range must satisfy 1 <= line_start <= line_end")
 
 
+def hunk_bounds(hunk):
+    require(isinstance(hunk, dict) and set(hunk) == {"line_start", "line_end"}
+            and type(hunk["line_start"]) is int and type(hunk["line_end"]) is int,
+            "hunk needs integer line_start and line_end")
+    start, end = hunk["line_start"], hunk["line_end"]
+    read_bounds(start, end)
+    return start, end
+
+
 def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_name=None, *, cache=None,
-         line_start=None, line_end=None, around_line=None, context_lines=20) -> dict:
+         line_start=None, line_end=None, around_line=None, context_lines=20, hunk=None) -> dict:
     require(isinstance(repo_id, str) and bool(repo_id) and path, "read needs one --repo and --path")
     read_bounds(line_start, line_end)
+    if hunk is not None:
+        require(line_start is None and around_line is None and context_lines == 20,
+                "hunk cannot accompany explicit read bounds")
+        hunk_start, hunk_end = hunk_bounds(hunk)
     repo = repository(manifest, repo_id)
     name = source_name or repo["review_source"]
     content = cache.read(repo, name, path) if cache is not None else fixed_bytes(context, repo, name, path, api)
@@ -1291,10 +1305,23 @@ def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_nam
               "encoding": encoding, "lossy": lossy, "content_available": lines is not None}
     if lines is None:
         result.update(binary=True, lines=[], total_lines=None)
+        if hunk is not None:
+            result["hunk_fallback"] = "binary-source"
         return result
     visible, redacted = review_content.redact_lines(lines, path)
     result["sensitive_values_redacted"] = redacted
     result["binary"] = False
+    if hunk is not None:
+        from review_hunks import CONTEXT_LINES
+
+        git_lines = content.count(b"\n") + int(bool(content) and not content.endswith(b"\n"))
+        if lossy or encoding == "utf-16" or git_lines != len(lines):
+            result["hunk_fallback"] = "source-line-numbering"
+        elif hunk_end > len(lines):
+            result["hunk_fallback"] = "hunk-outside-source"
+        else:
+            line_start = max(1, hunk_start - CONTEXT_LINES)
+            line_end = min(len(lines), hunk_end + CONTEXT_LINES)
     if around_line is not None:
         require(line_start is None and line_end is None, "around_line cannot accompany exact bounds")
         require(type(around_line) is int and around_line >= 1 and type(context_lines) is int
@@ -1314,9 +1341,13 @@ def read(context: Path, manifest: dict, repo_id: str, path: str, api, source_nam
 
 def validate_read_request(request):
     require(isinstance(request, dict), "batch request must be an object")
-    require(set(request) <= {"repo", "source", "path", "line_start", "line_end", "around_line", "context_lines"},
+    require(set(request) <= {"repo", "source", "path", "line_start", "line_end", "around_line", "context_lines", "hunk"},
             "unknown batch-read request argument")
     require(request.get("source") is None or isinstance(request["source"], str), "source must be text")
+    if "hunk" in request:
+        require(not ({"line_start", "line_end", "around_line", "context_lines"} & request.keys()),
+                "hunk cannot accompany explicit read bounds")
+        hunk_bounds(request["hunk"])
     require(("line_start" in request) == ("line_end" in request),
             "line_start and line_end must be supplied together as integers")
     if "line_start" in request:
@@ -1346,7 +1377,8 @@ def batch_read(context: Path, manifest: dict, requests: list[dict], api) -> dict
         results.append(read(context, manifest, request.get("repo"), request.get("path"), api,
                             request.get("source"), cache=cache,
                             line_start=request.get("line_start"), line_end=request.get("line_end"),
-                            around_line=request.get("around_line"), context_lines=request.get("context_lines", 20)))
+                            around_line=request.get("around_line"), context_lines=request.get("context_lines", 20),
+                            hunk=request.get("hunk")))
     return {"reads": results}
 
 
@@ -1384,7 +1416,7 @@ def batch_search(context: Path, manifest: dict, requests: list[dict], api) -> di
     return {"searches": results}
 
 
-def ordered_step(context, manifest, operations, api, *, on_progress=None):
+def ordered_step(context, manifest, operations, api, *, on_progress=None, commit=None):
     """Allowlisted composition of existing handlers, with idempotent checkpoints."""
     if not isinstance(operations, list) or not operations:
         return {"operations": [], "complete": False, "next_index": 0,
@@ -1440,7 +1472,13 @@ def ordered_step(context, manifest, operations, api, *, on_progress=None):
             on_progress("prefetch-reads-complete", 0, len(operations), None)
     except (ValueError, KeyError, TypeError, OSError, api.ReviewContextError):
         content = FixedSourceCache(context, api)
-    with review_runtime.batch_manifest(context, manifest):
+    batch_result = None
+
+    def commit_result(location, pending_manifest):
+        if batch_result is not None:
+            commit(location, pending_manifest, batch_result)
+
+    with review_runtime.batch_manifest(context, manifest, commit=commit_result if commit is not None else None):
         for index, operation in enumerate(operations):
             contracts_before, searches_before = len(manifest["changed_contracts"]), len(manifest["searches"])
             new_operation, identifier = False, None
@@ -1461,9 +1499,9 @@ def ordered_step(context, manifest, operations, api, *, on_progress=None):
                     legacy = hashlib.sha256(review_runtime.canonical(operation)).hexdigest()
                     require(checkpoint["fingerprint"] in (fingerprint, legacy), "operation id already has different input")
                     result = review_runtime.load_view(context, checkpoint["artifact"])
-                    results.append({"id": identifier, "reused": True, "result": result})
                     if on_progress:
                         on_progress("operation-complete", index + 1, len(operations), operation)
+                    results.append({"id": identifier, "reused": True, "result": result})
                     continue
                 new_operation = True
                 kind = operation.get("op")
@@ -1474,7 +1512,8 @@ def ordered_step(context, manifest, operations, api, *, on_progress=None):
                     result = read(context, manifest, args.get("repo"), args.get("path"), api,
                                   args.get("source"), cache=content,
                                   line_start=args.get("line_start"), line_end=args.get("line_end"),
-                                  around_line=args.get("around_line"), context_lines=args.get("context_lines", 20))
+                                   around_line=args.get("around_line"), context_lines=args.get("context_lines", 20),
+                                   hunk=args.get("hunk"))
                 elif kind == "register-contract":
                     require(set(args) == {"contract"}, "register-contract needs contract")
                     result = register_contract(context, manifest, args["contract"], api, cache=content)
@@ -1521,9 +1560,9 @@ def ordered_step(context, manifest, operations, api, *, on_progress=None):
                 artifact = review_runtime.store_view(context, result)
                 manifest["operations"][identifier] = {"fingerprint": fingerprint, "artifact": artifact, "op": kind}
                 save(context, manifest)
-                results.append({"id": identifier, "artifact": artifact, "result": result})
                 if on_progress:
                     on_progress("operation-complete", index + 1, len(operations), operation)
+                results.append({"id": identifier, "artifact": artifact, "result": result})
             except (ValueError, KeyError, TypeError, OSError, api.ReviewContextError) as exc:
                 if new_operation:
                     del manifest["changed_contracts"][contracts_before:]
@@ -1532,14 +1571,16 @@ def ordered_step(context, manifest, operations, api, *, on_progress=None):
                 message = str(exc)
                 line_overflow = re.search(r"line_end exceeds fixed file line count \((\d+)\)", message)
                 pointer = f"/operations/{index}/line_end" if line_overflow else f"/operations/{index}"
-                return {"operations": results, "complete": False, "next_index": index, "error": message,
+                batch_result = {"operations": results, "complete": False, "next_index": index, "error": message,
                         "hint": (f"line_end must be at most {line_overflow.group(1)}; use around_line for a bounded excerpt."
                                  if line_overflow else "Correct this operation and retry from next_index."),
                         "operation_id": identifier, "pointer": pointer,
                         "code": "evidence.line-range-out-of-bounds" if line_overflow else "evidence.operation-failed",
                         "terminal": False,
-                        "recoverable": True, "context_retained": True}
-    return {"operations": results, "complete": True, "next_index": len(operations)}
+                         "recoverable": True, "context_retained": True}
+                return batch_result
+        batch_result = {"operations": results, "complete": True, "next_index": len(operations)}
+    return batch_result
 
 
 def main(argv=None):

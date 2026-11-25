@@ -27,6 +27,8 @@ python "<skill-dir>/scripts/review_session.py" status --runtime-root "C:/team/.r
 
 可自行產生 32 位小寫十六進位 request ID，透過 `start --request-id` 在輸出遺失後重送。相同 ID／輸入回傳既有狀態，不重新擷取；改變輸入須新 ID。`--refresh` 忽略已完成快取及失敗冷卻，仍可加入開始等待後完成的同需求同步。
 
+啟動回應遺失時，用 `status --summary` 查看 `resume_from`。若為 `initial-evidence`，`initial_evidence` 提供首輪讀取檔與 `start_ref` 的唯讀指南入口。若為 `checkpoint`，沿目前 revision 與 `paging_ref` 接續。首輪可優先選 `initial_hunk_reads_file`，有關聯的函式與呼叫端再以固定來源補讀。checkpoint 遺失或無法讀取時，沿同一 request 的全文讀取檔補讀證據。若 author 回報 checkpoint 需要修復，保留草稿與 checkpoint 並依診斷處理。
+
 成功 refresh 後，新請求優先採最新同步結果。已知 SHA 改變或同需求同步失敗的舊收據不再重用；冷卻結束會重新同步。這些失效標記不改動已固定的審查。
 
 單 Repo 根目錄加 `--runtime-root "C:/review-runtime/team"`；也可設定 `MERGE_REVIEW_RUNTIME_DIR`。必須可寫且位於所有宣告 Repo 外，拒絕 symlink／junction 或未標記的非空目錄。Git 共用網路 runtime 沿用 `GITLAB_WORKSPACE_RUNTIME_DIR`，兩個 runtime 用途不同，start 都會預檢。
@@ -62,6 +64,10 @@ Repo 掃描會略過 `.review-runtime`、`.gitlab-workspace/runtime` 與上述�
 操作為 read／register-contract／search／instructions／inventory／patch／view，以及支援 `atomic_authoring` 時的 [author](authoring.md)。inventory 可限 repo／source；patch 用 start 列出的 path，可選精確 line_start／line_end。read 預設 Repo 主來源；around_line 大於檔尾時縮到尾端，context_lines 為非負整數；精確範圍須成對且不得越界。
 
 結果 `operations[]` 按順序帶 id／artifact／result。成功一次保存 manifest；失敗保存成功前綴並回傳 `complete=false／next_index／error`。修正失敗項後可重送整份陣列；成功 ID 的內容須保持一致，重用 artifact 而不新增契約或搜尋。新操作給新 ID。
+
+收到 `next_action=retry-step` 時，先恢復 runtime 的存取，再對同一 request 執行原生 `step --runtime-root <runtime> --request-id <id>`。工具從已保存的批次恢復。若提供 `--requests-file`，內容須與原批次相同。用回傳的 `next_index` 處理後續操作。若狀態是 `inspect-interrupted-step`，保留當前 context 供檢查。
+
+收到 `next_action=retry-step-with-requests-file` 時，恢復 runtime 的存取後，對同一 request 執行 `step --runtime-root <runtime> --request-id <id> --requests-file <原批次 JSON>`。使用本次中斷時送出的批次。恢復標記可讀且驗證成功時，以標記中保存的批次及狀態回傳的最新指引為準。
 
 job `progress` 使用 `completed/total`、`operation_id`、`operation` 與 `at`；每項完成及整批出口持久更新。完成後清除 active operation，整批成功為 N/N；部分失敗是已完成前綴／原批總數。重用 operation 也會結算完成；語意覆蓋仍只看草稿，不能以操作完成數代替。
 
@@ -102,11 +108,15 @@ python "<skill-dir>/scripts/review_session.py" view --runtime-root "<runtime>" -
 
 終止後 context 已清理、且 status 或 finish 結果仍超過上限時，摘要標示 `response_scope=runtime`，完整回應保存於該 request 的 runtime；用 `review_session.py view --artifact-scope runtime` 續讀，長字串依 `string_offset` 接續。此續讀只讀本機回應，不重新驗證或連線；終止紀錄到期後隨之清理。
 
+收據已驗證的完整 `status` 或 `finish` 回應超過上限時，`MergeReviewEvidenceSummary/v1` 頂層保留 `next_action`。預覽縮為欄位清單時仍保留 `next_action`、`artifact` 與 `continue`。用 `continue.artifact_scope` 指定的範圍續讀完整回應。若極長的路徑使摘要省略 `continue.runtime_root`，續讀時沿用原指令的 runtime 設定。這些發布回應的 24 KiB 上限計入 stdout 上的 UTF-8 JSON 及行尾換行。
+
 24 KiB 限制傳輸，不取代語意覆蓋。必要命中及指示讀完才能判斷；用 artifact 翻頁。
 
 ## 完成、取消與錯誤
 
 check 增加 `expected_outcome`（`review_complete/review_status/recommendation/pending_confirmation_count/extension_status`）及結構化 `blocking_gaps`。必要 limitations、固定擷取缺口及待確認會在發布前呈現；`scope_notes` 與 `tests_not_executed` 不阻擋完成。有 authoring errors 時 outcome 為 unknown，修正後重查。check 仍零 Git、`evidence_verified=false`；其 `remaining_counts`、`expected_outcome`、`blocking_gaps` 與 `last_check_at` 保存至 job，供工作台顯示最近一次檢查。正式 finish 另做完整固定證據驗證。
+
+`publication_readiness` 為 `ready` 時可以開始 finish 的完整驗證，也可能保有待確認項並沿用 check 的 exit 3。其他狀態為 `incomplete`（待補證據）、`repair-draft`（待修草稿）或 `unknown`（檢查尚未執行或已過期）。待確認 ID 從 `Q-001` 連號。
 
 agent 先補查所有可取得的必要證據，再判斷是否真正受阻。helper 保留發布誠實未完成報告的能力；來源無法取得時，保留已確認問題、具體缺口及下一步，不能把未讀完當成資料不可取得。
 
@@ -115,6 +125,12 @@ agent 先補查所有可取得的必要證據，再判斷是否真正受阻。he
 check 與 finish 共用 Repo 關聯及 finding 引用範圍判定；沒有 impact 證據的 peer 不得標為 related，finding／待確認的證據也不能擴張已排除 Repo。已知且綁定固定 blob 的行數也用於提前檢查引用上界；未知上界仍由 finish 從固定物件核對。compact 診斷一次列出獨立錯誤，pointer 指向確切 finding／evidence／欄位；`available_read_ids`、`available_line_ranges` 及總數協助修正引用。這些提示只引用已完成操作，不代填語意判斷。
 
 發布預檢與正式發布共用 sibling 暫存檔、完整寫入／讀回及原子提交；Windows 檔案繼承輸出目錄 ACL，既有報告不覆寫。完整驗證後若輸出遇到可恢復的權限、占用或容量錯誤，finish 回傳 exit 3、`phase=publication-repair`、`recoverable=true`、`context_retained=true`，保留原 request、草稿與固定 SHA。修復輸出後重試同一 ID 的 finish，仍完整驗證證據；需要放棄時 cancel。損毀來源與非輸出錯誤仍是終止錯誤。舊 review_report.py 的預設失敗清理行為保留。
+
+恢復標記暫時不可讀時，原生 `finish` 保留 context 並回傳 exit 3。job 已記錄 `retry-step-with-requests-file` 時，依指引使用原批次執行 `step`。其餘情況依 `next_action=finish`，待 runtime 恢復存取後以同一 request ID 重試。從 `validating` 回到 `reviewing` 時會保存復原動作。若無法保存狀態，先依 `next_action=finish` 重試。
+
+標記仍不可讀且 job 已保存發布重試指引時，`status` 與 `check` 都提示 `finish`。確認標記不存在後，`check` 恢復一般檢查，完整 `status` 與 `status --summary` 仍提示 `finish`，並提供有效的 checkpoint 或首輪證據。若狀態回傳 `repair-draft-and-check`，先按目前診斷修正草稿。
+
+恢復標記可讀且驗證成功時，依標記的指引續作。報告已通過收據驗證時，優先依發布狀態處理。直接以 `review_report.py` 發布受管理 v2 context 也會檢查恢復標記。標記暫時不可讀時，保留 context 並以 exit 3 提示 `retry-step-with-requests-file`。
 
 純 formatter 內部例外例外保存為 `failure_kind=render`、`state=failed/phase=terminal`、`context_retained=true`、`recoverable=false`，`next_action=inspect-render-error`；不建立 publication receipt，原工具身份及 SHA 保持不變。相同 request 的 finish 停止，不自動重試或換版本繼續發布。可用 status／唯讀 view 診斷，`cancel` 清理 retained owned context。保留期限從首次失敗起 24 小時，status 不延長；下一次 start 才惰性驗 ownership 並清理，清理失敗留診斷。已被舊版清除的 context 無法復原；已發布 receipt 與 outcome 不改寫。
 
@@ -132,9 +148,13 @@ python "<skill-dir>/scripts/review_session.py" finish --runtime-root "<runtime>"
 python "<skill-dir>/scripts/review_session.py" cancel --runtime-root "<runtime>" --request-id "<id>"
 ~~~
 
+取消後若 `status` 回傳 `state=cancelled`、`cleanup_pending=true` 與 `next_action=retry-cancel`，待檔案解除占用後，用原 runtime 和同一 request ID 重跑上面的 `cancel`。以 `cleanup_pending=false` 與 `next_action=stop` 確認清理完成。`status --summary` 也會回傳相同的下一步。
+
 發布先保存預定路徑、全文與固定正文 hash，以及同一次完整驗證產生的 `review_outcome`，再原子建立報告，保存完成紀錄後清理。摘要的 `schema=MergeReviewOutcome/v1`、`review_complete`、`review_status`、`recommendation`、`extension_status`、`pending_confirmation_count`、`gaps` 及 `remaining` 保留首次判斷；remaining 只含未完成的檔案、parent、impact、Repo、boundary 識別與理由，摘要套用敏感內容遮蔽，不保存原始來源片段。gaps 包含驗證後的 context／覆蓋／影響鏈／邊界缺口與待確認項。
 
 status 與重試 finish 確認報告存在且正文符合收據；發布後 status／check 從持久摘要回報 `review_complete`、`gaps`、`remaining`，不重新執行 Git 或完整驗證。`state=published`／`phase=complete` 表示發布流程完成，審查完整性另看 `review_outcome.review_complete`。發布後 check 的 `publication_complete=true`、`ready_for_finish=false`（已無待發布操作）、`evidence_verified=false`；已知審查完整時 exit 0，未完整或未知時 exit 3。舊 job 沒有摘要時回傳 `outcome_available=false`、`review_complete=null`、`review_status=unknown` 及說明缺口，不從 Markdown 猜出通過。
+
+報告通過收據驗證後，完整 `status` 和 `status --summary` 都提供 `next_action`。報告已寫入而 job 尚待完成，或 `cleanup_pending=true` 時，依 `next_action=finish` 用同一 request ID 完成發布紀錄或清理。已發布且已清理時，依 `next_action=open-report` 開啟報告。
 
 人工核對標記區內的編輯可保留，但不改寫首次語意摘要；區外修改或遺失不回報成功。清理失敗仍回傳已發布路徑及 `cleanup_pending=true`；沿同一 ID 重試只清理，保留相同審查摘要，不重做 Git 驗證或建立另一份報告。取消等待者不影響其他請求；仍有等待者時先完成共用同步再取消自己的擷取。已發布不可取消。終止摘要保留 24 小時，之後新 start 清除；報告歷史保留。
 

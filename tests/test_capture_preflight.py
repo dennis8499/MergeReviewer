@@ -1,11 +1,64 @@
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 from unittest import mock
 
 from tests.fixtures import ReviewFixture, api, workspace
 from tests.support import run_git as git, write_text
+import review_flow as flow
+
+
+class WikiStagingDiscoveryTests(ReviewFixture):
+    def test_preflight_and_capture_prune_denied_root_stage_without_skipping_other_paths(self):
+        self.commit()
+        peer = self.make_repo("peer")
+        stage = self.root / ".codebase-wiki-write.77_7dnu2"
+        ordinary = self.root / ".codebase-wiki-write.notes"
+        stage.mkdir()
+        ordinary.mkdir()
+        scanned = set()
+        real_scandir = os.scandir
+        inaccessible = {stage}
+
+        def checked_scan(path):
+            directory = Path(path)
+            scanned.add(directory)
+            if directory in inaccessible:
+                raise PermissionError(errno.EACCES, "Access denied", str(directory))
+            return real_scandir(path)
+
+        args = flow.parser().parse_args(["start", "--workspace", str(self.root), "--project", str(self.repo),
+                                        "--base", "main", "--head", "feature",
+                                        "--runtime-root", str(self.root / "runtime")])
+        with mock.patch.object(os, "scandir", side_effect=checked_scan):
+            preflight = flow.launch_preflight(args)
+            self.assertTrue(preflight["valid"], preflight)
+            self.assertEqual(0, preflight["writes"])
+            self.assertEqual(0, preflight["network_calls"])
+            _, manifest = self.capture()
+            self.assertEqual({str(self.repo), str(peer)}, {repo["path"] for repo in manifest["repositories"]})
+            self.assertNotIn(stage, scanned)
+            self.assertIn(ordinary, scanned)
+            inaccessible.add(ordinary)
+            failure = flow.launch_preflight(args)
+        self.assertFalse(failure["valid"])
+        self.assertIn(repr(str(ordinary)), failure["errors"][0]["message"])
+        self.assertEqual(0, failure["writes"])
+        self.assertEqual(0, failure["network_calls"])
+
+    def test_explicit_path_basename_and_scan_root_keep_their_repository_in_scope(self):
+        staged_repo = self.make_repo(".codebase-wiki-write.y4__8a0y")
+        parent = self.root / ".codebase-wiki-write.a32_49bx"
+        nested_repo = self.make_repo(str(parent / "nested"))
+        ordinary = self.make_repo("folder/.codebase-wiki-write.235_7ayy")
+        self.assertEqual({self.repo, ordinary}, set(api.discover_repositories(self.root, None)))
+        self.assertEqual(staged_repo, api.choose_repository(self.root, None, staged_repo.name.upper())[0])
+        self.assertEqual(nested_repo, api.choose_repository(self.root, None, str(nested_repo.relative_to(self.root)))[0])
+        self.assertIn(nested_repo, api.discover_repositories(self.root, None, roots=[self.root, parent]))
+        self.assertEqual({self.repo, ordinary, staged_repo, nested_repo},
+                         set(api.discover_repositories(self.root, None, skip_wiki_staging=False)))
 
 
 class CapturePreflightTests(ReviewFixture):

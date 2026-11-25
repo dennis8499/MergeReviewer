@@ -24,6 +24,7 @@ from review_views import artifact_view, view_continuation
 SCHEMA = "MergeReviewSession/v1"
 LIMIT = 24 * 1024
 TERMINAL = {"published", "failed", "cancelled"}
+PUBLISHABLE_STATES = {"ready", "reviewing", "validating"}
 
 
 class MeasuredFileLock:
@@ -149,7 +150,7 @@ def launch_preflight(args):
             roots = api.workspace_roots(declared, workspace_file)
             if any(not path.is_dir() for path in roots):
                 raise ValueError("Every declared workspace folder must exist.")
-            repositories = api.discover_repositories(declared, workspace_file, roots=roots)
+            repositories = api.discover_repositories(declared, workspace_file, roots=roots, project=args.project)
             if args.project:
                 selected, repositories = api.choose_repository(declared, workspace_file, args.project,
                                                                 repositories=repositories)
@@ -222,29 +223,142 @@ def job_context(root, identifier, job):
     return expected
 
 
+def initial_evidence(context, job):
+    """Return the persisted first-step handoff, including for older jobs."""
+    from review_workspace import safe_path
+
+    saved = job.get("initial_evidence")
+    try:
+        review_session.validate_session(context)
+        if saved is None:
+            guide = coordination.read_json(safe_path(context, "start.json"))
+            if (not isinstance(guide, dict) or guide.get("schema") != "MergeReviewStart/v1"
+                    or guide.get("request_id") != context.name):
+                return None
+            saved = {key: guide[key] for key in ("selected_repo", "initial_read_count",
+                     "initial_hunk_reads_file", "initial_hunk_read_count") if key in guide}
+        if not isinstance(saved, dict):
+            return None
+        full = safe_path(context, "initial-reads.json")
+        if not full.is_file():
+            return None
+        result = dict(saved)
+        result["initial_reads_file"] = str(full)
+    except (OSError, ValueError):
+        return None
+
+    advertised = result.pop("initial_hunk_reads_file", None)
+    count = result.pop("initial_hunk_read_count", None)
+    if isinstance(advertised, str) and type(count) is int and count > 0:
+        try:
+            hunk = safe_path(context, "initial-hunk-reads.json")
+            if Path(advertised) == hunk:
+                operations = coordination.read_json(hunk)
+                if (isinstance(operations, list) and len(operations) == count
+                        and operation_preflight(operations) is None):
+                    result.update(initial_hunk_reads_file=str(hunk), initial_hunk_read_count=count)
+        except (OSError, ValueError, RuntimeError):
+            pass  # The required full seed is still usable.
+    return result
+
+
+def _file_digest_if_present(path):
+    try:
+        return coordination.file_digest(path)
+    except FileNotFoundError:
+        return None
+
+
+def _has_finish_retry(job):
+    return job.get("state") == "reviewing" and job.get("phase") == "review" and job.get("next_action") == "finish"
+
+
+def _retry_finish(diagnostic, *, job_unavailable=False):
+    location = "the review job" if job_unavailable else "the session"
+    return {**diagnostic, "next_action": "finish",
+            "hint": f"Restore access to {location} and retry finish for this request."}
+
+
+def _manifest_repair_status(context, identifier, job):
+    import review_manifest_recovery as recovery
+    try:
+        pending = recovery.read_pending(context)
+        return recovery.blocked(identifier, pending=pending) if pending else None
+    except recovery.Retryable as exc:
+        diagnostic = recovery.retry_with_requests_file(identifier, message=coordination.safe_error(exc))
+        return _retry_finish(diagnostic) if _has_finish_retry(job) else diagnostic
+
+
+def _cancel_next_action(job):
+    return "retry-cancel" if job.get("cleanup_pending") else "stop"
+
+
+def _publication_next_action(job):
+    return "open-report" if job["state"] == "published" and not job.get("cleanup_pending") else "finish"
+
+
 def status(root, identifier, *, summary=False, expected_input_digest=None):
+    import review_manifest_recovery as recovery
+
     job = coordination.read_json(job_path(root, identifier))
     if job.get("schema") != SCHEMA or job.get("request_id") != identifier:
         raise ValueError("Session identity differs.")
     if expected_input_digest is not None and job.get("input_digest") != expected_input_digest:
         raise ValueError("request_id already belongs to different inputs.")
     result = {key: value for key, value in job.items() if key not in ("input_digest",)}
+    if job["state"] == "cancelled":
+        result["next_action"] = _cancel_next_action(job)
+    elif (job["state"] in PUBLISHABLE_STATES and job.get("phase") != recovery.PHASE
+          and job.get("next_action") in ("retry-step", recovery.RETRY_WITH_REQUESTS_FILE)):
+        result.pop("next_action", None)
     context = job_context(root, identifier, job)
-    if context.exists():
-        persisted_checkpoint = review_checkpoint.load(context)
-        if persisted_checkpoint is not None:
-            result["execution_checkpoint"] = persisted_checkpoint
+    result.pop("initial_evidence", None)
     if job["state"] == "published" or job.get("planned_report") and Path(job["planned_report"]).is_file():
         import report_receipt
         result["publication"] = report_receipt.verify(job)
         result["review_outcome"] = report_receipt.saved_review(job)
         result.update({key: result["review_outcome"][key]
                        for key in ("review_complete", "review_status", "gaps", "remaining")})
+        if job["state"] == "published" or job["state"] in PUBLISHABLE_STATES:
+            result.update(report_path=job.get("report_path") or job["planned_report"],
+                          next_action=_publication_next_action(job), error=None, errors=[], recoverable=False,
+                          context_retained=job["state"] != "published" or bool(job.get("cleanup_pending")),
+                          execution_checkpoint=None, check_current=False, checkpoint_current=False,
+                          expected_outcome=None, blocking_gaps=[])
+            if summary:
+                result.update(draft_sha256=None,
+                              status_revision=coordination.digest([job.get("updated_at"), None, None]))
+                return status_summary(result)
+            return result
+    if job["state"] in ("ready", "reviewing"):
+        recovery_status = _manifest_repair_status(context, identifier, job)
+        if recovery_status:
+            result.update(recovery_status)
+            result.pop("execution_checkpoint", None)
+            result.pop("expected_outcome", None)
+            if recovery_status.get("next_action") == recovery.RETRY_WITH_REQUESTS_FILE:
+                result["initial_evidence"] = initial_evidence(context, job)
+            return status_summary(result) if summary else result
+        result.pop("execution_checkpoint", None)
+        context_present = context.exists()
+        if context_present:
+            result["initial_evidence"] = initial_evidence(context, job)
+        if job.get("phase") == recovery.PHASE and job.get("next_action") == recovery.RETRY_WITH_REQUESTS_FILE:
+            result.pop("expected_outcome", None)
+            result.update(check_current=False, checkpoint_current=False, blocking_gaps=[])
+            return status_summary(result) if summary else result
+        if context_present:
+            try:
+                persisted_checkpoint = review_checkpoint.load(context)
+            except (OSError, ValueError, RuntimeError):
+                persisted_checkpoint = None
+            if persisted_checkpoint is not None:
+                result["execution_checkpoint"] = persisted_checkpoint
     if summary:
         cached = job.get("last_check", {})
         draft = context / "draft.json"
-        current_hash = coordination.file_digest(draft) if draft.is_file() else None
-        manifest_hash = coordination.file_digest(context / "manifest.json") if (context / "manifest.json").is_file() else None
+        current_hash = _file_digest_if_present(draft)
+        manifest_hash = _file_digest_if_present(context / "manifest.json")
         fresh = bool(current_hash and manifest_hash and cached.get("draft_sha256") == current_hash
                      and cached.get("manifest_sha256") == manifest_hash)
         result["resume"] = {"diagnostics": cached.get("diagnostics", {}) if fresh else {},
@@ -255,6 +369,22 @@ def status(root, identifier, *, summary=False, expected_input_digest=None):
         if not fresh:
             result["expected_outcome"] = None
             result["blocking_gaps"] = []
+        rejected = job.get("draft_error_snapshot") or {}
+        if rejected and (
+                rejected.get("draft_sha256") != current_hash or rejected.get("manifest_sha256") != manifest_hash):
+            result["errors"] = []
+        checkpoint = result.get("execution_checkpoint") or {}
+        checkpoint_current = bool(current_hash and checkpoint.get("draft_sha256") == current_hash)
+        if job.get("source_identity"):
+            checkpoint_current = checkpoint_current and checkpoint.get("source_identity") == job["source_identity"]
+        if checkpoint_current and checkpoint.get("paging_ref"):
+            try:
+                review_runtime.load_view(context, checkpoint["paging_ref"]["artifact"])
+            except (OSError, ValueError, TypeError, KeyError):
+                checkpoint_current = False
+                result["execution_checkpoint"] = {key: val for key, val in checkpoint.items()
+                                                  if key not in ("paging_ref", "paging_counts")}
+        result["checkpoint_current"] = checkpoint_current
     elif job["state"] in ("ready", "reviewing") and (context / "manifest.json").is_file():
         import review_workspace as workspace
         manifest = workspace.load(context)
@@ -275,11 +405,23 @@ def status(root, identifier, *, summary=False, expected_input_digest=None):
                             "diagnostics": diagnostics(draft, manifest, context, job.get("line_counts")),
                             "network_activity": manifest["network_activity"],
                             "sync_activity": manifest.get("sync_activity", [])}
+    recovery_status = _manifest_repair_status(context, identifier, job) if job["state"] in ("ready", "reviewing") else None
+    if recovery_status:
+        result.update(recovery_status)
+        for key in ("execution_checkpoint", "expected_outcome", "resume"):
+            result.pop(key, None)
+        if recovery_status.get("next_action") != recovery.RETRY_WITH_REQUESTS_FILE:
+            result.pop("initial_evidence", None)
+        result.update(check_current=False, checkpoint_current=False, blocking_gaps=[])
+    elif _has_finish_retry(job) and result.get("resume", {}).get("diagnostics", {}).get("errors"):
+        result["next_action"] = "repair-draft-and-check"
     return status_summary(result) if summary else result
 
 
 def status_summary(value):
     """Keep actionable state in one small response; full receipts remain on status."""
+    import review_manifest_recovery as recovery
+
     def brief(item, depth=0):
         if isinstance(item, str):
             return item[:700]
@@ -308,8 +450,10 @@ def status_summary(value):
               "report_path": value.get("report_path"), "cleanup_pending": value.get("cleanup_pending", False),
               "errors": brief(errors), "error_count": len(errors), "gaps": brief(gaps), "gap_count": len(gaps),
               "remaining": brief(pending),
-              "remaining_counts": {key: len(rows) if isinstance(rows, list) else rows for key, rows in pending.items()},
-              "ready_for_finish": inspected.get("ready_for_finish", False), "evidence_verified": False,
+              "remaining_counts": {key: len(rows) if isinstance(rows, list) else rows
+                                   for key, rows in (pending or {}).items()},
+               "ready_for_finish": inspected.get("ready_for_finish", False), "evidence_verified": False,
+               "publication_readiness": inspected.get("publication_readiness", "unknown"),
               "expected_outcome": inspected.get("expected_outcome", value.get("expected_outcome")),
               "blocking_gaps": brief(inspected.get("blocking_gaps", value.get("blocking_gaps", []))),
               "context_retained": value.get("context_retained", False),
@@ -326,17 +470,32 @@ def status_summary(value):
     checkpoint = value.get("execution_checkpoint") or {}
     result.update(checkpoint_revision=review_checkpoint.revision(checkpoint),
                   paging_ref=checkpoint.get("paging_ref"), paging_counts=checkpoint.get("paging_counts"))
-    result["checkpoint_current"] = bool(value.get("execution_checkpoint") and value.get("draft_sha256") ==
-                                        value["execution_checkpoint"].get("draft_sha256"))
-    if value["state"] == "published":
-        action = "finish" if value.get("cleanup_pending") else "open-report"
+    result["checkpoint_current"] = value.get("checkpoint_current", False)
+    if value.get("initial_evidence"):
+        result["initial_evidence"] = value["initial_evidence"]
+        if value.get("next_action") != recovery.RETRY_WITH_REQUESTS_FILE:
+            result["resume_from"] = "checkpoint" if result["checkpoint_current"] else "initial-evidence"
+    if (value["state"] == "published"
+            or value["state"] in PUBLISHABLE_STATES and value.get("publication", {}).get("verified")):
+        action = _publication_next_action(value)
+        outcome = value.get("review_outcome", {})
+        result["review_outcome"] = {key: outcome[key] for key in (
+            "outcome_available", "review_complete", "review_status", "recommendation",
+            "pending_confirmation_count", "extension_status") if key in outcome}
+    elif value["state"] == "cancelled":
+        action = _cancel_next_action(value)
     elif value["state"] in TERMINAL:
         action = "inspect-render-error" if value.get("failure_kind") == "render" else "stop"
+    elif value.get("phase") == recovery.PHASE:
+        action = value.get("next_action", "retry-step")
     elif value.get("phase") == "publication-repair":
         action = "repair-output-and-finish"
+    elif value["state"] in ("running", "validating"):
+        action = "continue-review"
     elif errors:
         action = "continue-review" if value["state"] == "ready" else "repair-draft-and-check"
-    elif inspected.get("ready_for_finish"):
+    elif (_has_finish_retry(value) or inspected.get("ready_for_finish")
+          or inspected.get("publication_readiness") == "ready"):
         action = "finish"
     else:
         action = "continue-review"
@@ -507,7 +666,7 @@ def operation_preflight(operations, manifest=None, line_counts=None):
                     "error": "operation IDs must be unique within one request"}
         seen_ids.add(identifier)
         kind = operation.get("op")
-        if kind not in allowed:
+        if not isinstance(kind, str) or kind not in allowed:
             return {"next_index": index, "code": "authoring.unsupported-operation",
                     "pointer": base + "/op", "operation_id": identifier,
                     "error": "unsupported operation; expected one of " + ", ".join(allowed)}
@@ -519,6 +678,13 @@ def operation_preflight(operations, manifest=None, line_counts=None):
                     "pointer": base + "/" + name.replace("~", "~0").replace("/", "~1"),
                     "operation_id": identifier, "error": message}
         args = {key: value for key, value in operation.items() if key not in ("id", "op")}
+        if kind == "read" and "hunk" in args:
+            from review_workspace import validate_read_request
+            try:
+                validate_read_request(args)
+            except (TypeError, ValueError) as exc:
+                return {"next_index": index, "code": "authoring.invalid-operation-argument",
+                        "pointer": base + "/hunk", "operation_id": identifier, "error": str(exc)}
         string_fields = {"repo", "source", "path", "query", "contract", "change_id", "artifact", "pointer"}
         for name in string_fields & args.keys():
             if kind == "search" and name == "repo" or kind == "register-contract" and name == "contract":
@@ -759,15 +925,27 @@ def diagnostics(draft, manifest, context=None, line_counts=None):
             draft = review_authoring.expand(draft, manifest, context)
         return review_diagnostics.inspect(draft, manifest, line_counts=line_counts)
     except review_authoring.AuthoringError as exc:
-        return {"errors": exc.errors, "gaps": [], "ready_for_finish": False,
+        return {"errors": exc.errors, "gaps": [], "ready_for_finish": False, "publication_readiness": "repair-draft",
                 "evidence_verified": False, "evidence_validation": "deferred-to-finish", "git_commands": 0}
     except (KeyError, TypeError, AttributeError, ValueError, OSError) as exc:
         return {"errors": [{"code": "authoring.invalid-structure", "pointer": "", "path": "draft", "message": str(exc)}],
-                "gaps": [], "ready_for_finish": False, "evidence_verified": False,
+                "gaps": [], "ready_for_finish": False, "publication_readiness": "repair-draft", "evidence_verified": False,
                 "evidence_validation": "deferred-to-finish", "git_commands": 0}
 
 
 def check(root, identifier):
+    lock = coordination.FileLock(job_path(root, identifier).with_suffix(".owner.lock"))
+    if not lock.acquire(blocking=False):
+        return {"request_id": identifier, "phase": "request-busy", "errors": [],
+                "publication_readiness": "unknown", "ready_for_finish": False,
+                "evidence_verified": False, "git_commands": 0}, 3
+    try:
+        return _check_locked(root, identifier)
+    finally:
+        lock.release()
+
+
+def _check_locked(root, identifier):
     import git_review_context as api
     token = api.GIT_PROCESS_ACTIVITY.set(api.empty_git_process_activity())
     started = time.perf_counter()
@@ -784,7 +962,7 @@ def check(root, identifier):
             metrics["check_diagnostic_seconds"] = (job.get("metrics", {}).get("check_diagnostic_seconds", 0.0)
                                                     + time.perf_counter() - started)
             fields = {"metrics": metrics}
-            if result is not None and not result[0].get("publication_complete"):
+            if result is not None and result[0].get("draft_sha256") and result[0].get("manifest_sha256"):
                 checked = result[0]
                 import workspace_report
                 def safe(value):
@@ -798,9 +976,8 @@ def check(root, identifier):
                 fields.update(last_check_at=now(), remaining_counts=checked.get("remaining_counts", {}),
                               expected_outcome=checked.get("expected_outcome"),
                               blocking_gaps=safe(checked.get("blocking_gaps", [])))
-                context = job_context(root, identifier, job)
-                fields["last_check"] = {"draft_sha256": coordination.file_digest(context / "draft.json"),
-                                        "manifest_sha256": coordination.file_digest(context / "manifest.json"),
+                fields["last_check"] = {"draft_sha256": checked["draft_sha256"],
+                                         "manifest_sha256": checked["manifest_sha256"],
                                         "diagnostics": safe(checked), "remaining": checked.get("remaining", {})}
             update(root, identifier, **fields)
         except (OSError, ValueError, KeyError):
@@ -821,15 +998,22 @@ def _check_once(root, identifier):
         return {**published, "errors": [], "ready_for_finish": False, "publication_complete": True,
                 "evidence_verified": False, "evidence_validation": "publication-receipt-only",
                 "git_commands": 0}, 0 if complete else 3
-    manifest = workspace.load(context)
+    recovery_status = _manifest_repair_status(context, identifier, job)
+    if recovery_status:
+        return {**recovery_status, "publication_readiness": "unknown"}, 3
+    manifest, manifest_hash = workspace.load(context, with_digest=True)
+    snapshot = {"manifest_sha256": manifest_hash}
     try:
-        draft = coordination.read_json(context / "draft.json")
+        raw = workspace.safe_path(context, "draft.json").read_bytes()
+        snapshot["draft_sha256"] = hashlib.sha256(raw).hexdigest()
+        draft = json.loads(raw.decode("utf-8-sig"))
     except (OSError, ValueError) as exc:
         return {"request_id": identifier, "errors": [{"code": "authoring.invalid-json", "pointer": "", "path": "draft", "message": str(exc)}],
+                **snapshot, "publication_readiness": "repair-draft",
                 "ready_for_finish": False, "evidence_verified": False, "git_commands": 0}, 3
     value = diagnostics(draft, manifest, context, job.get("line_counts"))
     counts = {key: len(rows) if isinstance(rows, list) else rows for key, rows in remaining(draft).items()}
-    return {"request_id": identifier, "context_retained": True, "remaining_counts": counts,
+    return {"request_id": identifier, "context_retained": True, "remaining_counts": counts, **snapshot,
             **value}, 0 if value["ready_for_finish"] else 3
 
 
@@ -948,7 +1132,7 @@ def start(args):
         workspace_file = Path(inputs["workspace_file"]) if inputs["workspace_file"] else None
         workspace_digest = hashlib.sha256(workspace_file.read_bytes()).hexdigest() if workspace_file else None
         roots = api.workspace_roots(declared, workspace_file)
-        repositories = api.discover_repositories(declared, workspace_file, roots=roots)
+        repositories = api.discover_repositories(declared, workspace_file, roots=roots, project=args.project)
         seed, repositories = api.choose_repository(declared, workspace_file, args.project, repositories=repositories)
         if workspace_file and hashlib.sha256(workspace_file.read_bytes()).hexdigest() != workspace_digest:
             raise ValueError("Workspace file changed during repository discovery.")
@@ -989,6 +1173,17 @@ def start(args):
         initial_reads = initial_read_requests(manifest)
         initial_reads_path = context / "initial-reads.json"
         coordination.atomic(initial_reads_path, initial_reads)
+        import review_hunks
+        hunk_reads = review_hunks.initial_read_requests(context, manifest, initial_reads)
+        focused = {}
+        if hunk_reads is not None:
+            hunk_path = context / "initial-hunk-reads.json"
+            try:
+                coordination.atomic(hunk_path, hunk_reads)
+            except OSError:
+                pass  # The required full seed is already durable.
+            else:
+                focused = {"initial_hunk_reads_file": str(hunk_path), "initial_hunk_read_count": len(hunk_reads)}
         guide = {"schema": "MergeReviewStart/v1", "request_id": identifier, "runtime_root": str(root),
                   "state": "ready", "context_dir": str(context), "draft_path": str(context / "draft.json"),
                   "tool_identity": job["tool_identity"], "no_fetch": inputs["no_fetch"],
@@ -998,7 +1193,7 @@ def start(args):
                  "boundary_changes": manifest.get("boundary_changes", []),
                   "required_merge_views": manifest["required_merge_views"], "patches": patches,
                   "draft_format": args.draft_format, "initial_reads_file": str(initial_reads_path),
-                  "initial_read_count": len(initial_reads),
+                  "initial_read_count": len(initial_reads), **focused,
                  "instructions": instructions["instructions"], "context_gaps": manifest["context_gaps"],
                  "network_activity": manifest["network_activity"], "sync_activity": manifest.get("sync_activity", []),
                  "pack_cache_hits": active.pack_hits,
@@ -1026,6 +1221,9 @@ def start(args):
                 "checkpoint": {"completed_operation_ids": [], "unread_evidence": [],
                                "open_questions": [], "next_action": "<next concrete review action>"}}
         coordination.atomic(context / "start.json", guide)
+        guide_artifact = review_runtime.store_view(context, guide)
+        handoff = {"selected_repo": selected["id"], "initial_read_count": len(initial_reads), **focused,
+                   "start_ref": {**view_continuation(context, guide_artifact, "", 0), "read_only": True}}
         active.finish_phase()
         evidence_receipt = capture_integrity_receipt(context, manifest)
         git_metrics = api.git_process_activity()
@@ -1048,7 +1246,8 @@ def start(args):
         update(root, identifier, state="ready", phase="review", selected_repo=selected["id"],
                network_activity=manifest["network_activity"], sync_activity=manifest.get("sync_activity", []),
                pack_cache_hits=active.pack_hits,
-               metrics=metrics, evidence_receipt=evidence_receipt)
+               metrics=metrics, evidence_receipt=evidence_receipt, initial_evidence=handoff,
+               source_identity=review_checkpoint.source_identity(manifest))
         prune_jobs(root)
         return guide
     except Exception as exc:
@@ -1172,6 +1371,15 @@ def step_projection(value):
     return {**value, "operations": projected, "contents": contents}
 
 
+def _verified_publication_action(value):
+    if isinstance(value, dict):
+        publication = value.get("publication")
+        action = value.get("next_action")
+        if isinstance(publication, dict) and publication.get("verified") is True and action in ("finish", "open-report"):
+            return action
+    return None
+
+
 def _compact(value, context, *, limit=LIMIT):
     scope = "runtime" if Path(context).parent.name == "responses" else "context"
     if isinstance(value, dict) and isinstance(value.get("operations"), list) and all(
@@ -1244,19 +1452,29 @@ def _compact(value, context, *, limit=LIMIT):
     result = {"schema": "MergeReviewEvidenceSummary/v1", "artifact": artifact,
               "evidence_complete": True, "view_complete": False, "summary": sketch(value),
               "continue": view_continuation(context, artifact, "", 0, scope=scope)}
+    publication_action = _verified_publication_action(value)
+    if publication_action:
+        result["next_action"] = publication_action
     if isinstance(value, dict) and "evidence_verified" in value:
         result["evidence_verified"] = value["evidence_verified"]
         result["ready_for_finish"] = value.get("ready_for_finish", False)
+        if "publication_readiness" in value:
+            result["publication_readiness"] = value["publication_readiness"]
     if len(review_runtime.canonical(result)) >= limit:
         result["summary"] = {"fields": [str(key)[:80] for key in list(value)[:32]] if isinstance(value, dict) else None,
                              "count": len(value)}
+        if publication_action and len(review_runtime.canonical(result)) >= limit:
+            result["summary"] = {"count": len(value)}
+            if len(review_runtime.canonical(result)) >= limit:
+                # The caller can reuse its runtime argument for the continuation.
+                result["continue"].pop("runtime_root", None)
     return result
 
 
-def compact(value, context):
+def compact(value, context, *, limit=LIMIT):
     """Offer ready paging input; acknowledgement remains a caller operation."""
     additions = {}
-    if isinstance(value, dict) and isinstance(value.get("operations"), list) and len(review_runtime.canonical(value)) >= LIMIT:
+    if isinstance(value, dict) and isinstance(value.get("operations"), list) and len(review_runtime.canonical(value)) >= limit:
         projected = step_projection(value)
         if projected is not None:
             import review_projection
@@ -1267,7 +1485,7 @@ def compact(value, context):
             additions = review_projection.prepare(location, projected, review_runtime.store_view(location, value),
                 scope="runtime" if location.parent.name == "responses" else "context", source_identity=identity)
     reserve = len(review_runtime.canonical(additions)) + 32 if additions else 0
-    result = _compact(value, context, limit=LIMIT - reserve)
+    result = _compact(value, context, limit=limit - reserve)
     if additions:
         result.update(additions)
     return result
@@ -1278,8 +1496,97 @@ def step_file(root, identifier, requested):
     return step(root, identifier, None, requests_file=requested)
 
 
+def step_artifact_fields(context, manifest, job, result):
+    fields = {}
+    line_counts = dict(job.get("line_counts", {}))
+    author_state = None
+    for completed in result.get("operations", []):
+        read = completed.get("result", {})
+        if isinstance(read, dict) and read.get("saved") and isinstance(read.get("checkpoint"), dict):
+            if author_state is None:
+                import review_manifest_recovery as recovery
+                author_state = recovery.draft_state(context)
+            draft_sha, persisted_checkpoint = author_state
+            if draft_sha == read.get("draft_sha256"):
+                # The checkpoint on disk can be newer than a reused author result.
+                fields["execution_checkpoint"] = persisted_checkpoint or read["checkpoint"]
+                if read.get("draft_changed", bool(read.get("updated_fields"))):
+                    fields["first_draft_at"] = job.get("first_draft_at") or now()
+        if not isinstance(read, dict) or not isinstance(read.get("lines"), list) or read.get("binary"):
+            continue
+        total = read.get("total_lines")
+        if total is None and "line_start" not in read and "requested_line" not in read:
+            total = len(read["lines"])
+        cache_key = _line_count_key(manifest, read)
+        if cache_key and type(total) is int and total >= 0:
+            line_counts[cache_key] = total
+    if line_counts != job.get("line_counts", {}):
+        fields["line_counts"] = line_counts
+    return fields
+
+
+def finish_manifest_commit(root, identifier, context, fields, result, active):
+    import review_manifest_recovery as recovery
+
+    if active.cancelled():
+        return finish_step_cancellation(root, identifier, context)
+    try:
+        pending = recovery.read_pending(context)
+    except recovery.Retryable as exc:
+        return recovery.blocked(identifier, message=coordination.safe_error(exc))
+    try:
+        update(root, identifier, **fields)
+    except OSError as exc:
+        if pending is None:
+            raise
+        return recovery.blocked(identifier, message=coordination.safe_error(exc))
+    if pending is not None:
+        try:
+            recovery.clear(context)
+        except recovery.Retryable as exc:
+            return recovery.blocked(identifier, message=coordination.safe_error(exc))
+    if active.cancelled():
+        return finish_step_cancellation(root, identifier, context)
+    return result
+
+
+def recover_manifest_step(root, identifier, context, job, pending, active):
+    import review_manifest_recovery as recovery
+
+    active.check()
+    manifest, staged, target, result = recovery.restore(context, pending, job.get("evidence_receipt"))
+    receipt = verify_step_packs(context, manifest, job)
+    if staged is not None:
+        recovery.replace_staged(staged, target, check_cancelled=active.check)
+    active.check()
+    fields = step_artifact_fields(context, manifest, job, result)
+    receipt = refresh_integrity_receipt(context, manifest, receipt)
+    if receipt["manifest_sha256"] != pending["after"]["sha256"]:
+        raise ValueError("Committed manifest differs from the prepared generation")
+    fields.update(state="reviewing", phase=pending["phase_after"], error=None, errors=[], next_action=None, recoverable=False,
+                  context_retained=False, evidence_receipt=receipt,
+                  last_step={"complete": result["complete"], "next_index": result["next_index"]},
+                  progress={"phase": "operation-complete" if result["complete"] else "operation-failed",
+                            "completed": result["next_index"], "at": now()})
+    return finish_manifest_commit(root, identifier, context, fields, result, active)
+
+
+def finish_step_cancellation(root, identifier, context, **fields):
+    cleanup_error = None
+    try:
+        if context.exists():
+            review_session.cleanup_session(context)
+    except (OSError, ValueError) as exc:
+        cleanup_error = coordination.safe_error(exc)
+    update(root, identifier, **fields, state="cancelled", phase="terminal", error=None, errors=[],
+           next_action=None, recoverable=False, context_retained=cleanup_error is not None, cleanup_error=cleanup_error,
+           cleanup_pending=cleanup_error is not None, finished_at_epoch=time.time())
+    return {"complete": False, "cancelled": True, "cleanup_pending": cleanup_error is not None}
+
+
 def step(root, identifier, operations, *, requests_file=None):
     import git_review_context as api
+    import review_manifest_recovery as recovery
     import review_workspace as workspace
     path = job_path(root, identifier)
     lock_started = time.perf_counter()
@@ -1296,11 +1603,22 @@ def step(root, identifier, operations, *, requests_file=None):
         error_revalidation = 0.0
         operation_seconds, operation_counts, operation_starts = {}, {}, {}
         prefetch_starts = {}
+        pending_recovery = None
+        author_state = None
+        prepared_sha = None
+        finish_retry_error = None
+
+        def update_progress(**fields):
+            try:
+                update(root, job["request_id"], **fields)
+            except OSError as exc:
+                if not recovery.sharing_error(exc):
+                    raise
 
         def progress(stage, completed, total, operation):
             if stage in ("prefetch-searches", "prefetch-reads"):
                 prefetch_starts[stage] = time.perf_counter()
-                update(root, job["request_id"], phase="review", progress={"phase": stage,
+                update_progress(phase="review", progress={"phase": stage,
                        "completed": completed, "total": total, "operation_id": None,
                        "operation": None, "at": now()})
             elif stage in ("prefetch-searches-complete", "prefetch-reads-complete"):
@@ -1309,7 +1627,7 @@ def step(root, identifier, operations, *, requests_file=None):
                 if begun is not None:
                     key = original.replace("prefetch-", "")
                     operation_seconds[key] = operation_seconds.get(key, 0.0) + time.perf_counter() - begun
-                update(root, job["request_id"], progress={"phase": stage, "completed": completed,
+                update_progress(progress={"phase": stage, "completed": completed,
                        "total": total, "operation_id": None, "operation": None, "at": now()})
             elif stage == "operation" and isinstance(operation, dict):
                 identifier = operation.get("id")
@@ -1318,7 +1636,7 @@ def step(root, identifier, operations, *, requests_file=None):
                 operation_counts[kind] = operation_counts.get(kind, 0) + 1
                 row = {"phase": "operation", "completed": completed, "total": total,
                        "operation_id": identifier, "operation": kind, "at": now()}
-                update(root, job["request_id"], phase="review", progress=row)
+                update_progress(phase="review", progress=row)
                 print(json.dumps({"request_id": job["request_id"], **row}, ensure_ascii=False),
                       file=sys.stderr, flush=True)
             elif stage == "operation-complete" and isinstance(operation, dict):
@@ -1327,17 +1645,49 @@ def step(root, identifier, operations, *, requests_file=None):
                 if active_operation:
                     kind, began = active_operation
                     operation_seconds[kind] = operation_seconds.get(kind, 0.0) + time.perf_counter() - began
-                update(root, job["request_id"], progress={"phase": "operation-complete",
+                update_progress(progress={"phase": "operation-complete",
                        "completed": completed, "total": total, "operation_id": None,
                        "operation": None, "at": now()})
 
         try:
             active.check()
             review_session.validate_session(context)
-            with active.activate(), review_runtime.writer(context):
+            with active.activate(), review_runtime.writer(context, allow_pending=True):
+                try:
+                    pending_recovery = recovery.read_pending(context)
+                except recovery.Retryable as exc:
+                    if operations is None and requests_file is None and _has_finish_retry(job):
+                        # The outer handler checks cancellation after the writer exits.
+                        finish_retry_error = exc
+                        raise
+                    raise recovery.Unstaged(coordination.safe_error(exc)) from exc
+                if pending_recovery is not None:
+                    if pending_recovery["state"] == "author-interrupted":
+                        return recovery.blocked(identifier, pending=pending_recovery)
+                    input_supplied = operations is not None or requests_file is not None
+                    try:
+                        if operations is None and requests_file is not None:
+                            operations = coordination.read_json(requests_file)
+                    except (OSError, ValueError) as exc:
+                        return recovery.blocked(identifier, message=coordination.safe_error(exc), pending=pending_recovery)
+                    if input_supplied and recovery.batch_digest(operations) != pending_recovery["batch_sha256"]:
+                        return recovery.blocked(identifier, message="Retry the same operations batch for this request.",
+                                                pending=pending_recovery)
+                    if pending_recovery["state"] == "prepared":
+                        return recover_manifest_step(root, identifier, context, job, pending_recovery, active)
+                    author_state = recovery.author_batch_state(context, pending_recovery, job.get("evidence_receipt"))
+                    if author_state == "interrupted":
+                        return recovery.interrupted(context, pending_recovery)
+                    operations = pending_recovery["batch"]
+                elif (operations is None and requests_file is None
+                      and job.get("next_action") == recovery.RETRY_WITH_REQUESTS_FILE):
+                    return recovery.retry_with_requests_file(identifier, message=job.get("error"))
                 manifest = workspace.load(context)
                 receipt = verify_step_manifest_receipt(context, manifest, job)
-                job = {**job, "evidence_receipt": receipt}
+                if pending_recovery is not None and author_state == "journal-only":
+                    receipt = verify_step_packs(context, manifest, job)
+                if receipt != job.get("evidence_receipt"):
+                    job = update(root, identifier, evidence_receipt=receipt)
                 input_error = None
                 if operations is None:
                     try:
@@ -1346,60 +1696,88 @@ def step(root, identifier, operations, *, requests_file=None):
                         operations = coordination.read_json(requests_file)
                     except (OSError, ValueError) as exc:
                         input_error = coordination.safe_error(exc)
+                        if job.get("next_action") == recovery.RETRY_WITH_REQUESTS_FILE:
+                            raise recovery.Unstaged(input_error) from exc
                 preflight_error = (operation_preflight(operations, manifest, job.get("line_counts"))
                                    if input_error is None else None)
                 run_operations = (operations[:preflight_error["next_index"]]
                                   if preflight_error is not None and isinstance(operations, list)
                                   else [] if preflight_error is not None else operations)
+
+                def with_preflight(result):
+                    if preflight_error is not None and result["complete"]:
+                        return {**result, **{key: value for key, value in preflight_error.items()
+                                             if key not in ("next_index", "line_count")},
+                                "next_index": preflight_error["next_index"], "complete": False,
+                                "terminal": False, "recoverable": True, "context_retained": True}, "input-repair"
+                    return result, "input-repair" if input_error is not None else "review"
+
+                previous = None
+                if pending_recovery is not None:
+                    previous = (pending_recovery["previous_draft_sha256"], pending_recovery["previous_checkpoint"])
+                elif run_operations and recovery.batch_has_author(operations):
+                    try:
+                        previous = recovery.draft_state(context)
+                    except recovery.InvalidCheckpoint as exc:
+                        raise recovery.Unstaged(coordination.safe_error(exc)) from exc
+                    except OSError as exc:
+                        if not recovery.sharing_error(exc):
+                            raise
+                        raise recovery.Unstaged(coordination.safe_error(exc)) from exc
+                authors = [row["id"] for row in run_operations or []
+                           if row["op"] == "author" and row["id"] not in manifest.get("operations", {})]
+                if authors and pending_recovery is None:
+                    pending_recovery = recovery.begin_author_batch(context, operations, {
+                        "sha256": receipt["manifest_sha256"], "generation": manifest.get("generation", 0),
+                    }, previous, authors)
+
+                def commit_batch(location, candidate, result):
+                    result, phase = with_preflight(result)
+
+                    def replace(staged, target, before, after):
+                        nonlocal prepared_sha
+                        if before["sha256"] != receipt["manifest_sha256"]:
+                            raise ValueError("Manifest changed since the step receipt was verified")
+                        active.check()
+                        recovery.stage(location, staged, before, after, operations, result,
+                                       candidate, previous=previous, phase_after=phase)
+                        prepared_sha = after["sha256"]
+                        recovery.replace_staged(staged, target, check_cancelled=active.check)
+
+                    review_runtime.save_manifest(location, candidate, replace=replace)
+
                 result = ({"operations": [], "complete": False, "next_index": 0,
                            "error": input_error, "code": "authoring.invalid-requests-file",
                            "pointer": "/requests_file", "terminal": False, "recoverable": True,
                            "context_retained": True} if input_error is not None else
-                          (workspace.ordered_step(context, manifest, run_operations, api, on_progress=progress)
+                           (workspace.ordered_step(context, manifest, run_operations, api, on_progress=progress,
+                                                   commit=commit_batch)
                            if run_operations else {"operations": [], "complete": True,
                                                    "next_index": 0}))
+                if authors and prepared_sha is None and not active.cancelled():
+                    author_state = recovery.author_batch_state(context, pending_recovery, receipt)
+                    if author_state == "interrupted":
+                        return recovery.interrupted(context, pending_recovery)
+                    if author_state == "journal-only":
+                        return recovery.blocked(identifier, message=coordination.safe_error(result.get("error", "")),
+                                                pending=pending_recovery)
                 for kind, began in operation_starts.values():
                     operation_seconds[kind] = operation_seconds.get(kind, 0.0) + time.perf_counter() - began
                 operation_starts.clear()
-                line_counts = dict(job.get("line_counts", {}))
-                persisted_checkpoint = review_checkpoint.load(context)
-                for completed in result.get("operations", []):
-                    read = completed.get("result", {})
-                    if (isinstance(read, dict) and read.get("saved") and isinstance(read.get("checkpoint"), dict)
-                            and coordination.file_digest(context / "draft.json") == read.get("draft_sha256")):
-                        # A reused author result may be older than a checkpoint-only
-                        # transaction. The durable checkpoint is authoritative.
-                        checkpoint = persisted_checkpoint or read["checkpoint"]
-                        job = update(root, identifier, execution_checkpoint=checkpoint,
-                                     first_draft_at=job.get("first_draft_at") or now())
-                    if not isinstance(read, dict) or not isinstance(read.get("lines"), list) or read.get("binary"):
-                        continue
-                    total = read.get("total_lines")
-                    if total is None and "line_start" not in read and "requested_line" not in read:
-                        total = len(read["lines"])
-                    cache_key = _line_count_key(manifest, read)
-                    if cache_key and type(total) is int and total >= 0:
-                        line_counts[cache_key] = total
-                if line_counts != job.get("line_counts", {}):
-                    job = update(root, identifier, line_counts=line_counts)
-                if preflight_error is not None:
-                    result.update({key: value for key, value in preflight_error.items()
-                                   if key not in ("next_index", "line_count")})
-                    result.update(next_index=preflight_error["next_index"], complete=False,
-                                  terminal=False, recoverable=True, context_retained=True)
+                artifact_fields = step_artifact_fields(context, manifest, job, result)
+                result, phase_after = with_preflight(result)
                 line_overflow = re.search(r"line_end exceeds fixed file line count \((\d+)\)",
                                           result.get("error", ""))
                 if (line_overflow and isinstance(operations, list)
                         and type(result.get("next_index")) is int
                         and 0 <= result["next_index"] < len(operations)):
-                    line_counts = dict(job.get("line_counts", {}))
+                    line_counts = dict(artifact_fields.get("line_counts", job.get("line_counts", {})))
                     cache_key = _line_count_key(manifest, operations[result["next_index"]])
                     if cache_key:
                         line_counts[cache_key] = int(line_overflow.group(1))
-                        job = update(root, identifier, line_counts=line_counts)
+                        artifact_fields["line_counts"] = line_counts
                 if not result["complete"] and not active.cancelled():
-                    known_authoring_error = (preflight_error is not None
-                                             or result.get("code", "").startswith("authoring.")
+                    known_authoring_error = (result.get("code", "").startswith("authoring.")
                                              or result.get("code") == "evidence.line-range-out-of-bounds")
                     if not known_authoring_error or input_error is not None:
                         validation_started = time.perf_counter()
@@ -1408,6 +1786,8 @@ def step(root, identifier, operations, *, requests_file=None):
                     else:
                         result["error_revalidation_skipped"] = True
                 receipt = refresh_integrity_receipt(context, manifest, receipt)
+                if prepared_sha is not None and receipt["manifest_sha256"] != prepared_sha:
+                    raise ValueError("Committed manifest differs from the prepared generation")
         except Exception as exc:
             metrics = git_metrics_after(job.get("metrics", {}), "step", api.git_process_activity())
             metrics["step_seconds"] = job.get("metrics", {}).get("step_seconds", 0.0) + time.perf_counter() - started
@@ -1415,17 +1795,35 @@ def step(root, identifier, operations, *, requests_file=None):
             metrics["error_revalidation_seconds"] = job.get("metrics", {}).get("error_revalidation_seconds", 0.0) + error_revalidation
             metrics["error_revalidation_count"] = job.get("metrics", {}).get("error_revalidation_count", 0) + int(error_revalidation > 0)
             metrics["lock_wait_seconds"] = job.get("metrics", {}).get("lock_wait_seconds", 0.0) + lock_wait
-            update(root, identifier, state="cancelled" if active.cancelled() else "failed",
-                   phase="terminal", error=coordination.safe_error(exc), finished_at_epoch=time.time(),
-                   metrics=metrics)
+            if active.cancelled():
+                return finish_step_cancellation(root, identifier, context, metrics=metrics)
+            if exc is finish_retry_error:
+                return _retry_finish(recovery.blocked(identifier, message=coordination.safe_error(exc)))
+            if (isinstance(exc, recovery.Retryable)
+                    or (pending_recovery is not None or prepared_sha is not None)
+                    and isinstance(exc, OSError) and recovery.sharing_error(exc)):
+                retry = (recovery.retry_with_requests_file if isinstance(exc, recovery.Unstaged)
+                         else recovery.blocked)
+                diagnostic = retry(identifier, message=coordination.safe_error(exc))
+                try:
+                    update(root, identifier, state="reviewing", phase=recovery.PHASE,
+                           recoverable=True, context_retained=True, metrics=metrics,
+                           next_action=diagnostic["next_action"], error=diagnostic["error"])
+                except OSError:
+                    pass  # The caller still receives the recovery instructions.
+                return diagnostic
+            retained = isinstance(exc, recovery.RecordUnavailable)
+            update(root, identifier, state="failed", phase="terminal", error=coordination.safe_error(exc),
+                   recoverable=False, context_retained=retained, finished_at_epoch=time.time(), metrics=metrics,
+                   failure_kind="manifest-recovery-record" if retained else None,
+                   **({"next_action": None} if _has_finish_retry(job) else {}))
+            if retained:
+                raise
             review_session.cleanup_session(context)
             raise
         if active.cancelled():
-            review_session.cleanup_session(context)
             metrics = git_metrics_after(job.get("metrics", {}), "step", api.git_process_activity())
-            update(root, identifier, state="cancelled", phase="terminal", finished_at_epoch=time.time(),
-                   metrics=metrics)
-            return {**result, "complete": False, "cancelled": True}
+            return finish_step_cancellation(root, identifier, context, metrics=metrics)
         elapsed = time.perf_counter() - started
         metrics = git_metrics_after(job.get("metrics", {}), "step", api.git_process_activity())
         metrics["step_seconds"] = job.get("metrics", {}).get("step_seconds", 0.0) + elapsed
@@ -1451,16 +1849,24 @@ def step(root, identifier, operations, *, requests_file=None):
         metrics["error_revalidation_skipped_count"] = (job.get("metrics", {}).get(
             "error_revalidation_skipped_count", 0) + int(bool(result.get("error_revalidation_skipped"))))
         metrics["lock_wait_seconds"] = job.get("metrics", {}).get("lock_wait_seconds", 0.0) + lock_wait
-        update(root, identifier, state="reviewing", phase="input-repair" if input_error is not None or preflight_error else "review",
-               last_step={"complete": result["complete"], "next_index": result["next_index"]},
-               progress={"phase": "operation-complete" if result["complete"] else "operation-failed",
-                         "completed": result["next_index"], "total": len(operations) if isinstance(operations, list) else 0,
-                         "operation_id": None, "operation": None, "at": now()},
-               evidence_receipt=receipt, metrics=metrics)
+        finish_retry = _has_finish_retry(job)
+        step_resumed = result["complete"] or bool(result["operations"])
+        if finish_retry and not step_resumed:
+            phase_after = job["phase"]
+        artifact_fields.update(state="reviewing", phase=phase_after,
+                               last_step={"complete": result["complete"], "next_index": result["next_index"]},
+                               progress={"phase": "operation-complete" if result["complete"] else "operation-failed",
+                                         "completed": result["next_index"],
+                                         "total": len(operations) if isinstance(operations, list) else 0,
+                                         "operation_id": None, "operation": None, "at": now()},
+                               evidence_receipt=receipt, metrics=metrics)
+        if (finish_retry and step_resumed or input_error is None and (
+                job.get("phase") == recovery.PHASE or job.get("next_action") == recovery.RETRY_WITH_REQUESTS_FILE)):
+            artifact_fields.update(next_action=None, error=None, recoverable=False, context_retained=False)
         result["metrics"] = {"step_seconds": elapsed, "error_revalidation_seconds": error_revalidation,
                              "error_revalidation_skipped": bool(result.get("error_revalidation_skipped")),
                              "git_command_count": api.git_process_activity()["command_count"]}
-        return result
+        return finish_manifest_commit(root, identifier, context, artifact_fields, result, active)
     finally:
         api.GIT_PROCESS_ACTIVITY.reset(git_token)
         owner_lock.release()
@@ -1525,6 +1931,7 @@ def finish(root, identifier):
 
 
 def _finish_once(root, identifier):
+    import review_manifest_recovery as recovery
     import review_report
     import review_workspace as workspace
     import workspace_report
@@ -1532,6 +1939,31 @@ def _finish_once(root, identifier):
     path = job_path(root, identifier)
     with MeasuredFileLock(path.with_suffix(".owner.lock")) as owner_lock:
         job = coordination.read_json(path)
+        context = job_context(root, identifier, job)
+        planned = job.get("planned_report")
+        linked_report = job["state"] != "published" and planned and Path(planned).is_file()
+
+        def blocked_publication(exc, *, validating):
+            diagnostic = exc.diagnostic
+            if (diagnostic["next_action"] == recovery.RETRY_WITH_REQUESTS_FILE
+                    and job.get("next_action") != recovery.RETRY_WITH_REQUESTS_FILE):
+                diagnostic = _retry_finish(diagnostic)
+            if validating:
+                retry_finish = diagnostic["next_action"] == "finish"
+                try:
+                    update(root, identifier, state="reviewing", phase="review" if retry_finish else diagnostic["phase"],
+                           context_retained=True, recoverable=diagnostic["recoverable"],
+                           next_action=diagnostic["next_action"], error=None if retry_finish else diagnostic["error"])
+                except OSError:
+                    if diagnostic["recoverable"]:
+                        diagnostic = _retry_finish(diagnostic, job_unavailable=True)
+            return diagnostic, exc.exit_code
+
+        if not linked_report and job["state"] in PUBLISHABLE_STATES:
+            try:
+                review_report.require_manifest_ready(context)
+            except review_report.ManifestPublicationBlocked as exc:
+                return blocked_publication(exc, validating=job["state"] == "validating")
         metrics = dict(job.get("metrics", {}))
         metrics["finish_lock_wait_seconds"] = metrics.get("finish_lock_wait_seconds", 0.0) + owner_lock.wait_seconds
         metrics["finish_lock_wait_last_seconds"] = owner_lock.wait_seconds
@@ -1539,8 +1971,7 @@ def _finish_once(root, identifier):
         metrics["draft_preparation_seconds"] = 0.0
         metrics["validation_publish_seconds"] = None
         job = update(root, identifier, metrics=metrics)
-        context = job_context(root, identifier, job)
-        planned = job.get("planned_report")
+        clear_finish_retry = {"next_action": None} if _has_finish_retry(job) else {}
 
         previous_progress = job.get("progress") or {}
         validation_counts = previous_progress.get("validation")
@@ -1564,25 +1995,30 @@ def _finish_once(root, identifier):
             print(json.dumps({"request_id": identifier, "phase": stage, **row}, ensure_ascii=False),
                   file=sys.stderr, flush=True)
 
+        def mark_published(output, **fields):
+            update(root, identifier, state="published", phase="complete", report_path=str(output),
+                   finished_at_epoch=time.time(), next_action=None, error=None, errors=[],
+                   recoverable=False, cleanup_pending=True, context_retained=True, **fields)
+
         def clean_published():
             progress("cleanup", completed=0, total=1)
             try:
                 if context.is_dir():
                     review_session.cleanup_session(context)
-                update(root, identifier, cleanup_pending=False, cleanup_error=None)
+                update(root, identifier, cleanup_pending=False, cleanup_error=None, context_retained=False)
             except (OSError, ValueError) as exc:
-                update(root, identifier, cleanup_pending=True, cleanup_error=coordination.safe_error(exc))
+                update(root, identifier, cleanup_pending=True, cleanup_error=coordination.safe_error(exc),
+                       context_retained=True)
             progress("cleanup", completed=1, total=1)
             return status(root, identifier), 0
         if job["state"] == "published":
             report_receipt.verify(job)
             return clean_published()
-        if planned and Path(planned).is_file():
+        if linked_report:
             report_receipt.verify(job)
-            update(root, identifier, state="published", phase="complete", report_path=planned,
-                   finished_at_epoch=time.time())
+            mark_published(planned)
             return clean_published()
-        if job["state"] not in ("ready", "reviewing", "validating"):
+        if job["state"] not in PUBLISHABLE_STATES:
             raise ValueError("Session cannot be published.")
         started = time.perf_counter()
         timing = {"draft_preparation_seconds": 0.0, "finish_error_revalidation_seconds": 0.0,
@@ -1593,23 +2029,25 @@ def _finish_once(root, identifier):
             update(root, identifier, planned_report=str(output), report_sha256=receipt["report_sha256"],
                    report_receipt=receipt, review_outcome=receipt["review_outcome"])
         def published(output):
-            update(root, identifier, state="published", phase="complete", report_path=str(output),
-                   finished_at_epoch=time.time(), metrics={**job.get("metrics", {}),
-                        **timing, "validation_publish_seconds": time.perf_counter() - validation_started,
-                        "finish_total_seconds": time.perf_counter() - started})
+            mark_published(output, metrics={**job.get("metrics", {}), **timing,
+                                           "validation_publish_seconds": time.perf_counter() - validation_started,
+                                           "finish_total_seconds": time.perf_counter() - started})
         try:
             if (root / "jobs" / (identifier + ".cancel")).exists():
                 raise coordination.Cancelled("Review cancelled before publication.")
             progress("draft-preparation", completed=0, total=1)
-            manifest = workspace.load(context)
+            manifest, manifest_hash = workspace.load(context, with_digest=True)
             with workspace_report.validation_progress(progress):
                 receipt = verify_step_manifest_receipt(context, manifest, job)
             if receipt != job.get("evidence_receipt"):
                 job = update(root, identifier, evidence_receipt=receipt)
             draft_started = time.perf_counter()
             draft_path = context / "draft.json"
+            draft_snapshot = {"draft_sha256": None, "manifest_sha256": manifest_hash}
             try:
-                draft = coordination.read_json(draft_path)
+                draft_raw = workspace.safe_path(context, "draft.json").read_bytes()
+                draft_snapshot["draft_sha256"] = hashlib.sha256(draft_raw).hexdigest()
+                draft = json.loads(draft_raw.decode("utf-8-sig"))
             except (OSError, ValueError) as exc:
                 draft, errors = {}, [f"draft input: {coordination.safe_error(exc)}"]
             else:
@@ -1636,11 +2074,12 @@ def _finish_once(root, identifier):
                 timing["draft_preparation_seconds"] = time.perf_counter() - draft_started
                 update(root, identifier, metrics={**job.get("metrics", {}), **timing,
                                                  "finish_total_seconds": time.perf_counter() - started})
-                update(root, identifier, state="reviewing", phase="draft-repair", errors=errors)
+                update(root, identifier, state="reviewing", phase="draft-repair", error=None, errors=errors,
+                       draft_error_snapshot=draft_snapshot, **clear_finish_retry)
                 return {"request_id": identifier, "context_retained": True, "errors": errors,
                         "remaining": remaining(draft)}, 3
             update(root, identifier, state="validating", phase="validation", errors=[], error=None, recoverable=False,
-                   draft_sha256=hashlib.sha256(draft_path.read_bytes()).hexdigest())
+                   draft_sha256=draft_snapshot["draft_sha256"], draft_error_snapshot=None, **clear_finish_retry)
             timing["draft_preparation_seconds"] = time.perf_counter() - draft_started
             validation_started = time.perf_counter()
             progress("validation", completed=0, total=1)
@@ -1648,20 +2087,23 @@ def _finish_once(root, identifier):
             def publication_stage(_output, _digest):
                 progress("report-publication", completed=1, total=2)
 
-            with review_runtime.writer(context), workspace_report.validation_progress(progress):
-                review_report.publish_report(context, draft_path, retain_on_validation_error=True,
-                                             on_stage=publication_stage, on_stage_receipt=staged,
-                                             on_published=published, cleanup_context=False)
+            with workspace_report.validation_progress(progress):
+                review_report._publish_with_owner_lock(
+                    context, draft_path, retain_on_validation_error=True, on_stage=publication_stage,
+                    on_stage_receipt=staged, on_published=published, cleanup_context=False)
             progress("validation", completed=1, total=1)
             progress("report-publication", completed=2, total=2)
             return clean_published()
+        except review_report.ManifestPublicationBlocked as exc:
+            return blocked_publication(exc, validating=True)
         except workspace_report.DraftValidationError as exc:
             timing["finish_error_revalidation_seconds"] = max(
                 timing["finish_error_revalidation_seconds"],
                 time.perf_counter() - validation_started if "validation_started" in locals() else 0.0)
             saved = coordination.read_json(path)
             update(root, identifier, metrics={**saved.get("metrics", {}), **timing})
-            update(root, identifier, state="reviewing", phase="draft-repair", errors=[str(exc)])
+            update(root, identifier, state="reviewing", phase="draft-repair", errors=[str(exc)],
+                   draft_error_snapshot=getattr(exc, "draft_snapshot", None), **clear_finish_retry)
             return {"request_id": identifier, "context_retained": True, "errors": [str(exc)]}, 3
         except workspace_report.ReportRenderError as exc:
             # The formatter failed before staging. Preserve evidence for diagnosis,
@@ -1685,8 +2127,7 @@ def _finish_once(root, identifier):
             if saved.get("planned_report") and Path(saved["planned_report"]).is_file():
                 report_receipt.verify(saved)
                 if isinstance(exc, report_publication.PublicationError):
-                    update(root, identifier, state="published", phase="complete",
-                           report_path=saved["planned_report"], finished_at_epoch=time.time())
+                    mark_published(saved["planned_report"])
                     return clean_published()
                 # The link commit completed; keep its evidence and receipt for retry.
                 raise
@@ -1697,13 +2138,13 @@ def _finish_once(root, identifier):
                 metrics = {**saved.get("metrics", {}), **timing}
                 metrics["publication_failure_count"] = metrics.get("publication_failure_count", 0) + 1
                 update(root, identifier, state="reviewing", phase="publication-repair",
-                       errors=[diagnostic], recoverable=True, metrics=metrics)
+                       errors=[diagnostic], recoverable=True, metrics=metrics, **clear_finish_retry)
                 return {"request_id": identifier, "phase": "publication-repair", "errors": [diagnostic],
                         "terminal": False, "recoverable": True, "context_retained": True,
                         "retry": "finish"}, 3
             update(root, identifier, state="cancelled" if isinstance(exc, coordination.Cancelled) else "failed",
                    phase="terminal", error=coordination.safe_error(exc),
-                   finished_at_epoch=time.time())
+                   finished_at_epoch=time.time(), **clear_finish_retry)
             if context.exists():
                 review_session.cleanup_session(context)
             raise
@@ -1713,12 +2154,17 @@ def cancel(root, identifier):
     path = job_path(root, identifier)
     job = coordination.read_json(path)
     job_context(root, identifier, job)
-    if job["state"] in TERMINAL and job.get("failure_kind") == "render" and job.get("context_retained"):
+    def retained_terminal(value):
+        return (value["state"] in TERMINAL and value.get("context_retained") and
+                (value.get("failure_kind") in ("render", "manifest-recovery-record")
+                 or value["state"] == "cancelled" and value.get("cleanup_pending")))
+
+    if retained_terminal(job):
         with coordination.FileLock(path.with_suffix(".owner.lock")):
             job = coordination.read_json(path)
-            if job.get("failure_kind") == "render" and job.get("context_retained"):
+            if retained_terminal(job):
                 review_session.cleanup_session(job_context(root, identifier, job))
-                update(root, identifier, context_retained=False, cleanup_error=None)
+                update(root, identifier, context_retained=False, cleanup_pending=False, cleanup_error=None)
         return status(root, identifier)
     if job["state"] in TERMINAL:
         return status(root, identifier)
@@ -1730,15 +2176,13 @@ def cancel(root, identifier):
             if job["state"] in TERMINAL:
                 return status(root, identifier)
             context = job_context(root, identifier, job)
-            if job.get("context_dir") and context.exists():
-                review_session.cleanup_session(context)
-            update(root, identifier, state="cancelled", phase="terminal", finished_at_epoch=time.time())
+            finish_step_cancellation(root, identifier, context)
         finally:
             lock.release()
     return status(root, identifier)
 
 
-COMMANDS = ("capabilities", "schema", "preflight", "start", "step", "check", "finish", "status", "cancel", "view")
+COMMANDS = ("capabilities", "schema", "preflight", "start", "step", "check", "finish", "status", "cancel", "view", "paging-apply")
 
 
 def parser(help_command=None):
@@ -1790,6 +2234,9 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     values = sys.argv[1:] if argv is None else list(argv)
+    if values and values[0] == "paging-apply":
+        from review_paging import main_apply
+        return main_apply(values[1:])
     if len(values) == 2 and values[0] in COMMANDS and values[1] in ("--help", "-h"):
         parser(values[0]).print_help()
         return 0
@@ -1878,15 +2325,19 @@ def main(argv=None):
                     metrics["paging_read_count"] = metrics.get("paging_read_count", 0) + pages
                     update(root, args.request_id, metrics=metrics)
         read_only_view = args.command == "view" or args.command == "status" and bool(args.artifact)
+        publication_action = _verified_publication_action(result)
+        # The compactor uses an exclusive JSON limit. Leave room for Windows CRLF.
+        limit = LIMIT - len(b"\r\n") + 1 if publication_action else LIMIT
         if context and context.exists() and not read_only_view and not read_only_command:
-            result = compact(result, context)
-        elif args.request_id and not read_only_view and not read_only_command and len(review_runtime.canonical(result)) >= LIMIT:
+            result = compact(result, context, limit=limit)
+        elif args.request_id and not read_only_view and not read_only_command and len(review_runtime.canonical(result)) >= limit:
             response = response_context(root, args.request_id, create=True)
-            result = compact(result, response)
+            runtime_scope_bytes = len(b',"response_scope":"runtime"') if publication_action else 0
+            result = compact(result, response, limit=limit - runtime_scope_bytes)
             runtime_response = True
         if runtime_response:
             result["response_scope"] = "runtime"
-            if len(review_runtime.canonical(result)) >= LIMIT:
+            if len(review_runtime.canonical(result)) >= limit:
                 result["summary"] = {"fields": list(result.get("summary", {}))[:16]}
         if args.read_only and result.get("schema") != "MergeReviewPagingBatch/v1":
             def preserve_read_only(value):

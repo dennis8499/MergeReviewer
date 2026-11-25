@@ -6,6 +6,7 @@ Acknowledgement records transport delivery, never semantic review coverage.
 """
 from __future__ import annotations
 
+import argparse
 import copy
 import hashlib
 import json
@@ -171,6 +172,90 @@ def _next_requests(page, root, identifier, current_key):
     return links
 
 
+def _pending_keys(state):
+    keys = set()
+    for request in state["pending"]:
+        try:
+            keys.add(page_key(request, state["runtime_root"], state["request_id"]))
+        except (ValueError, TypeError):
+            # Invalid requests remain in the queue with per-item diagnostics.
+            pass
+    return keys
+
+
+def _enqueue_links(destination, links, acknowledged, queued):
+    added = {page_key(link) for link in destination}
+    for link in links:
+        key = page_key(link)
+        if key not in acknowledged and key not in queued and key not in added:
+            destination.append(link)
+            added.add(key)
+
+
+def _validate_page_geometry(page, request, links):
+    payloads = {"items", "text", "value"} & page.keys()
+    if len(payloads) != 1:
+        raise ValueError("returned paging result must carry one page payload")
+    if "items" in payloads:
+        items, total, start = page["items"], page.get("total"), request["offset"]
+        if not isinstance(items, list) or type(total) is not int or start > total:
+            raise ValueError("returned array page has an invalid item range")
+        end = start + len(items)
+        if end > total or len(items) > request["page_size"] or (not items and start < total):
+            raise ValueError("returned array page has an invalid item range")
+        following = end if end < total else None
+        received = page.get("next_offset")
+        if received != following or "next_string_offset" in page:
+            raise ValueError("array continuation differs from returned item range")
+        expected = (following, 0) if following is not None else None
+    elif "text" in payloads:
+        from review_views import TEXT_PAGE_CHARACTERS
+
+        text, following = page["text"], page.get("next_string_offset")
+        if not isinstance(text, str) or len(text) > TEXT_PAGE_CHARACTERS:
+            raise ValueError("returned string page has an invalid character range")
+        if ("next_offset" in page or page.get("drilldowns") or
+                (following is not None and (not text or following != request["string_offset"] + len(text)))):
+            raise ValueError("string continuation differs from returned character range")
+        expected = (0, following) if following is not None else None
+    else:
+        return  # Object previews have their own outer drilldown controls.
+
+    direct = page.get("continue")
+    if direct is not None:
+        direct = normalize(direct, request["runtime_root"], request["request_id"])
+        if direct["pointer"] != request["pointer"]:
+            raise ValueError("array or string continuation must keep the same pointer")
+        direct = direct["offset"], direct["string_offset"]
+    same_pointer = [(link["offset"], link["string_offset"]) for link in links
+                    if link["pointer"] == request["pointer"]]
+    if direct != expected or same_pointer != ([] if expected is None else [expected]):
+        raise ValueError("array or string continuation does not match the end of the returned page")
+
+
+def _returned_links(page, request, key):
+    if (not isinstance(page, dict) or page.get("artifact") != request["artifact"]
+            or page.get("scope") != request["artifact_scope"] or page.get("pointer") != request["pointer"]
+            or type(page.get("view_complete")) is not bool):
+        raise ValueError("returned paging result does not match the requested view")
+    links = _next_requests(page, request["runtime_root"], request["request_id"], key)
+    if page["view_complete"] == bool(links):
+        raise ValueError("returned paging result has inconsistent continuation controls")
+    for link in links:
+        if (link["artifact"] != request["artifact"] or link["artifact_scope"] != request["artifact_scope"]
+                or link["page_size"] != request["page_size"]
+                or not (link["pointer"] == request["pointer"] or
+                        link["pointer"].startswith(request["pointer"] + "/"))):
+            raise ValueError("continuation leaves the returned artifact or selected pointer")
+    for field, coordinate in (("next_offset", "offset"), ("next_string_offset", "string_offset")):
+        following = page.get(field)
+        if following is not None and (type(following) is not int or following <= request[coordinate]
+                or not any(link["pointer"] == request["pointer"] and link[coordinate] == following for link in links)):
+            raise ValueError("returned page does not carry its next offset")
+    _validate_page_geometry(page, request, links)
+    return links
+
+
 def execute(root, identifier, state, read_page, limit=LIMIT):
     validate_state(state, root, identifier)
     if type(limit) is not int or not 1024 <= limit <= LIMIT:
@@ -181,12 +266,7 @@ def execute(root, identifier, state, read_page, limit=LIMIT):
     delta = {"schema": DELTA, "base_state_sha256": digest(state), "processed_ids": [],
              "acknowledged": [], "new_pending": [], "blocked": []}
     accepted_deltas = [delta]
-    queued_keys = set()
-    for request in pending:
-        try:
-            queued_keys.add(page_key(request, root, identifier))
-        except (ValueError, TypeError):
-            pass
+    queued_keys = _pending_keys(state)
 
     def response(rows, changes, error=None):
         remaining = len(pending) - len(changes["processed_ids"]) + len(changes["new_pending"])
@@ -249,12 +329,7 @@ def execute(root, identifier, state, read_page, limit=LIMIT):
                 links = _next_requests(page, root, identifier, key)
                 row.update(status="returned", page_key=key, result=page)
                 changes["acknowledged"].append(key)
-                new_keys = {page_key(link) for link in changes["new_pending"]}
-                for link in links:
-                    link_key = page_key(link)
-                    if link_key not in ack and link_key not in queued_keys and link_key not in new_keys:
-                        changes["new_pending"].append(link)
-                        new_keys.add(link_key)
+                _enqueue_links(changes["new_pending"], links, ack, queued_keys)
         except (ValueError, KeyError, IndexError, TypeError, OSError) as exc:
             message = str(exc)[:360]
             if "response limit" in message:
@@ -341,3 +416,84 @@ def apply_delta(state, delta):
         queued_keys.add(key)
     result["last_delta_sha256"] = fingerprint
     return validate_state(result)
+
+
+def apply_batch(state, batch):
+    """Acknowledge a received native batch, checking it carries every continuation."""
+    validate_state(state)
+    root, identifier = state["runtime_root"], state["request_id"]
+    if not isinstance(batch, dict) or batch.get("schema") != BATCH or batch.get("request_id") != identifier:
+        raise ValueError("paging batch must belong to the supplied request state")
+    rows = batch.get("results")
+    pending = state["pending"]
+    if not isinstance(rows, list) or len(rows) > len(pending):
+        raise ValueError("paging batch results must match a pending prefix")
+    delta = {"schema": DELTA, "base_state_sha256": digest(state),
+             "processed_ids": [], "acknowledged": [], "new_pending": [], "blocked": []}
+    acknowledged, queued = set(state["acknowledged"]), _pending_keys(state)
+    seen = {}
+    for request, row in zip(pending, rows):
+        request_id = request["id"]
+        if not isinstance(row, dict) or row.get("id") != request_id:
+            raise ValueError("paging results are not the ordered pending prefix")
+        delta["processed_ids"].append(request_id)
+        if "error" in row:
+            if (set(row) != {"id", "code", "error", "recoverable"}
+                    or row.get("code") != "evidence.invalid-view-request"
+                    or not isinstance(row["error"], str) or row.get("recoverable") is not True):
+                raise ValueError("invalid blocked paging result")
+            delta["blocked"].append(row)
+            continue
+        value = normalize(request, root, identifier)
+        key = page_key(value)
+        expected = {"id": request_id, "page_key": key}
+        if key in acknowledged:
+            expected["status"] = "already-returned"
+        elif key in seen:
+            expected.update(status="duplicate", duplicate_of=seen[key])
+        else:
+            page = row.get("result")
+            links = _returned_links(page, value, key)
+            expected.update(status="returned", result=page)
+            delta["acknowledged"].append(key)
+            seen[key] = request_id
+            _enqueue_links(delta["new_pending"], links, acknowledged, queued)
+        if row != expected:
+            raise ValueError("paging result status or identity differs from the requested page")
+    remaining = len(pending) - len(rows) + len(delta["new_pending"])
+    blocked = len(state["blocked"]) + len(delta["blocked"])
+    expected = {"complete": len(rows) == len(pending),
+                "next_index": len(rows) if len(rows) < len(pending) else None,
+                "pending_count": remaining, "blocked_count": blocked,
+                "view_complete": remaining == 0 and blocked == 0, "git_commands": 0}
+    if (_bytes(batch.get("paging_delta")) != _bytes(delta)
+            or _bytes({key: batch.get(key) for key in expected}) != _bytes(expected)):
+        raise ValueError("paging delta or summary disagrees with returned page topology")
+    return apply_delta(state, delta)
+
+
+def main_apply(argv=None):
+    """Advance caller-owned paging input after the caller reads the batch."""
+    import review_coordinator as coordination
+
+    parser = argparse.ArgumentParser(prog="review_session.py paging-apply", description=main_apply.__doc__,
+                                     allow_abbrev=False)
+    parser.add_argument("--state-file", required=True, type=Path)
+    parser.add_argument("--batch-file", required=True, type=Path)
+    parser.add_argument("--output-file", required=True, type=Path,
+                        help="Write the next state atomically to a caller scratch file")
+    args = parser.parse_args(argv)
+    try:
+        state_file = args.state_file.expanduser().resolve(strict=True)
+        batch_file = args.batch_file.expanduser().resolve(strict=True)
+        state = coordination.read_json(state_file)
+        updated = apply_batch(state, coordination.read_json(batch_file))
+        output = coordination.plain(args.output_file.expanduser().absolute()).resolve()
+        if (output.is_relative_to(Path(state["runtime_root"]).resolve())
+                or any(output == entry or (output.exists() and output.samefile(entry))
+                       for entry in (state_file, batch_file))):
+            raise ValueError("paging output must be a separate caller file outside the review runtime")
+        coordination.atomic(output, updated)
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        parser.exit(2, f"paging-apply: {exc}\n")
+    return 0

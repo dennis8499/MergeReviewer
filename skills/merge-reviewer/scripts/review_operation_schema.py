@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 ARGUMENTS = {
-    "read": {"repo", "source", "path", "line_start", "line_end", "around_line", "context_lines"},
+    "read": {"repo", "source", "path", "line_start", "line_end", "around_line", "context_lines", "hunk"},
     "instructions": {"repo", "path"}, "inventory": {"repo", "source"},
     "patch": {"repo", "path", "line_start", "line_end"},
     "register-contract": {"contract"},
@@ -16,7 +16,7 @@ REQUIRED = {"read": {"repo", "path"}, "instructions": {"repo"},
 TYPES = {"line_start": "integer", "line_end": "integer", "around_line": "integer",
          "context_lines": "integer", "offset": "integer", "page_size": "integer",
          "string_offset": "integer", "expected_checkpoint_revision": "integer",
-         "updates": "object", "checkpoint": "object"}
+         "updates": "object", "checkpoint": "object", "hunk": "object"}
 
 
 def author_update_schema():
@@ -67,7 +67,10 @@ def author_update_schema():
         "properties": {"action": text, "owner": {"enum": sorted(OWNERS)}}}}
     updates["pending_confirmations"] = {"type": "array", "items": {"type": "object",
         "required": ["id", "title", "reason", "missing_evidence", "verification", "owner", "related_changes"],
-        "properties": {**{key: text for key in ("id", "title", "reason", "missing_evidence", "verification")},
+         "additionalProperties": False,
+         "properties": {**{key: text for key in ("title", "reason", "missing_evidence", "verification")},
+                        "id": {"type": "string", "pattern": "^Q-[0-9]{3,}$",
+                               "description": "Sequential IDs in array order: Q-001, Q-002, ..."},
                        "owner": {"enum": sorted(OWNERS)},
                        "related_changes": {"type": "array", "items": {"oneOf": [text, location]}}, "evidence": evidence}}}
     updates["summary"] = text
@@ -106,6 +109,11 @@ def describe(operation=None):
                           "object" if kind == "register-contract" and name == "contract" else TYPES.get(name, "string"))
             fields[name] = {"type": value_type, "required": name in REQUIRED[kind]}
         contract = {"fields": fields, "example": [{"id": kind.replace("-", "_") + "_1", "op": kind, **examples[kind]}]}
+        if kind == "read":
+            fields["hunk"]["schema"] = {"type": "object", "additionalProperties": False,
+                "required": ["line_start", "line_end"],
+                "properties": {name: {"type": "integer", "minimum": 1} for name in ("line_start", "line_end")}}
+            fields["hunk"]["note"] = "Pilot seed interval before context padding; cannot accompany explicit read bounds."
         if kind == "author":
             contract.update(update_fields=sorted(set(author.ROW_KEYS) | author.TEXT_LISTS | {"summary"}),
                             update_schema=author_update_schema(),

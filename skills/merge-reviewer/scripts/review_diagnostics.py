@@ -7,7 +7,8 @@ import contract_boundary as boundary
 from review_validation import (contract_anchor_sources, contract_has_impact_anchor,
                                coverage_impact_errors, coverage_reason, completion_preview,
                                evidence_within_involved_repos, finding_evidence_errors,
-                               fixed_line_count_key, line_interval_valid, repo_disposition_error)
+                               fixed_line_count_key, line_interval_valid, pending_confirmation_errors,
+                               repo_disposition_error)
 
 FIELDS = ("operation_scenario", "technical_trigger", "technical_explanation", "impact_scope", "engineering_fix")
 
@@ -67,6 +68,7 @@ def inspect(draft, manifest, *, line_counts=None):
     if not isinstance(draft, dict):
         add("draft", "must be an object")
         return {"errors": errors, "gaps": [], "ready_for_finish": False,
+                "publication_readiness": "repair-draft",
                 "evidence_verified": False, "evidence_validation": "deferred-to-finish", "git_commands": 0}
     # Normalize invalid authoring shapes only in this disposable copy. This lets
     # independent diagnostics continue after an unhashable ID or malformed list.
@@ -359,8 +361,13 @@ def inspect(draft, manifest, *, line_counts=None):
         keys = evidence(finding.get("evidence", []), place + ".evidence")
         for message in finding_evidence_errors(keys, reviewed_anchors, involved):
             add(place + ".evidence", message)
-    for row in rows(draft, "pending_confirmations"):
-        place = row_path("pending_confirmations", row)
+    pending = draft.get("pending_confirmations", [])
+    for path, message in pending_confirmation_errors(pending, expected):
+        add(path, message)
+    for index, row in enumerate(pending if isinstance(pending, list) else []):
+        if not isinstance(row, dict):
+            continue
+        place = f"draft.pending_confirmations[{index}]"
         keys = evidence(row.get("evidence", []), place + ".evidence")
         need(evidence_within_involved_repos(keys, involved), place + ".evidence",
              "pending evidence cannot expand excluded Repos")
