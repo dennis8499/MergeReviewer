@@ -462,6 +462,8 @@ def status_summary(value):
               "details": {"command": "status", "runtime_root": value.get("runtime_root"),
                           "request_id": value["request_id"]}}
     inputs = value.get("inputs")
+    if value.get("git_coordination"):
+        result["git_coordination"] = value["git_coordination"]
     if isinstance(inputs, dict) and isinstance(inputs.get("no_fetch"), bool):
         result["no_fetch"] = inputs["no_fetch"]
     result.update(check_current=value.get("check_current", False), draft_sha256=value.get("draft_sha256"), status_revision=value.get("status_revision"),
@@ -1263,6 +1265,7 @@ def start(args):
                            pack_cache_hits=active.pack_hits if active else 0)
             update(root, identifier, state="cancelled" if active and active.cancelled() else "failed",
                    phase="terminal", error=coordination.safe_error(exc), finished_at_epoch=time.time(),
+                   **({"git_coordination": exc.git_coordination} if hasattr(exc, "git_coordination") else {}),
                    network_activity=getattr(exc, "network_activity",
                                             manifest["network_activity"] if manifest else api.empty_network_activity()),
                    sync_activity=[{key: value for key, value in item.items() if key != "receipt"}
@@ -2358,5 +2361,7 @@ def main(argv=None):
         return 3
     except (ValueError, KeyError, IndexError, TypeError, OSError, RuntimeError) as exc:
         print(json.dumps({"error": coordination.safe_error(exc), "request_id": args.request_id,
-                          "terminal": True}, ensure_ascii=False), file=sys.stderr)
+                          "terminal": True,
+                          **({"git_coordination": exc.git_coordination} if hasattr(exc, "git_coordination") else {})},
+                         ensure_ascii=False), file=sys.stderr)
         return 2
